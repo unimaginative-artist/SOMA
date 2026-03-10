@@ -1,0 +1,174 @@
+{
+  "name": "DevOps & Cloud",
+  "description": "Containers, CI/CD, infrastructure as code, observability, incident response, disaster recovery.",
+  "nodes": [
+    {
+      "id": "seed_devops_001", "type": "concept",
+      "content": "container orchestration: Kubernetes reconciles declared state — pods, services, ingress are living documents",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_devops_002", "weight": 0.80, "type": "related" },
+        { "id": "seed_devops_003", "weight": 0.75, "type": "related" },
+        { "id": "seed_devops_006", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["devops", "kubernetes", "seed"]
+    },
+    {
+      "id": "seed_devops_002", "type": "concept",
+      "content": "CI/CD pipelines: every commit is deployable, automated quality gates, rollback is the plan not the exception",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_devops_001", "weight": 0.80, "type": "related" },
+        { "id": "seed_devops_003", "weight": 0.75, "type": "related" },
+        { "id": "seed_devops_013", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.88, "source": "seed", "confidence": 0.90,
+      "tags": ["devops", "ci-cd", "seed"]
+    },
+    {
+      "id": "seed_devops_003", "type": "concept",
+      "content": "infrastructure as code: version-controlled, idempotent, peer-reviewed — treat infra like software",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_devops_001", "weight": 0.75, "type": "related" },
+        { "id": "seed_devops_002", "weight": 0.75, "type": "related" },
+        { "id": "seed_devops_007", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.88, "source": "seed", "confidence": 0.90,
+      "tags": ["devops", "iac", "seed"]
+    },
+    {
+      "id": "seed_devops_004", "type": "concept",
+      "content": "observability: metrics say what happened, logs say why it happened, traces say where time was spent",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_devops_005", "weight": 0.85, "type": "related" },
+        { "id": "seed_devops_009", "weight": 0.65, "type": "related" },
+        { "id": "seed_devops_011", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.88, "source": "seed", "confidence": 0.90,
+      "tags": ["devops", "observability", "seed"]
+    },
+    {
+      "id": "seed_devops_005", "type": "concept",
+      "content": "incident response: detect fast, contain blast radius, diagnose root cause, post-mortem without blame",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_devops_004", "weight": 0.85, "type": "related" },
+        { "id": "seed_devops_012", "weight": 0.75, "type": "related" },
+        { "id": "seed_devops_008", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.88, "source": "seed", "confidence": 0.90,
+      "tags": ["devops", "incident-response", "seed"]
+    },
+    {
+      "id": "seed_devops_006", "type": "concept",
+      "content": "cloud cost optimization: right-size first, reserved capacity for baselines, spot for batch, audit waste monthly",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_devops_001", "weight": 0.65, "type": "related" },
+        { "id": "seed_devops_011", "weight": 0.70, "type": "related" },
+        { "id": "seed_devops_003", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.78, "source": "seed", "confidence": 0.82,
+      "tags": ["devops", "cloud-cost", "seed"]
+    },
+    {
+      "id": "seed_devops_007", "type": "concept",
+      "content": "secrets management: never hardcode credentials, rotate on schedule, vault + least-privilege service accounts",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_devops_003", "weight": 0.70, "type": "related" },
+        { "id": "seed_devops_010", "weight": 0.75, "type": "related" },
+        { "id": "seed_devops_002", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["devops", "secrets", "seed"]
+    },
+    {
+      "id": "seed_devops_008", "type": "concept",
+      "content": "database operations: automated backups tested weekly, blue-green migrations, test failover before you need it",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_devops_005", "weight": 0.65, "type": "related" },
+        { "id": "seed_devops_012", "weight": 0.75, "type": "related" },
+        { "id": "seed_devops_011", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["devops", "database", "seed"]
+    },
+    {
+      "id": "seed_devops_009", "type": "concept",
+      "content": "caching strategy: cache at the right layer — CDN for assets, Redis for sessions, in-process for hot config",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_devops_004", "weight": 0.65, "type": "related" },
+        { "id": "seed_devops_011", "weight": 0.65, "type": "related" },
+        { "id": "seed_devops_006", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.78, "source": "seed", "confidence": 0.82,
+      "tags": ["devops", "caching", "seed"]
+    },
+    {
+      "id": "seed_devops_010", "type": "concept",
+      "content": "zero trust networking: no implicit trust inside the perimeter, mTLS between services, microsegmentation",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_devops_007", "weight": 0.75, "type": "related" },
+        { "id": "seed_devops_001", "weight": 0.60, "type": "related" },
+        { "id": "seed_devops_003", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["devops", "security", "seed"]
+    },
+    {
+      "id": "seed_devops_011", "type": "concept",
+      "content": "capacity planning: measure P95/P99 utilization, model traffic growth, provision 30% headroom",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_devops_004", "weight": 0.65, "type": "related" },
+        { "id": "seed_devops_006", "weight": 0.70, "type": "related" },
+        { "id": "seed_devops_012", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.78, "source": "seed", "confidence": 0.82,
+      "tags": ["devops", "capacity", "seed"]
+    },
+    {
+      "id": "seed_devops_012", "type": "concept",
+      "content": "disaster recovery: define RTO and RPO explicitly, test the runbook annually, chaos engineering finds gaps",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_devops_005", "weight": 0.75, "type": "related" },
+        { "id": "seed_devops_008", "weight": 0.75, "type": "related" },
+        { "id": "seed_devops_011", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["devops", "disaster-recovery", "seed"]
+    },
+    {
+      "id": "seed_devops_013", "type": "concept",
+      "content": "developer experience: fast local environment, clear error messages, runbooks that actually reflect reality",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_devops_002", "weight": 0.70, "type": "related" },
+        { "id": "seed_devops_004", "weight": 0.60, "type": "related" },
+        { "id": "seed_devops_003", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.78, "source": "seed", "confidence": 0.82,
+      "tags": ["devops", "developer-experience", "seed"]
+    },
+    {
+      "id": "seed_devops_014", "type": "concept",
+      "content": "chaos engineering: controlled failure injection reveals unknown dependencies before production does",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_devops_005", "weight": 0.70, "type": "related" },
+        { "id": "seed_devops_012", "weight": 0.70, "type": "related" },
+        { "id": "seed_devops_004", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["devops", "chaos-engineering", "seed"]
+    }
+  ]
+}

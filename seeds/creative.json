@@ -1,0 +1,150 @@
+{
+  "name": "Creative & Content",
+  "description": "Narrative structure, character voice, ideation techniques, writing craft, content strategy.",
+  "nodes": [
+    {
+      "id": "seed_creative_001", "type": "concept",
+      "content": "narrative structure: setup, complication, escalation, resolution — this arc applies to every story format",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_creative_002", "weight": 0.75, "type": "related" },
+        { "id": "seed_creative_007", "weight": 0.70, "type": "related" },
+        { "id": "seed_creative_011", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["creative", "narrative", "seed"]
+    },
+    {
+      "id": "seed_creative_002", "type": "concept",
+      "content": "character voice: distinct speech patterns, concrete motivations, internal contradictions make them real",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_creative_001", "weight": 0.75, "type": "related" },
+        { "id": "seed_creative_006", "weight": 0.65, "type": "related" },
+        { "id": "seed_creative_011", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["creative", "character", "seed"]
+    },
+    {
+      "id": "seed_creative_003", "type": "concept",
+      "content": "ideation techniques: random association, worst-idea method, forced constraints — break the obvious first",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_creative_009", "weight": 0.80, "type": "related" },
+        { "id": "seed_creative_010", "weight": 0.70, "type": "related" },
+        { "id": "seed_creative_005", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["creative", "ideation", "seed"]
+    },
+    {
+      "id": "seed_creative_004", "type": "concept",
+      "content": "writing rhythm: sentence length variation creates pace — short punches land hard, long waves carry weight",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_creative_006", "weight": 0.75, "type": "related" },
+        { "id": "seed_creative_007", "weight": 0.70, "type": "related" },
+        { "id": "seed_creative_008", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["creative", "writing-style", "seed"]
+    },
+    {
+      "id": "seed_creative_005", "type": "concept",
+      "content": "content strategy: audience clarity, intent alignment, format match, distribution channel first",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_creative_003", "weight": 0.65, "type": "related" },
+        { "id": "seed_creative_010", "weight": 0.70, "type": "related" },
+        { "id": "seed_creative_012", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["creative", "content-strategy", "seed"]
+    },
+    {
+      "id": "seed_creative_006", "type": "concept",
+      "content": "metaphor and analogy: complex ideas land when anchored to something the reader already feels",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_creative_002", "weight": 0.65, "type": "related" },
+        { "id": "seed_creative_004", "weight": 0.75, "type": "related" },
+        { "id": "seed_creative_008", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["creative", "metaphor", "seed"]
+    },
+    {
+      "id": "seed_creative_007", "type": "concept",
+      "content": "editing philosophy: kill your darlings, every word earns its place, serve the reader not your ego",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_creative_001", "weight": 0.70, "type": "related" },
+        { "id": "seed_creative_004", "weight": 0.70, "type": "related" },
+        { "id": "seed_creative_010", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["creative", "editing", "seed"]
+    },
+    {
+      "id": "seed_creative_008", "type": "concept",
+      "content": "visual thinking: hierarchy, whitespace, and spatial relationship carry as much meaning as words",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_creative_004", "weight": 0.60, "type": "related" },
+        { "id": "seed_creative_006", "weight": 0.65, "type": "related" },
+        { "id": "seed_creative_005", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.78, "source": "seed", "confidence": 0.82,
+      "tags": ["creative", "visual", "seed"]
+    },
+    {
+      "id": "seed_creative_009", "type": "concept",
+      "content": "creative constraints: limitations force novel solutions — unlimited canvas is actually paralyzing",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_creative_003", "weight": 0.80, "type": "related" },
+        { "id": "seed_creative_011", "weight": 0.65, "type": "related" },
+        { "id": "seed_creative_007", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["creative", "constraints", "seed"]
+    },
+    {
+      "id": "seed_creative_010", "type": "concept",
+      "content": "feedback loops: show early and ugly, iterate often, separate critique of work from critique of self",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_creative_003", "weight": 0.70, "type": "related" },
+        { "id": "seed_creative_005", "weight": 0.70, "type": "related" },
+        { "id": "seed_creative_007", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.80, "source": "seed", "confidence": 0.84,
+      "tags": ["creative", "iteration", "seed"]
+    },
+    {
+      "id": "seed_creative_011", "type": "concept",
+      "content": "world building: internal consistency above all — the rules you establish must be honored throughout",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_creative_001", "weight": 0.65, "type": "related" },
+        { "id": "seed_creative_002", "weight": 0.70, "type": "related" },
+        { "id": "seed_creative_009", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["creative", "world-building", "seed"]
+    },
+    {
+      "id": "seed_creative_012", "type": "concept",
+      "content": "persuasion architecture: ethos establishes trust, logos provides reason, pathos drives action — order by audience",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_creative_005", "weight": 0.70, "type": "related" },
+        { "id": "seed_creative_006", "weight": 0.65, "type": "related" },
+        { "id": "seed_creative_001", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["creative", "persuasion", "seed"]
+    }
+  ]
+}

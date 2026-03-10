@@ -1,0 +1,174 @@
+{
+  "name": "Research & Analysis",
+  "description": "Literature review, scientific method, data collection, critical thinking, knowledge synthesis.",
+  "nodes": [
+    {
+      "id": "seed_research_001", "type": "concept",
+      "content": "literature review: systematic search, backward citation chaining, identify genuine gaps not just recent gaps",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_research_002", "weight": 0.80, "type": "related" },
+        { "id": "seed_research_006", "weight": 0.75, "type": "related" },
+        { "id": "seed_research_011", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["research", "literature", "seed"]
+    },
+    {
+      "id": "seed_research_002", "type": "concept",
+      "content": "scientific method: falsifiable hypothesis, controlled experiment, replication before publication",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_research_001", "weight": 0.80, "type": "related" },
+        { "id": "seed_research_004", "weight": 0.80, "type": "related" },
+        { "id": "seed_research_012", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.88, "source": "seed", "confidence": 0.90,
+      "tags": ["research", "scientific-method", "seed"]
+    },
+    {
+      "id": "seed_research_003", "type": "concept",
+      "content": "data collection: sampling strategy determines validity — bias in, bias out, measure the right thing",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_research_004", "weight": 0.80, "type": "related" },
+        { "id": "seed_research_010", "weight": 0.70, "type": "related" },
+        { "id": "seed_research_012", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["research", "data-collection", "seed"]
+    },
+    {
+      "id": "seed_research_004", "type": "concept",
+      "content": "statistical reasoning: effect sizes matter more than p-values, confidence intervals tell the story",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_research_002", "weight": 0.80, "type": "related" },
+        { "id": "seed_research_003", "weight": 0.80, "type": "related" },
+        { "id": "seed_research_007", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["research", "statistics", "seed"]
+    },
+    {
+      "id": "seed_research_005", "type": "concept",
+      "content": "source evaluation: authority, currency, purpose, and corroboration — primary over secondary always",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_research_007", "weight": 0.80, "type": "related" },
+        { "id": "seed_research_010", "weight": 0.75, "type": "related" },
+        { "id": "seed_research_001", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["research", "sources", "seed"]
+    },
+    {
+      "id": "seed_research_006", "type": "concept",
+      "content": "knowledge synthesis: cross-domain pattern recognition, meta-analysis extracts signal from noisy studies",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_research_001", "weight": 0.75, "type": "related" },
+        { "id": "seed_research_009", "weight": 0.75, "type": "related" },
+        { "id": "seed_research_013", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["research", "synthesis", "seed"]
+    },
+    {
+      "id": "seed_research_007", "type": "concept",
+      "content": "critical thinking: identify hidden assumptions, spot logical fallacies, demand alternative explanations",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_research_005", "weight": 0.80, "type": "related" },
+        { "id": "seed_research_004", "weight": 0.65, "type": "related" },
+        { "id": "seed_research_012", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.88, "source": "seed", "confidence": 0.90,
+      "tags": ["research", "critical-thinking", "seed"]
+    },
+    {
+      "id": "seed_research_008", "type": "concept",
+      "content": "writing for clarity: one claim per paragraph, evidence immediately follows, no burying the lede",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_research_006", "weight": 0.65, "type": "related" },
+        { "id": "seed_research_011", "weight": 0.70, "type": "related" },
+        { "id": "seed_research_012", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.80, "source": "seed", "confidence": 0.84,
+      "tags": ["research", "writing", "seed"]
+    },
+    {
+      "id": "seed_research_009", "type": "concept",
+      "content": "information architecture: ontologies define relationships, taxonomies define hierarchy, graphs link both",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_research_006", "weight": 0.75, "type": "related" },
+        { "id": "seed_research_011", "weight": 0.65, "type": "related" },
+        { "id": "seed_research_013", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.80, "source": "seed", "confidence": 0.84,
+      "tags": ["research", "information-architecture", "seed"]
+    },
+    {
+      "id": "seed_research_010", "type": "concept",
+      "content": "web research: boolean operators, site: and date: filters, triangulate claims across independent sources",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_research_003", "weight": 0.70, "type": "related" },
+        { "id": "seed_research_005", "weight": 0.75, "type": "related" },
+        { "id": "seed_research_011", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.80, "source": "seed", "confidence": 0.84,
+      "tags": ["research", "web-research", "seed"]
+    },
+    {
+      "id": "seed_research_011", "type": "concept",
+      "content": "summarization craft: preserve nuance, strip noise, surface contradictions between sources explicitly",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_research_001", "weight": 0.65, "type": "related" },
+        { "id": "seed_research_008", "weight": 0.70, "type": "related" },
+        { "id": "seed_research_010", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["research", "summarization", "seed"]
+    },
+    {
+      "id": "seed_research_012", "type": "concept",
+      "content": "research ethics: attribute sources, disclose conflicts, share methods for reproducibility",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_research_002", "weight": 0.70, "type": "related" },
+        { "id": "seed_research_003", "weight": 0.65, "type": "related" },
+        { "id": "seed_research_007", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.80, "source": "seed", "confidence": 0.84,
+      "tags": ["research", "ethics", "seed"]
+    },
+    {
+      "id": "seed_research_013", "type": "concept",
+      "content": "interdisciplinary thinking: most breakthroughs live at domain intersections — borrow mental models freely",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_research_006", "weight": 0.70, "type": "related" },
+        { "id": "seed_research_009", "weight": 0.70, "type": "related" },
+        { "id": "seed_research_014", "weight": 0.75, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["research", "interdisciplinary", "seed"]
+    },
+    {
+      "id": "seed_research_014", "type": "concept",
+      "content": "null results matter: negative findings prevent wasted replication and constrain theoretical space",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_research_002", "weight": 0.70, "type": "related" },
+        { "id": "seed_research_012", "weight": 0.65, "type": "related" },
+        { "id": "seed_research_013", "weight": 0.75, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.78, "source": "seed", "confidence": 0.82,
+      "tags": ["research", "methodology", "seed"]
+    }
+  ]
+}

@@ -1,0 +1,198 @@
+{
+  "name": "Finance & Trading",
+  "description": "Quantitative strategies, risk management, portfolio theory, market microstructure, execution.",
+  "nodes": [
+    {
+      "id": "seed_finance_001", "type": "concept",
+      "content": "quantitative trading: systematic strategies with defined entry, exit, position size, and risk rules",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_002", "weight": 0.85, "type": "related" },
+        { "id": "seed_finance_007", "weight": 0.80, "type": "related" },
+        { "id": "seed_finance_013", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.88, "source": "seed", "confidence": 0.90,
+      "tags": ["finance", "trading", "seed"]
+    },
+    {
+      "id": "seed_finance_002", "type": "concept",
+      "content": "risk management: position sizing by volatility, hard stop losses, max daily drawdown limits, VaR",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_001", "weight": 0.85, "type": "related" },
+        { "id": "seed_finance_003", "weight": 0.80, "type": "related" },
+        { "id": "seed_finance_014", "weight": 0.75, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.90, "source": "seed", "confidence": 0.92,
+      "tags": ["finance", "risk", "seed"]
+    },
+    {
+      "id": "seed_finance_003", "type": "concept",
+      "content": "portfolio optimization: efficient frontier, Sharpe ratio, correlation matrix, diversification limits concentration",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_002", "weight": 0.80, "type": "related" },
+        { "id": "seed_finance_015", "weight": 0.75, "type": "related" },
+        { "id": "seed_finance_016", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["finance", "portfolio", "seed"]
+    },
+    {
+      "id": "seed_finance_004", "type": "concept",
+      "content": "technical analysis: price action reveals market psychology, not future certainty — confirm with volume",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_005", "weight": 0.70, "type": "related" },
+        { "id": "seed_finance_009", "weight": 0.75, "type": "related" },
+        { "id": "seed_finance_012", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.80, "source": "seed", "confidence": 0.85,
+      "tags": ["finance", "technical-analysis", "seed"]
+    },
+    {
+      "id": "seed_finance_005", "type": "concept",
+      "content": "fundamental analysis: earnings quality, free cash flow, economic moat, management capital allocation",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_004", "weight": 0.70, "type": "related" },
+        { "id": "seed_finance_011", "weight": 0.75, "type": "related" },
+        { "id": "seed_finance_014", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["finance", "fundamental-analysis", "seed"]
+    },
+    {
+      "id": "seed_finance_006", "type": "concept",
+      "content": "market microstructure: order book dynamics, bid-ask spread as cost, market impact scales with size",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_013", "weight": 0.80, "type": "related" },
+        { "id": "seed_finance_001", "weight": 0.65, "type": "related" },
+        { "id": "seed_finance_009", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["finance", "microstructure", "seed"]
+    },
+    {
+      "id": "seed_finance_007", "type": "concept",
+      "content": "backtesting discipline: out-of-sample validation, realistic slippage, survivorship bias kills most strategies",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_001", "weight": 0.80, "type": "related" },
+        { "id": "seed_finance_009", "weight": 0.70, "type": "related" },
+        { "id": "seed_finance_014", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.88, "source": "seed", "confidence": 0.90,
+      "tags": ["finance", "backtesting", "seed"]
+    },
+    {
+      "id": "seed_finance_008", "type": "concept",
+      "content": "options mechanics: delta, gamma, theta, vega — implied vol is the real asset being traded",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_002", "weight": 0.70, "type": "related" },
+        { "id": "seed_finance_009", "weight": 0.65, "type": "related" },
+        { "id": "seed_finance_015", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.80, "source": "seed", "confidence": 0.85,
+      "tags": ["finance", "options", "seed"]
+    },
+    {
+      "id": "seed_finance_009", "type": "concept",
+      "content": "time series analysis: stationarity, autocorrelation, cointegration for pairs, regime detection via HMM",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_004", "weight": 0.75, "type": "related" },
+        { "id": "seed_finance_007", "weight": 0.70, "type": "related" },
+        { "id": "seed_finance_015", "weight": 0.75, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["finance", "time-series", "seed"]
+    },
+    {
+      "id": "seed_finance_010", "type": "concept",
+      "content": "crypto markets: higher volatility regimes, on-chain metrics as unique signal, DeFi liquidity fragmentation",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_001", "weight": 0.65, "type": "related" },
+        { "id": "seed_finance_006", "weight": 0.65, "type": "related" },
+        { "id": "seed_finance_012", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.78, "source": "seed", "confidence": 0.82,
+      "tags": ["finance", "crypto", "seed"]
+    },
+    {
+      "id": "seed_finance_011", "type": "concept",
+      "content": "macroeconomic signals: yield curve inversion, inflation expectations, central bank forward guidance",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_005", "weight": 0.75, "type": "related" },
+        { "id": "seed_finance_012", "weight": 0.65, "type": "related" },
+        { "id": "seed_finance_003", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["finance", "macro", "seed"]
+    },
+    {
+      "id": "seed_finance_012", "type": "concept",
+      "content": "sentiment indicators: news flow, social signal volume, fear-greed index, options put-call ratio",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_004", "weight": 0.65, "type": "related" },
+        { "id": "seed_finance_010", "weight": 0.70, "type": "related" },
+        { "id": "seed_finance_011", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.80, "source": "seed", "confidence": 0.84,
+      "tags": ["finance", "sentiment", "seed"]
+    },
+    {
+      "id": "seed_finance_013", "type": "concept",
+      "content": "execution quality: TWAP/VWAP algos reduce impact, smart order routing finds liquidity, slippage is real cost",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_001", "weight": 0.70, "type": "related" },
+        { "id": "seed_finance_006", "weight": 0.80, "type": "related" },
+        { "id": "seed_finance_002", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["finance", "execution", "seed"]
+    },
+    {
+      "id": "seed_finance_014", "type": "concept",
+      "content": "financial modeling: DCF needs honest assumptions, Monte Carlo for distribution of outcomes, stress test tails",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_002", "weight": 0.75, "type": "related" },
+        { "id": "seed_finance_005", "weight": 0.70, "type": "related" },
+        { "id": "seed_finance_007", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["finance", "modeling", "seed"]
+    },
+    {
+      "id": "seed_finance_015", "type": "concept",
+      "content": "statistical arbitrage: mean reversion in cointegrated pairs, z-score entry/exit, hedge ratio matters",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_003", "weight": 0.75, "type": "related" },
+        { "id": "seed_finance_009", "weight": 0.75, "type": "related" },
+        { "id": "seed_finance_008", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["finance", "stat-arb", "seed"]
+    },
+    {
+      "id": "seed_finance_016", "type": "concept",
+      "content": "behavioral finance biases: anchoring, loss aversion, overconfidence — they exist in your own decisions too",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_finance_003", "weight": 0.65, "type": "related" },
+        { "id": "seed_finance_012", "weight": 0.65, "type": "related" },
+        { "id": "seed_finance_016", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.78, "source": "seed", "confidence": 0.82,
+      "tags": ["finance", "behavioral", "seed"]
+    }
+  ]
+}

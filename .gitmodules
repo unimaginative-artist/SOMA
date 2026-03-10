@@ -1,0 +1,3 @@
+[submodule "agents_repo"]
+	path = agents_repo
+	url = https://github.com/wshobson/agents.git

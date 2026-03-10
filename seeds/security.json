@@ -1,0 +1,150 @@
+{
+  "name": "Security",
+  "description": "Threat modeling, secure coding, penetration testing, incident forensics, privacy by design.",
+  "nodes": [
+    {
+      "id": "seed_security_001", "type": "concept",
+      "content": "threat modeling: enumerate assets, map attack surfaces, assess likelihood and impact before writing code",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_security_002", "weight": 0.80, "type": "related" },
+        { "id": "seed_security_006", "weight": 0.70, "type": "related" },
+        { "id": "seed_security_010", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.88, "source": "seed", "confidence": 0.90,
+      "tags": ["security", "threat-modeling", "seed"]
+    },
+    {
+      "id": "seed_security_002", "type": "concept",
+      "content": "OWASP top ten: injection, broken auth, XSS, IDOR, misconfiguration — still the most common failures",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_security_001", "weight": 0.80, "type": "related" },
+        { "id": "seed_security_003", "weight": 0.85, "type": "related" },
+        { "id": "seed_security_004", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.90, "source": "seed", "confidence": 0.92,
+      "tags": ["security", "owasp", "seed"]
+    },
+    {
+      "id": "seed_security_003", "type": "concept",
+      "content": "secure coding: validate all input at boundaries, parameterize queries, encode all output, deny by default",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_security_002", "weight": 0.85, "type": "related" },
+        { "id": "seed_security_004", "weight": 0.70, "type": "related" },
+        { "id": "seed_security_009", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.90, "source": "seed", "confidence": 0.92,
+      "tags": ["security", "secure-coding", "seed"]
+    },
+    {
+      "id": "seed_security_004", "type": "concept",
+      "content": "authentication: MFA everywhere, short-lived tokens, session invalidation on logout, OAuth for delegation",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_security_002", "weight": 0.70, "type": "related" },
+        { "id": "seed_security_003", "weight": 0.70, "type": "related" },
+        { "id": "seed_security_010", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["security", "authentication", "seed"]
+    },
+    {
+      "id": "seed_security_005", "type": "concept",
+      "content": "cryptography: never roll your own, use AES-256/ChaCha20 for symmetric, ECDH for key exchange, rotate keys",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_security_004", "weight": 0.65, "type": "related" },
+        { "id": "seed_security_009", "weight": 0.70, "type": "related" },
+        { "id": "seed_security_011", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["security", "cryptography", "seed"]
+    },
+    {
+      "id": "seed_security_006", "type": "concept",
+      "content": "penetration testing: recon, enumeration, exploitation, post-exploitation, lateral movement, report with evidence",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_security_001", "weight": 0.70, "type": "related" },
+        { "id": "seed_security_007", "weight": 0.75, "type": "related" },
+        { "id": "seed_security_012", "weight": 0.80, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["security", "pentesting", "seed"]
+    },
+    {
+      "id": "seed_security_007", "type": "concept",
+      "content": "incident forensics: preserve evidence first, reconstruct timeline, identify persistence mechanisms",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_security_006", "weight": 0.75, "type": "related" },
+        { "id": "seed_security_008", "weight": 0.65, "type": "related" },
+        { "id": "seed_security_010", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["security", "forensics", "seed"]
+    },
+    {
+      "id": "seed_security_008", "type": "concept",
+      "content": "social engineering defense: phishing simulation, verification procedures, healthy skepticism of urgency",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_security_007", "weight": 0.65, "type": "related" },
+        { "id": "seed_security_002", "weight": 0.60, "type": "related" },
+        { "id": "seed_security_012", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.78, "source": "seed", "confidence": 0.82,
+      "tags": ["security", "social-engineering", "seed"]
+    },
+    {
+      "id": "seed_security_009", "type": "concept",
+      "content": "supply chain security: SBOM generation, dependency audit CI step, pin hashes not just versions, sign artifacts",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_security_003", "weight": 0.65, "type": "related" },
+        { "id": "seed_security_005", "weight": 0.70, "type": "related" },
+        { "id": "seed_security_010", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.82, "source": "seed", "confidence": 0.86,
+      "tags": ["security", "supply-chain", "seed"]
+    },
+    {
+      "id": "seed_security_010", "type": "concept",
+      "content": "zero trust architecture: verify every request, never implicit trust, microsegment blast radius on breach",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_security_001", "weight": 0.70, "type": "related" },
+        { "id": "seed_security_004", "weight": 0.65, "type": "related" },
+        { "id": "seed_security_009", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["security", "zero-trust", "seed"]
+    },
+    {
+      "id": "seed_security_011", "type": "concept",
+      "content": "privacy by design: collect minimum data, purpose limitation, right to erasure built in from day one",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_security_005", "weight": 0.65, "type": "related" },
+        { "id": "seed_security_003", "weight": 0.65, "type": "related" },
+        { "id": "seed_security_001", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.80, "source": "seed", "confidence": 0.84,
+      "tags": ["security", "privacy", "seed"]
+    },
+    {
+      "id": "seed_security_012", "type": "concept",
+      "content": "red team mindset: assume breach, think like attacker, map your own attack surface before they do",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_security_006", "weight": 0.80, "type": "related" },
+        { "id": "seed_security_001", "weight": 0.70, "type": "related" },
+        { "id": "seed_security_008", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["security", "red-team", "seed"]
+    }
+  ]
+}

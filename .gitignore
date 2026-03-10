@@ -42,7 +42,7 @@ server/routes/conceiveRoutes.js
 # ── External / Cloned Repos (not part of SOMA source) ────────────────────────
 agenticSeek_repo/
 agentic_repo/
-agents_repo/
+# agents_repo/ is intentionally tracked — 72 MIT-licensed persona plugins (11MB)
 changeling_repo/
 clawdbot_repo/
 copyparty_repo/

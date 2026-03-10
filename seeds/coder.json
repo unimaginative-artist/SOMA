@@ -1,0 +1,222 @@
+{
+  "name": "Software Engineering",
+  "description": "Architecture, debugging, code review, algorithms, clean code, distributed systems.",
+  "nodes": [
+    {
+      "id": "seed_coder_001", "type": "concept",
+      "content": "software architecture: choose microservices for team scale, monolith for simplicity, event-driven for decoupling",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_002", "weight": 0.80, "type": "related" },
+        { "id": "seed_coder_005", "weight": 0.75, "type": "related" },
+        { "id": "seed_coder_015", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["engineering", "architecture", "seed"]
+    },
+    {
+      "id": "seed_coder_002", "type": "concept",
+      "content": "test-driven development: write the failing test first, implement minimally to pass, then refactor safely",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_001", "weight": 0.80, "type": "related" },
+        { "id": "seed_coder_008", "weight": 0.75, "type": "related" },
+        { "id": "seed_coder_010", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["engineering", "testing", "seed"]
+    },
+    {
+      "id": "seed_coder_003", "type": "concept",
+      "content": "debugging methodology: reproduce reliably first, isolate the variable, binary search the cause",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_004", "weight": 0.75, "type": "related" },
+        { "id": "seed_coder_017", "weight": 0.70, "type": "related" },
+        { "id": "seed_coder_011", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["engineering", "debugging", "seed"]
+    },
+    {
+      "id": "seed_coder_004", "type": "concept",
+      "content": "code review: clarity over cleverness, naming is design, security check every boundary input",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_003", "weight": 0.75, "type": "related" },
+        { "id": "seed_coder_008", "weight": 0.80, "type": "related" },
+        { "id": "seed_coder_012", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["engineering", "code-quality", "seed"]
+    },
+    {
+      "id": "seed_coder_005", "type": "concept",
+      "content": "API design: contract-first, semantic versioning, idempotent endpoints, meaningful error codes",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_001", "weight": 0.75, "type": "related" },
+        { "id": "seed_coder_013", "weight": 0.70, "type": "related" },
+        { "id": "seed_coder_015", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["engineering", "api", "seed"]
+    },
+    {
+      "id": "seed_coder_006", "type": "concept",
+      "content": "data structures: O(1) lookup needs hash map, ordered traversal needs tree, priority needs heap",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_007", "weight": 0.85, "type": "related" },
+        { "id": "seed_coder_011", "weight": 0.70, "type": "related" },
+        { "id": "seed_coder_013", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["engineering", "algorithms", "seed"]
+    },
+    {
+      "id": "seed_coder_007", "type": "concept",
+      "content": "algorithm thinking: time-space tradeoffs, amortized complexity, dynamic programming for overlapping subproblems",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_006", "weight": 0.85, "type": "related" },
+        { "id": "seed_coder_011", "weight": 0.70, "type": "related" },
+        { "id": "seed_coder_015", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["engineering", "algorithms", "seed"]
+    },
+    {
+      "id": "seed_coder_008", "type": "concept",
+      "content": "clean code: single responsibility, meaningful names, functions under 20 lines, no magic numbers",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_002", "weight": 0.75, "type": "related" },
+        { "id": "seed_coder_004", "weight": 0.80, "type": "related" },
+        { "id": "seed_coder_014", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["engineering", "clean-code", "seed"]
+    },
+    {
+      "id": "seed_coder_009", "type": "concept",
+      "content": "version control: atomic commits, feature branches, trunk-based dev for faster integration",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_010", "weight": 0.80, "type": "related" },
+        { "id": "seed_coder_016", "weight": 0.65, "type": "related" },
+        { "id": "seed_coder_018", "weight": 0.60, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.80, "source": "seed", "confidence": 0.85,
+      "tags": ["engineering", "git", "seed"]
+    },
+    {
+      "id": "seed_coder_010", "type": "concept",
+      "content": "continuous integration: test every commit, keep main green, fast feedback loop catches bugs early",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_002", "weight": 0.70, "type": "related" },
+        { "id": "seed_coder_009", "weight": 0.80, "type": "related" },
+        { "id": "seed_coder_016", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.80, "source": "seed", "confidence": 0.85,
+      "tags": ["engineering", "ci-cd", "seed"]
+    },
+    {
+      "id": "seed_coder_011", "type": "concept",
+      "content": "performance profiling: always measure before optimizing — find the actual bottleneck, not the assumed one",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_003", "weight": 0.65, "type": "related" },
+        { "id": "seed_coder_006", "weight": 0.70, "type": "related" },
+        { "id": "seed_coder_007", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.80, "source": "seed", "confidence": 0.85,
+      "tags": ["engineering", "performance", "seed"]
+    },
+    {
+      "id": "seed_coder_012", "type": "concept",
+      "content": "security fundamentals: validate all input, parameterize queries, least-privilege, encrypt at rest and transit",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_004", "weight": 0.70, "type": "related" },
+        { "id": "seed_coder_005", "weight": 0.65, "type": "related" },
+        { "id": "seed_coder_017", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["engineering", "security", "seed"]
+    },
+    {
+      "id": "seed_coder_013", "type": "concept",
+      "content": "database design: normalize for integrity, index for query patterns, denormalize only when measured slow",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_005", "weight": 0.70, "type": "related" },
+        { "id": "seed_coder_006", "weight": 0.65, "type": "related" },
+        { "id": "seed_coder_011", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.80, "source": "seed", "confidence": 0.85,
+      "tags": ["engineering", "database", "seed"]
+    },
+    {
+      "id": "seed_coder_014", "type": "concept",
+      "content": "refactoring: preserve behavior while improving structure — extract, rename, move, never guess",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_008", "weight": 0.70, "type": "related" },
+        { "id": "seed_coder_002", "weight": 0.65, "type": "related" },
+        { "id": "seed_coder_018", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.80, "source": "seed", "confidence": 0.85,
+      "tags": ["engineering", "refactoring", "seed"]
+    },
+    {
+      "id": "seed_coder_015", "type": "concept",
+      "content": "distributed systems: design for eventual consistency, idempotency, CAP theorem forces explicit tradeoffs",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_001", "weight": 0.70, "type": "related" },
+        { "id": "seed_coder_005", "weight": 0.65, "type": "related" },
+        { "id": "seed_coder_017", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["engineering", "distributed-systems", "seed"]
+    },
+    {
+      "id": "seed_coder_016", "type": "concept",
+      "content": "dependency management: pin versions, audit regularly for CVEs, minimize transitive dependencies",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_009", "weight": 0.65, "type": "related" },
+        { "id": "seed_coder_010", "weight": 0.65, "type": "related" },
+        { "id": "seed_coder_012", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.75, "source": "seed", "confidence": 0.82,
+      "tags": ["engineering", "dependencies", "seed"]
+    },
+    {
+      "id": "seed_coder_017", "type": "concept",
+      "content": "error handling: fail fast with context, surface root cause to caller, degrade gracefully at boundaries",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_003", "weight": 0.70, "type": "related" },
+        { "id": "seed_coder_012", "weight": 0.70, "type": "related" },
+        { "id": "seed_coder_015", "weight": 0.70, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.85, "source": "seed", "confidence": 0.88,
+      "tags": ["engineering", "error-handling", "seed"]
+    },
+    {
+      "id": "seed_coder_018", "type": "concept",
+      "content": "documentation philosophy: code says how, comments say why, docs say when and under what assumptions",
+      "embedding": null, "parent": null, "children": [],
+      "connections": [
+        { "id": "seed_coder_004", "weight": 0.65, "type": "related" },
+        { "id": "seed_coder_008", "weight": 0.65, "type": "related" },
+        { "id": "seed_coder_014", "weight": 0.65, "type": "related" }
+      ],
+      "accessCount": 0, "strength": 0.75, "source": "seed", "confidence": 0.82,
+      "tags": ["engineering", "documentation", "seed"]
+    }
+  ]
+}

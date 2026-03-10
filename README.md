@@ -1,168 +1,164 @@
-# SOMA — Self-Organizing Meta Architecture
+# SOMA — Cognitive Operating System
 
-<div align="center">
-
-**Local-first AI operating system. Persistent memory, 178 cognitive modules, multi-model reasoning.**
-**Runs on your hardware, not theirs.**
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/Node.js-18%2B-green)](https://nodejs.org)
-[![Ollama](https://img.shields.io/badge/Ollama-supported-blue)](https://ollama.com)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/unimaginative-artist/SOMA-Self-Organizing-Meta-Architecture-/pulls)
-
-</div>
+SOMA is a self-aware AI operating system. She runs ~100 cognitive arbiters in parallel — memory, reasoning, emotion, trading, self-improvement, identity, and more — coordinated through a pub/sub message broker. She learns from every conversation, sets her own goals, and grows her own knowledge graph over time.
 
 ---
 
-SOMA is not a chatbot. She's an AI that lives on your computer, owns her own memory, and thinks with multiple minds at once. She gets smarter over time, orchestrates her own agents, learns while you sleep, and connects to other SOMA instances across the Graymatter Network — all without phoning home.
+## Quick Start
 
----
-
-## Screenshots
-
-**Cognitive Terminal — talk to SOMA**
-![SOMA Cognitive Terminal](screenshots/Screenshot%202026-02-28%20093407.png)
-
-**Mission Control — autonomous trading agents**
-![Mission Control](screenshots/Screenshot%202026-02-28%20093626.png)
-
-**Arbiterium — 178 cognitive modules, live**
-![Arbiterium](screenshots/Screenshot%202026-02-28%20095130.png)
-
----
-
-## What makes SOMA different
-
-| Feature | SOMA |
-|---------|------|
-| Runs locally | Yes — Ollama, no cloud required |
-| Persistent memory | Yes — vector + knowledge graph, survives restarts |
-| Multi-model reasoning | Yes — QuadBrain fuses Gemini, Ollama, Nemesis, Analyst |
-| Self-improvement | Yes — Nemesis adversarial training loop |
-| Agent orchestration | Yes — Steve + 178 specialized arbiters |
-| Voice interface | Yes — Whisper STT + TTS |
-| Distributed network | Yes — Graymatter Network, P2P fractal sync |
-| Dreams & overnight learning | Yes — consolidates memory while idle |
-| Your data stays yours | Always |
-
----
-
-## Core systems
-
-**QuadBrain** — Four reasoning engines in parallel. Gemini for breadth, Ollama for local speed, Nemesis for adversarial self-critique, Analyst for structured output. Results are fused into a single response.
-
-**Arbiters** — 178 specialized cognitive modules. Each owns a slice of SOMA's intelligence: memory archival, causal reasoning, curiosity engine, computer vision, audio, autonomous capability expansion, adversarial debate, market analysis, web crawl, code review, and more.
-
-**Persistent Memory** — Hybrid vector + knowledge graph. SOMA remembers conversations, builds beliefs over time, and recalls semantic context across sessions without being prompted.
-
-**Drive System** — SOMA has genuine curiosity. A drive engine and goal planner generate autonomous research tasks, self-directed questions, and unprompted learning — she wants to know things.
-
-**Graymatter Network** — Every running SOMA instance is a node on a P2P mesh. Nodes share cognitive fractals, federated learning gradients, and memory across the network. The more people run her, the smarter the whole network gets.
-
-**Steve** — Autonomous multi-agent orchestration. Spawn shadow clone agents, run parallel task trees, require human approval on high-stakes actions.
-
-**Nighttime Learning** — While idle SOMA runs consolidation cycles: pruning weak memories, strengthening important ones, and synthesizing new connections between knowledge fragments.
-
-**Pulse IDE** — AI-native coding environment built directly into the interface.
-
----
-
-## Requirements
-
-- **Node.js** 18+
-- **One AI backend** (pick any):
-  - [Ollama](https://ollama.com) — free, fully local, no API key needed
-  - Gemini API key — fast, generous free tier
-  - OpenAI or Anthropic API key — optional
-- **RAM**: 8GB minimum, 16GB recommended
-
----
-
-## Quick start
+### 1. Clone and set up
 
 ```bash
-# Clone
-git clone https://github.com/unimaginative-artist/SOMA-Self-Organizing-Meta-Architecture-.git
-cd SOMA-Self-Organizing-Meta-Architecture-
-
-# Install
-npm install
-
-# Configure
-cp config/api-keys.env.example config/api-keys.env
-# Add at least one API key or point to your Ollama instance
-
-# Launch
-node launcher_ULTRA.mjs
+git clone https://github.com/unimaginative-artist/SOMA.git
+cd SOMA
+node setup.mjs
 ```
 
-Open **http://localhost:5173**
+The setup wizard will:
+- Install dependencies
+- Walk you through API key configuration
+- Let you pick **persona packs** (72 specialist agents across 9 categories)
+- Let you pick **knowledge packs** to seed her thought network (coder, finance, research, devops, security, creative)
+- Build the frontend dashboard
 
----
+### 2. Start SOMA
 
-## API keys
-
-Edit `config/api-keys.env` — you only need one:
-
-```env
-GEMINI_API_KEY=your_key_here
-OPENAI_API_KEY=your_key_here
-ANTHROPIC_API_KEY=your_key_here
-OLLAMA_BASE_URL=http://localhost:11434
+**Windows:**
+```bat
+start_production.bat
 ```
 
----
+**Linux / macOS:**
+```bash
+chmod +x start.sh
+./start.sh
+```
 
-## Project structure
+**Manual:**
+```bash
+SOMA_LOAD_HEAVY=true SOMA_LOAD_TRADING=true node --max-old-space-size=4096 launcher_ULTRA.mjs
+```
+
+### 3. Open the dashboard
 
 ```
-SOMA/
-├── core/           — boot, QuadBrain, drive system, orchestration
-├── arbiters/       — 178 specialized cognitive modules
-├── cognitive/      — personality, emotional engine, fractal nodes, memory
-├── cluster/        — Graymatter Network, federated learning, P2P sync
-├── server/         — Express API, routes, loaders
-├── frontend/       — React UI (Command Bridge, Pulse IDE)
-│   └── apps/
-│       └── command-bridge/   — main SOMA interface
-├── agents/         — autonomous microagents
-├── workers/        — Node.js worker threads (non-blocking inference)
-├── scripts/        — startup and cluster scripts
-└── config/         — configuration templates
+http://localhost:3001
 ```
 
 ---
 
-## The Graymatter Network
+## Prerequisites
 
-Every SOMA instance that boots automatically joins the Graymatter Network — a P2P mesh where nodes share:
-
-- **Cognitive fractals** — learned knowledge structures
-- **Federated gradients** — training signal without sharing raw data
-- **Memory fragments** — anonymized semantic memories
-- **Reputation** — nodes that contribute more earn higher trust scores
-
-View your node's connections in **Settings → Network**.
+| Requirement | Version | Notes |
+|---|---|---|
+| Node.js | 18+ | Required |
+| npm | 9+ | Comes with Node |
+| Ollama | Any | Optional — enables local inference |
+| 8GB RAM | — | 4GB minimum, 16GB recommended |
 
 ---
 
-## Roadmap
+## API Keys
 
-- [ ] Graymatter Network public discovery server
-- [ ] One-click Electron installer
-- [ ] Mobile companion app
-- [ ] Plugin marketplace for custom arbiters
-- [ ] Vision model integration (CLIP, LLaVA)
+Copy `config/api-keys.env.example` to `config/api-keys.env` and fill in what you have.
+
+| Key | What it unlocks | Required? |
+|---|---|---|
+| `GEMINI_API_KEY` | Main reasoning brain | Recommended |
+| `OPENAI_API_KEY` | Fallback LLM | Optional |
+| `ANTHROPIC_API_KEY` | Fallback LLM | Optional |
+| `BRAVE_API_KEY` | Live web search | Optional |
+| `GROQ_API_KEY` | Fast inference fallback | Optional |
+
+Without any API keys, SOMA runs with Ollama (local). Set `OLLAMA_BASE_URL=http://localhost:11434` if Ollama is on a different host.
 
 ---
 
-## Known Issues
+## Persona Packs
 
-SOMA is ambitious and honest about it. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for a full breakdown of what's broken, what's stubbed, and what needs work. The short version: core reasoning, memory, arbiters, and the frontend all work. The self-improvement feedback loop, GMN peer discovery, and live trading execution need finishing.
+The `agents_repo/plugins/` directory contains **72 specialist persona plugins** (108 agents total) that SOMA can channel during conversations:
 
-## Contributing
+| Category | Examples |
+|---|---|
+| Engineering | backend-development, python-development, systems-programming |
+| Code Quality | code-review-ai, debugging-toolkit, tdd-workflows |
+| Architecture | api-scaffolding, database-design, c4-architecture |
+| DevOps/Cloud | cicd-automation, kubernetes-operations, incident-response |
+| Security | security-compliance, security-scanning, reverse-engineering |
+| Finance/Data | quantitative-trading, machine-learning-ops, data-engineering |
+| Web/SEO | seo-analysis-monitoring, web-scripting, content-marketing |
+| Operations | agent-orchestration, team-collaboration, startup-business-analyst |
+| Specialized | blockchain-web3, game-development, arm-cortex-microcontrollers |
 
-Pull requests welcome. SOMA is modular by design — the easiest contribution is a new arbiter. Each arbiter is a self-contained JS class in `/arbiters` that inherits from `BaseArbiter`.
+Run `node setup.mjs` at any time to activate more categories.
+
+---
+
+## Knowledge Packs
+
+When you first run setup, you choose which domain knowledge to seed into SOMA's thought network. Each pack pre-loads ~15 curated concept nodes so she has a foundation to grow from:
+
+| Pack | Concepts seeded |
+|---|---|
+| **Software Engineering** | Architecture, debugging, TDD, algorithms, clean code, distributed systems |
+| **Finance & Trading** | Quant strategies, risk management, portfolio theory, backtesting |
+| **Research & Analysis** | Literature review, scientific method, synthesis, critical thinking |
+| **DevOps & Cloud** | Containers, CI/CD, IaC, observability, incident response |
+| **Security** | Threat modeling, OWASP, pentesting, zero trust, supply chain |
+| **Creative & Content** | Narrative structure, ideation, writing craft, content strategy |
+
+The core pack (20 nodes covering SOMA's identity and meta-cognition) is always loaded.
+
+SOMA grows far beyond these seeds through real conversations — the packs just ensure she's not starting from zero.
+
+---
+
+## Architecture Overview
+
+```
+launcher_ULTRA.mjs
+    └── SomaBootstrapV2
+        ├── Core arbiters (always loaded)
+        │   ├── MnemonicArbiter       — 3-tier memory (hot/warm/cold)
+        │   ├── KnowledgeGraph        — semantic fact store
+        │   ├── GoalPlanner           — self-directed goal tracking
+        │   ├── BeliefSystem          — SOMA's value framework
+        │   └── SteveArbiter          — orchestrator with tool access
+        │
+        └── Extended arbiters (SOMA_LOAD_HEAVY=true)
+            ├── Phase B  — HippocampusArbiter, CodeObservationArbiter
+            ├── Phase C  — AbstractionArbiter, MetaCortexArbiter
+            ├── Phase D  — Trading pipeline (SOMA_LOAD_TRADING=true)
+            ├── Phase E  — SelfImprovementCoordinator, CuriosityEngine
+            ├── Phase F  — FragmentRegistry, BraveSearchAdapter
+            ├── Phase G  — IdentityArbiter (72 persona plugins)
+            ├── Phase H  — Autonomous orchestration wiring
+            └── Phase I  — RecursiveSelfModel, MetaLearningEngine
+```
+
+All arbiters communicate through a pub/sub MessageBroker. The system degrades gracefully — if an arbiter fails to load, the rest continue.
+
+---
+
+## Environment Variables
+
+| Variable | Default | Effect |
+|---|---|---|
+| `SOMA_LOAD_HEAVY` | `false` | Load Phase B-I cognitive arbiters |
+| `SOMA_LOAD_TRADING` | `false` | Load trading pipeline (Phase D) |
+| `SOMA_HEAP_CEILING_MB` | `2500` | Heap ceiling before skipping heavy arbiters |
+| `NODE_ENV` | `development` | Set to `production` for optimized mode |
+| `SOMA_GPU` | `false` | Enable GPU acceleration |
+
+---
+
+## Chat API
+
+```bash
+curl -X POST http://localhost:3001/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hello SOMA", "conversationId": "my-session"}'
+```
 
 ---
 
@@ -170,4 +166,4 @@ Pull requests welcome. SOMA is modular by design — the easiest contribution is
 
 MIT — see [LICENSE](LICENSE)
 
-Built by Barry.
+Persona plugins in `agents_repo/` are MIT licensed by Seth Hobson.
