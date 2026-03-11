@@ -905,6 +905,28 @@ const SomaCommandBridge = () => {
       }
     });
 
+    somaBackend.on('soma_proactive', (payload) => {
+      const text = payload.message || payload.text || String(payload);
+      if (!text) return;
+      toast.info(`💜 SOMA: ${text.substring(0, 100)}${text.length > 100 ? '…' : ''}`, { theme: 'dark', autoClose: 8000 });
+      setActivityStream(prev => [
+        { id: Date.now(), type: 'info', message: `[Autonomous] ${text}`, timestamp: Date.now() },
+        ...prev.slice(0, 49)
+      ]);
+    });
+
+    somaBackend.on('soma_activity', (payload) => {
+      const { source, description, output, status } = payload;
+      if (status !== 'ok') return;
+      const summary = output
+        ? `[${source}] ${description} → ${output.substring(0, 120)}`
+        : `[${source}] ${description}`;
+      setActivityStream(prev => [
+        { id: Date.now(), type: 'success', message: summary, timestamp: Date.now() },
+        ...prev.slice(0, 49)
+      ]);
+    });
+
     somaBackend.connect();
 
     return () => {

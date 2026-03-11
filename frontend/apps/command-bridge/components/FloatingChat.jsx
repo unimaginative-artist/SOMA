@@ -3,6 +3,7 @@ import { MessageSquare, X, Send, Activity, Brain, Move, Zap, XCircle } from 'luc
 import MarkdownIt from 'markdown-it';
 import { parseEmotes } from '../lib/emotes';
 import PixelAvatar from './PixelAvatar';
+import somaBackend from '../somaBackend.js';
 
 const md = new MarkdownIt({
   highlight: function (str, lang) {
@@ -40,6 +41,47 @@ const FloatingChat = ({ isServerRunning, isBusy, onSendMessage, activeModule }) 
   useEffect(() => {
     scrollToBottom();
   }, [messages, isBusy]);
+
+  // ── SOMA speaks first: autonomous proactive messages ──────────────────────
+  const [unreadCount, setUnreadCount] = useState(0);
+  useEffect(() => {
+    const handleProactive = (payload) => {
+      const text = payload.message || payload.text || String(payload);
+      if (!text) return;
+      setMessages(prev => [...prev, {
+        id: Date.now(),
+        text,
+        sender: 'system',
+        autonomous: true
+      }]);
+      // Auto-open chat so SOMA's message isn't invisible
+      setIsOpen(prev => {
+        if (!prev) setUnreadCount(c => c + 1);
+        return true;
+      });
+    };
+
+    const handleActivity = (payload) => {
+      const { source, description, output, status } = payload;
+      if (status !== 'ok') return; // only surface successes in chat
+      const summary = output
+        ? `_[${source}] ${description} → ${output.substring(0, 120)}_`
+        : `_[${source}] ${description}_`;
+      setMessages(prev => [...prev, {
+        id: Date.now(),
+        text: summary,
+        sender: 'system',
+        autonomous: true
+      }]);
+    };
+
+    somaBackend.on('soma_proactive', handleProactive);
+    somaBackend.on('soma_activity', handleActivity);
+    return () => {
+      somaBackend.off('soma_proactive', handleProactive);
+      somaBackend.off('soma_activity', handleActivity);
+    };
+  }, []);
 
   // Drag Handlers
   const handleMouseDown = (e) => {
@@ -209,14 +251,19 @@ const FloatingChat = ({ isServerRunning, isBusy, onSendMessage, activeModule }) 
       {!isOpen ? (
         <button
           onMouseDown={handleMouseDown}
-          onClick={toggleOpen}
-          className={`w-14 h-14 rounded-full bg-[#151518]/90 backdrop-blur-md border border-white/10 flex items-center justify-center shadow-2xl hover:border-white/20 transition-all group ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+          onClick={() => { toggleOpen(); setUnreadCount(0); }}
+          className={`relative w-14 h-14 rounded-full bg-[#151518]/90 backdrop-blur-md border ${unreadCount > 0 ? 'border-fuchsia-500/60 animate-pulse' : 'border-white/10'} flex items-center justify-center shadow-2xl hover:border-white/20 transition-all group ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
           title="SOMA Chat (Drag to move)"
         >
           {/* Static Fuchsia Brain Icon */}
           <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" className="text-fuchsia-500 transition-transform group-hover:scale-110">
             <path d="M12 2C10.5 2 9 2.5 8 3.5C7 2.5 5.5 2 4 2C2.5 2 1 3 1 5C1 6.5 1.5 8 2.5 9C1.5 10 1 11.5 1 13C1 14.5 2 16 3.5 16.5C3 17.5 3 18.5 3.5 19.5C4 20.5 5 21 6 21.5C7 22 8.5 22 10 22H14C15.5 22 17 22 18 21.5C19 21 20 20.5 20.5 19.5C21 18.5 21 17.5 20.5 16.5C22 16 23 14.5 23 13C23 11.5 22.5 10 21.5 9C22.5 8 23 6.5 23 5C23 3 21.5 2 20 2C18.5 2 17 2.5 16 3.5C15 2.5 13.5 2 12 2Z" />
           </svg>
+          {unreadCount > 0 && (
+            <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-fuchsia-500 text-white text-[10px] font-bold flex items-center justify-center shadow-lg">
+              {unreadCount > 9 ? '9+' : unreadCount}
+            </span>
+          )}
         </button>
       ) : (
         <div className="bg-[#151518]/90 backdrop-blur-md border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[500px]">
@@ -252,8 +299,16 @@ const FloatingChat = ({ isServerRunning, isBusy, onSendMessage, activeModule }) 
               <div key={msg.id} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${msg.sender === 'user'
                   ? 'bg-fuchsia-500/10 border border-fuchsia-500/20 text-fuchsia-50'
+                  : msg.autonomous
+                  ? 'bg-violet-950/40 border border-violet-500/30 text-violet-200'
                   : 'bg-white/5 border border-white/10 text-zinc-200'
                   }`}>
+                  {msg.autonomous && (
+                    <div className="flex items-center gap-1 mb-1.5">
+                      <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
+                      <span className="text-[9px] font-mono uppercase tracking-widest text-violet-400 opacity-80">autonomous</span>
+                    </div>
+                  )}
                   <div
                     className="markdown-content"
                     dangerouslySetInnerHTML={{ __html: parseEmotes(md.render(msg.text)) }}
