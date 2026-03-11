@@ -9,7 +9,9 @@
  * - Auto-classification
  */
 
-const BACKEND_URL = '';
+// In dev (Vite proxy) use relative URLs; in production Electron (file://) use absolute
+const BACKEND_URL = import.meta.env?.VITE_SOMA_HTTP ||
+  (import.meta.env?.DEV ? '' : 'http://localhost:3001');
 
 /**
  * Query the SOMA knowledge base with natural language
@@ -234,7 +236,7 @@ export async function checkBackendHealth() {
   try {
     const response = await fetch(`${BACKEND_URL}/health`, {
       method: 'GET',
-      signal: AbortSignal.timeout(3000)
+      signal: AbortSignal.timeout(8000)
     });
     return response.ok;
   } catch {

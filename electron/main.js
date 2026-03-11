@@ -25,19 +25,18 @@ function createWindow() {
     titleBarStyle: 'default'
   });
 
-  // In development, load from Vite dev server
+  // Dev: load from Vite dev server (proxies API calls to SOMA backend)
+  // Production: load from the SOMA Express server (serves frontend/dist + handles API)
+  // NOTE: Never use loadFile() — it creates a file:// origin which breaks all relative API fetches
   const viteUrl = process.env.VITE_DEV_SERVER_URL;
-  console.log('[ELECTRON] VITE_DEV_SERVER_URL:', viteUrl);
-  
+  const somaUrl = process.env.SOMA_BACKEND_URL || 'http://localhost:3001';
+  const loadUrl = viteUrl || somaUrl;
+
+  console.log('[ELECTRON] Loading from:', loadUrl);
+  mainWindow.loadURL(loadUrl);
+
   if (viteUrl) {
-    console.log('[ELECTRON] Loading from Vite dev server:', viteUrl);
-    mainWindow.loadURL(viteUrl);
     mainWindow.webContents.openDevTools();
-  } else {
-    // In production, load from built files
-    const distPath = path.join(__dirname, '../frontend/dist/index.html');
-    console.log('[ELECTRON] Loading from dist:', distPath);
-    mainWindow.loadFile(distPath);
   }
 
   // Allow toggling DevTools with F12 or Ctrl+Shift+I

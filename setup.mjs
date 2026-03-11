@@ -299,6 +299,17 @@ if (distExists) {
     }
 }
 
+// ── 7b. Build Electron main process ───────────────────────────────────────
+// dist-electron/ is gitignored — we copy electron/main.js there so "npx electron ." works
+const electronSrc  = path.join(ROOT, 'electron', 'main.js');
+const electronDest = path.join(ROOT, 'dist-electron', 'main.js');
+const electronSrcExists = await fs.access(electronSrc).then(() => true).catch(() => false);
+if (electronSrcExists) {
+    await fs.mkdir(path.join(ROOT, 'dist-electron'), { recursive: true });
+    await fs.copyFile(electronSrc, electronDest);
+    ok('Electron main process ready (dist-electron/main.js)');
+}
+
 // ── 8. Done ────────────────────────────────────────────────────────────────
 rl.close();
 

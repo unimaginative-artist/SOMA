@@ -119,10 +119,10 @@ const FileIntelligenceApp = () => {
             }
         };
         checkBackend();
-        // Re-check every 10 seconds if not connected
+        // Re-check every 5 seconds if not connected
         const interval = setInterval(() => {
             if (!backendConnected) checkBackend();
-        }, 10000);
+        }, 5000);
         return () => clearInterval(interval);
     }, [log, backendConnected]);
 

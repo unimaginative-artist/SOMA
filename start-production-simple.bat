@@ -21,12 +21,17 @@ start "CT SERVER" /min cmd /c "npm run server"
 cd ..
 
 echo.
-echo 4. Waiting for backends to warm up (5s)...
-timeout /t 5 /nobreak >nul
+echo 4. Waiting for SOMA backend to come online (up to 60s)...
+powershell -NoProfile -Command ^
+  "$deadline = [DateTime]::Now.AddSeconds(60); " ^
+  "do { Start-Sleep -Milliseconds 1500; " ^
+  "  try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:3001/health' -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop; break } catch {} " ^
+  "} while ([DateTime]::Now -lt $deadline); " ^
+  "Write-Host 'SOMA backend is up'"
 
 echo.
 echo 5. Launching Command Bridge (Production Mode)...
-:: Unset VITE_DEV_SERVER_URL to force Electron to load from dist/
+:: Clear VITE_DEV_SERVER_URL so Electron loads from SOMA backend (http://localhost:3001)
 set VITE_DEV_SERVER_URL=
 npx electron .
 

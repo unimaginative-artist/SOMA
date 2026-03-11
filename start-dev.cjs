@@ -429,13 +429,25 @@ ${colors.reset}`);
     }
   })();
 
-  // Wait for Vite to be ready, then launch Electron
+  // Wait for Vite AND SOMA backend to be ready, then launch Electron
   (async () => {
     log('SYSTEM', 'Waiting for Vite dev server...', colors.cyan);
-    await new Promise(resolve => setTimeout(resolve, 5000));
-    log('SYSTEM', `??? Vite dev server ready on port ${PORTS.VITE_DEV}`, colors.green);
+    try {
+      await waitForPort(PORTS.VITE_DEV, 30, 1000);
+      log('SYSTEM', `✅ Vite dev server ready on port ${PORTS.VITE_DEV}`, colors.green);
+    } catch (e) {
+      log('SYSTEM', `⚠️  Vite not ready: ${e.message} — launching Electron anyway`, colors.yellow);
+    }
 
-    log('SYSTEM', '???????  Launching Electron in dev mode...', colors.magenta);
+    log('SYSTEM', 'Waiting for SOMA backend to come online...', colors.cyan);
+    try {
+      await waitForPort(PORTS.BACKEND, 60, 2000);
+      log('SYSTEM', `✅ SOMA backend ready on port ${PORTS.BACKEND}`, colors.green);
+    } catch (e) {
+      log('SYSTEM', `⚠️  Backend not ready: ${e.message} — launching Electron anyway`, colors.yellow);
+    }
+
+    log('SYSTEM', '🚀 Launching Electron in dev mode...', colors.magenta);
     electronSupervisor.start();
   })();
 
