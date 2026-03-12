@@ -41,6 +41,14 @@ The backend serves `frontend/dist`. If you edit any `.jsx` file and don't rebuil
 ### Brain Pipeline (for chat)
 `/api/soma/chat` → `SOMArbiterV3` → `SOMArbiterV2_QuadBrain` → DeepSeek/Ollama
 
+**Active providers (priority order):**
+1. `DeepSeek` — primary (`DEEPSEEK_API_KEY` in `config/api-keys.env`)
+2. `Ollama` — local fallback (gemma3:4b or similar)
+3. `Gemini` — **DISABLED** (API key cancelled — SOMA ran up charges). Do not re-enable without billing cap.
+
+**Search budget:**
+- `BraveSearch` — 500 searches/month. Reserved for user queries only. CuriosityEngine uses free scrapers (Puppeteer, Wikipedia, arXiv, StackOverflow, GitHub, HN) first; Brave only if all scraping fails.
+
 **4 sub-brains in QuadBrain:**
 - `LOGOS` — logic, code, engineering
 - `AURORA` — creative, artistic, emotional
