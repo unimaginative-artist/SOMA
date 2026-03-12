@@ -14,6 +14,12 @@ node launcher_ULTRA.mjs     ← direct node invocation
 npm run start:all           ← runs start-dev.cjs which wraps backend as supervised child; root cause of months of disconnects
 ```
 
+**After any frontend file change — rebuild dist:**
+```
+rebuild-frontend.bat        ← runs vite build, takes ~2-3 min
+```
+The backend serves `frontend/dist`. If you edit any `.jsx` file and don't rebuild, the running app won't see the changes.
+
 **Access:** http://localhost:3001
 
 **Key env vars set in `start_production.bat`:**
