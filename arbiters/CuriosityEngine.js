@@ -43,9 +43,8 @@ export class CuriosityEngine extends EventEmitter {
     this.messageBroker = opts.messageBroker;
     this.simulationArbiter = opts.simulationArbiter; // 🎮 Physics Engine Link
     this.worldModel = opts.worldModel; // 🌍 World Model for Epistemic Curiosity
-    this.brain = opts.brain || null;           // QuadBrain (DeepSeek) for enriching queries
-    this.braveSearch = opts.braveSearch || null; // BraveSearchAdapter — direct API search
-    this.webResearcher = opts.webResearcher || null; // CuriosityWebAccessConnector — full pipeline
+    this.brain = opts.brain || null;             // QuadBrain (DeepSeek) for enriching queries
+    this.webResearcher = opts.webResearcher || null; // CuriosityWebAccessConnector — Puppeteer + free scrapers + Brave (last resort)
 
     // Curiosity state
     this.curiosityQueue = []; // Questions/explorations to pursue
@@ -654,7 +653,7 @@ Return ONLY the search query, nothing else.`;
     // 🎓 CURIOSITY-DRIVEN LEARNING: Trigger autonomous learning/training
     await this._triggerAutonomousLearning(item);
 
-    // REAL EXPLORATION: Brave search → Puppeteer dendrite scrape → brain synthesis
+    // REAL EXPLORATION: Free scrapers → Puppeteer dendrite → Brave only as last resort
     if (item.type !== 'physical_experiment') {
       // Enrich the raw question into a focused web search query using the brain
       const searchQuery = await this._enrichQuestionForSearch(item.question, item);
@@ -669,7 +668,8 @@ Return ONLY the search query, nothing else.`;
         });
       }
 
-      // Tier 1: CuriosityWebAccessConnector — full pipeline (Brave + Puppeteer dendrite + mnemonic store)
+      // Tier 1: CuriosityWebAccessConnector — Puppeteer scraping first, Brave only if scraping fails
+      // NOTE: Brave is 500 searches/month — WebAccessConnector already handles this conservatively
       if (this.webResearcher) {
         console.log(`[${this.name}] 🔭 Research via WebAccessConnector: "${searchQuery}"`);
         this.webResearcher.handleCuriosity({
@@ -678,51 +678,7 @@ Return ONLY the search query, nothing else.`;
           priority: item.finalPriority
         }).catch(e => console.warn(`[${this.name}] WebResearcher error: ${e.message}`));
 
-      // Tier 2: BraveSearchAdapter — direct API search, synthesize with brain
-      } else if (this.braveSearch) {
-        console.log(`[${this.name}] 🔍 Research via BraveSearch: "${searchQuery}"`);
-        (async () => {
-          try {
-            const results = await this.braveSearch.searchWeb(searchQuery, { count: 5 });
-            if (!results.success || !results.results?.length) return;
-
-            const snippets = results.results.slice(0, 5)
-              .map((r, i) => `${i + 1}. ${r.title}\n   ${r.description || ''}\n   ${r.url}`)
-              .join('\n');
-
-            // Synthesize with brain into a compact insight
-            if (this.brain) {
-              const synthesis = await Promise.race([
-                this.brain.reason(
-                  `You are SOMA. You searched for: "${searchQuery}"\n\nTop results:\n${snippets}\n\nWrite a concise 2-3 sentence insight that captures what you learned. Be specific, not generic.`,
-                  { quickResponse: true, preferredBrain: 'LOGOS' }
-                ),
-                new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 10000))
-              ]).catch(() => null);
-
-              const insight = synthesis?.text?.trim();
-              if (insight) {
-                console.log(`[${this.name}] 💡 Insight: ${insight.substring(0, 120)}...`);
-                this.emit('insight:learned', { query: searchQuery, insight, source: 'brave_search', timestamp: Date.now() });
-
-                // Store to messageBroker so HippocampusArbiter can index it
-                if (this.messageBroker) {
-                  this.messageBroker.publish('curiosity:insight', {
-                    query: searchQuery,
-                    insight,
-                    originalQuestion: item.question,
-                    sources: results.results.slice(0, 3).map(r => r.url),
-                    timestamp: Date.now()
-                  });
-                }
-              }
-            }
-          } catch (e) {
-            console.warn(`[${this.name}] BraveSearch research error: ${e.message}`);
-          }
-        })();
-
-      // Tier 3: Fall back to EdgeWorkerOrchestrator (basic HTML scraper)
+      // Tier 2: EdgeWorkerOrchestrator — free HTML scraping (StackOverflow, GitHub, MDN, Dev.to)
       } else if (this.messageBroker) {
         await this.messageBroker.sendMessage({
           from: this.name,

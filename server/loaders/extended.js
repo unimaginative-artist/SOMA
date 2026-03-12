@@ -1014,14 +1014,12 @@ export async function loadExtendedSystems(system) {
         console.log(`    🔗 QuadBrain ← GoalPlanner, CodeObserver, CuriosityEngine${ext.queryClassifier ? ', QueryComplexityClassifier' : ''}`);
     }
 
-    // BraveSearch → QuadBrain + CuriosityEngine (live web search)
+    // BraveSearch → QuadBrain (live web search for user queries — 500/month, use sparingly)
     if (ext.braveSearch) {
         system.braveSearch = ext.braveSearch;
         if (system.quadBrain) system.quadBrain.braveSearch = ext.braveSearch;
         if (system.quadBrain?._direct) system.quadBrain._direct.braveSearch = ext.braveSearch;
-        // Wire into CuriosityEngine so it can search directly (bypasses EdgeWorker HTML scraper)
-        if (ext.curiosityEngine) ext.curiosityEngine.braveSearch = ext.braveSearch;
-        console.log('    🔗 BraveSearchAdapter → QuadBrain + CuriosityEngine (live web search ON)');
+        console.log('    🔗 BraveSearchAdapter → QuadBrain (500 searches/month — Brave reserved for user queries)');
     }
 
     // CuriosityWebAccessConnector → CuriosityEngine (Brave + Puppeteer dendrite pipeline)
