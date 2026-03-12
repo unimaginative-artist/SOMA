@@ -1055,6 +1055,47 @@ export async function loadExtendedSystems(system) {
         console.log(`    🔗 IdentityArbiter → system.identityArbiter (${ext.identityArbiter.personas?.size || 0} personas)`);
     }
 
+    // ── ThoughtNetwork: lazy-init if not already set by old bootstrap ──
+    // Required for Knowledge tab fractal graph + autonomous concept synthesis.
+    // Pre-seed from seeds/*.json so the graph is never empty on first launch.
+    if (!system.thoughtNetwork) {
+        try {
+            const { ThoughtNetwork } = require('../../cognitive/ThoughtNetwork.cjs');
+            const tn = new ThoughtNetwork({
+                name: 'ThoughtNetwork',
+                brain: system.quadBrain || system.somArbiter,
+                mnemonic: system.mnemonicArbiter
+            });
+            system.thoughtNetwork = tn;
+
+            // Load seed packs
+            const fs = await import('fs');
+            const seedsDir = path.join(rootPath, 'seeds');
+            try {
+                const seedFiles = fs.readdirSync(seedsDir).filter(f => f.endsWith('.json'));
+                let totalSeeded = 0;
+                for (const file of seedFiles) {
+                    try {
+                        const pack = JSON.parse(fs.readFileSync(path.join(seedsDir, file), 'utf8'));
+                        if (pack.nodes && Array.isArray(pack.nodes)) {
+                            for (const node of pack.nodes) {
+                                tn.nodes.set(node.id, { ...node, accessCount: node.accessCount || 0, strength: node.strength || 0.8 });
+                                totalSeeded++;
+                            }
+                        }
+                    } catch { /* skip malformed seed */ }
+                }
+                console.log(`    🌱 ThoughtNetwork seeded with ${totalSeeded} nodes from ${seedFiles.length} packs`);
+            } catch { /* seeds dir missing — no problem */ }
+
+            // Start autonomous synthesis after 5 minutes (let system stabilize first)
+            setTimeout(() => { try { tn.startAutonomousSynthesis(600000); } catch { } }, 300000);
+            console.log('    🔗 ThoughtNetwork → system.thoughtNetwork (Knowledge graph online)');
+        } catch (e) {
+            console.warn('    ⚠️ ThoughtNetwork init failed (non-fatal):', e.message);
+        }
+    }
+
     // ── Late-wire trading arbiters into SOMA_TRADING ──
     // These load after boot, so we inject them into the global that
     // ScalpingEngine, PositionGuardian, and finance routes already check.

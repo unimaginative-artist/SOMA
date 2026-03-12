@@ -184,8 +184,9 @@ ${recentFeelings}` : ''}
    * High-End Metacognition: SOMA thinks about her own thinking.
    */
   async _updateNarrative(query, response, context) {
+    const queryStr = typeof query === 'string' ? query : (query?.query || query?.text || String(query || ''));
     const prompt = `[INTERNAL REFLECTION]
-    USER ASKED: "${query}"
+    USER ASKED: "${queryStr}"
     I RESPONDED: "${response.text?.substring(0, 200)}..."
     
     TASK: Rewrite my current internal narrative. What is my goal? What did I learn about the user or myself?
@@ -199,7 +200,7 @@ ${recentFeelings}` : ''}
         this.longTermNarrative.push({
             timestamp: Date.now(),
             realization: this.internalNarrative,
-            query: query.substring(0, 50)
+            query: queryStr.substring(0, 50)
         });
         if (this.longTermNarrative.length > 10) this.longTermNarrative.shift();
 
@@ -519,7 +520,7 @@ ${recentFeelings}` : ''}
         // Publish critique result event
         if (this.messageBroker) {
           await this.messageBroker.publish('soma.critique', {
-            query: query.substring(0, 100),
+            query: queryStr.substring(0, 100),
             passed: critique.passed,
             score: critique.score,
             timestamp: Date.now()
