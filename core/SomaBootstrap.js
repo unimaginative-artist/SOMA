@@ -43,11 +43,15 @@ export class SomaBootstrap {
             // Phase ASI: Close the recursive self-improvement loop
             await this._phase_asi();
 
+            // Phase Perception: Boot daemon layer, attention engine, and engineering swarm
+            await this._phase_perception();
+
             console.log('\n╔═══════════════════════════════════════════════════════════════════════╗');
             console.log('║  🎉 SOMA Bootstrap Complete!                                         ║');
             console.log('║  🔱 Trinity Architecture: ACTIVE                                     ║');
             console.log('║  🧠 Autonomous Systems: ACTIVE                                       ║');
             console.log('║  ⚡ ASI Kernel: ACTIVE                                               ║');
+            console.log('║  👁️  Perception Layer: ACTIVE                                        ║');
             console.log('╚═══════════════════════════════════════════════════════════════════════╝\n');
 
             // Generate Trinity Status Report
@@ -2305,6 +2309,172 @@ export class SomaBootstrap {
             // ASI systems are enhancement — never block SOMA boot on their failure
             console.warn(`   ⚠️  ASI systems failed to initialize: ${err.message}`);
             console.warn('   SOMA will continue without ASI recursive improvement.');
+        }
+    }
+
+// TEMP: perception phase method to inject into SomaBootstrap.js
+// This file is read by the injection script and then deleted.
+
+    // ─── Phase Perception: Daemon Layer + Attention Engine + Engineering Swarm ─
+    async _phase_perception() {
+        console.log('\n\u{1F441}\uFE0F  PHASE PERCEPTION: Booting Daemon Layer...');
+        try {
+            // 1. DaemonManager
+            const { DaemonManager }      = await import('./DaemonManager.js');
+            const { RepoWatcherDaemon }  = await import('../daemons/RepoWatcherDaemon.js');
+            const { HealthDaemon }       = await import('../daemons/HealthDaemon.js');
+            const { OptimizationDaemon } = await import('../daemons/OptimizationDaemon.js');
+            const { DiscoveryDaemon }    = await import('../daemons/DiscoveryDaemon.js');
+
+            this.system.daemonManager = new DaemonManager({ logger: console });
+
+            // 2. AttentionArbiter — wired as CNS gate BEFORE daemons start
+            //    MessageBroker._deliverSignal already checks this.attentionEngine
+            try {
+                const { AttentionArbiter } = await import('../arbiters/AttentionArbiter.js');
+                this.system.attentionArbiter = new AttentionArbiter({ name: 'AttentionArbiter' });
+                await this.system.attentionArbiter.initialize();
+                this.system.messageBroker.attentionEngine = this.system.attentionArbiter;
+                console.log('   \u2705 AttentionArbiter wired as CNS gate (prevents arbiter storms)');
+            } catch (err) {
+                console.warn(`   \u26A0\uFE0F  AttentionArbiter skipped: ${err.message}`);
+            }
+
+            // 3. EngineeringSwarmArbiter — full research/plan/debate/synthesis cycle
+            try {
+                const { EngineeringSwarmArbiter } = await import('../arbiters/EngineeringSwarmArbiter.js');
+                this.system.engineeringSwarm = new EngineeringSwarmArbiter({
+                    name:      'EngineeringSwarmArbiter',
+                    quadBrain: this.system.quadBrain,
+                    rootPath:  this.rootPath
+                });
+                await this.system.engineeringSwarm.initialize();
+                this.system.messageBroker.registerArbiter('EngineeringSwarmArbiter', {
+                    instance:       this.system.engineeringSwarm,
+                    role:           'implementer',
+                    lobe:           'motor_cortex',
+                    classification: 'engineering'
+                });
+                console.log('   \u2705 EngineeringSwarmArbiter online (research \u2192 plan \u2192 debate \u2192 patch \u2192 verify)');
+            } catch (err) {
+                console.warn(`   \u26A0\uFE0F  EngineeringSwarmArbiter skipped: ${err.message}`);
+            }
+
+            // 4. SwarmOptimizer — records swarm outcomes and proposes improvements
+            try {
+                const { SwarmOptimizer } = await import('../arbiters/SwarmOptimizer.js');
+                this.system.swarmOptimizer = new SwarmOptimizer({
+                    name:      'SwarmOptimizer',
+                    swarm:     this.system.engineeringSwarm,
+                    quadBrain: this.system.quadBrain
+                });
+                await this.system.swarmOptimizer.initialize();
+                if (this.system.engineeringSwarm?.setOptimizer) {
+                    this.system.engineeringSwarm.setOptimizer(this.system.swarmOptimizer);
+                }
+                this.system.messageBroker.registerArbiter('SwarmOptimizer', {
+                    instance:       this.system.swarmOptimizer,
+                    role:           'analyst',
+                    lobe:           'prefrontal',
+                    classification: 'optimizer'
+                });
+                console.log('   \u2705 SwarmOptimizer wired (hourly perf analysis + self-improvement loop)');
+            } catch (err) {
+                console.warn(`   \u26A0\uFE0F  SwarmOptimizer skipped: ${err.message}`);
+            }
+
+            // 5. DiscoverySwarm — autonomous capability invention, daily scan
+            try {
+                const { DiscoverySwarm } = await import('../arbiters/DiscoverySwarm.js');
+                this.system.discoverySwarm = new DiscoverySwarm({
+                    name:        'DiscoverySwarm',
+                    engineering: this.system.engineeringSwarm,
+                    quadBrain:   this.system.quadBrain
+                });
+                await this.system.discoverySwarm.initialize();
+                this.system.messageBroker.registerArbiter('DiscoverySwarm', {
+                    instance:       this.system.discoverySwarm,
+                    role:           'scout',
+                    lobe:           'prefrontal',
+                    classification: 'discovery'
+                });
+                console.log('   \u2705 DiscoverySwarm online (daily capability invention scan)');
+            } catch (err) {
+                console.warn(`   \u26A0\uFE0F  DiscoverySwarm skipped: ${err.message}`);
+            }
+
+            // 6. Register daemons and start (startAll also launches watchdog)
+            this.system.daemonManager.register(new RepoWatcherDaemon({ root: this.rootPath }));
+            this.system.daemonManager.register(new HealthDaemon({ intervalMs: 30_000 }));
+            this.system.daemonManager.register(new OptimizationDaemon({
+                optimizer:  this.system.swarmOptimizer,
+                intervalMs: 3_600_000     // hourly
+            }));
+            this.system.daemonManager.register(new DiscoveryDaemon({
+                discovery:  this.system.discoverySwarm,
+                intervalMs: 86_400_000    // daily
+            }));
+            await this.system.daemonManager.startAll();
+
+            // 7. Wire signal reactions: perception drives the decision/execution loop
+            this.system.messageBroker.subscribe('swarm.optimization.needed', async (signal) => {
+                if (!this.system.swarmOptimizer) return;
+                console.log('[SOMA] \uD83D\uDCCA Swarm optimization signal — running improvement cycle...');
+                try {
+                    const result = await this.system.swarmOptimizer.improve();
+                    // Persist improvement outcome to mnemonic so SOMA remembers what changed
+                    if (result && this.system.mnemonic) {
+                        const summary = typeof result === 'string' ? result : JSON.stringify(result).slice(0, 500);
+                        await this.system.mnemonic.remember(
+                            `Optimization cycle completed: ${summary}`,
+                            { source: 'swarm_optimizer', timestamp: Date.now() }
+                        ).catch(() => {});
+                    }
+                } catch (err) {
+                    console.warn('[SOMA] SwarmOptimizer.improve() failed:', err.message);
+                }
+            });
+
+            this.system.messageBroker.subscribe('swarm.discovery.ideas', async (signal) => {
+                if (!this.system.discoverySwarm) return;
+                const ideas = signal.payload?.ideas || [];
+                console.log(`[SOMA] \uD83D\uDCA1 DiscoverySwarm: ${ideas.length} idea(s) — prototyping top 3`);
+                for (const idea of ideas.slice(0, 3)) {
+                    try {
+                        const result = await this.system.discoverySwarm.prototype(idea);
+                        // Persist discovery outcome to mnemonic
+                        if (this.system.mnemonic) {
+                            const summary = typeof result === 'string' ? result : JSON.stringify(result).slice(0, 400);
+                            await this.system.mnemonic.remember(
+                                `Discovery prototyped: "${idea.name || idea}"\nOutcome: ${summary}`,
+                                { source: 'discovery_swarm', timestamp: Date.now() }
+                            ).catch(() => {});
+                        }
+                    } catch (err) {
+                        console.warn(`[SOMA] Prototype failed for ${idea.name}: ${err.message}`);
+                    }
+                }
+            });
+
+            this.system.messageBroker.subscribe('health.warning', (signal) => {
+                console.warn(`[SOMA] \uD83C\uDFE5 Health warning [${signal.source}]: ${JSON.stringify(signal.payload)}`);
+                this.system.anomalyDetector?.record?.({
+                    type: 'health_warning', payload: signal.payload, source: signal.source
+                });
+                // Persist health warnings to mnemonic for pattern recognition
+                if (this.system.mnemonic) {
+                    this.system.mnemonic.remember(
+                        `Health warning from ${signal.source}: ${JSON.stringify(signal.payload)}`,
+                        { source: 'health_daemon', priority: 'high', timestamp: Date.now() }
+                    ).catch(() => {});
+                }
+            });
+
+            console.log('[SOMA] \uD83D\uDC41\uFE0F  Perception Layer ACTIVE — 4 daemons, watchdog, attention gate, engineering swarm');
+
+        } catch (err) {
+            console.warn(`   \u26A0\uFE0F  Perception Layer failed: ${err.message}`);
+            console.warn('   SOMA will continue without daemon perception. Non-fatal.');
         }
     }
 
