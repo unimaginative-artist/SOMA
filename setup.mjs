@@ -98,11 +98,11 @@ try {
 }
 
 const KEY_DEFS = [
-    { key: 'GEMINI_API_KEY',    label: 'Gemini API key',    note: 'Main brain — free tier at aistudio.google.com', required: true  },
-    { key: 'OPENAI_API_KEY',    label: 'OpenAI API key',    note: 'Optional fallback — platform.openai.com',        required: false },
-    { key: 'ANTHROPIC_API_KEY', label: 'Anthropic API key', note: 'Optional fallback — console.anthropic.com',     required: false },
-    { key: 'BRAVE_API_KEY',     label: 'Brave Search key',  note: 'Live web search — api.search.brave.com',        required: false },
-    { key: 'GROQ_API_KEY',      label: 'Groq API key',      note: 'Fast inference fallback — console.groq.com',    required: false },
+    { key: 'DEEPSEEK_API_KEY',  label: 'DeepSeek API key',  note: 'Primary brain — recommended. platform.deepseek.com', required: true  },
+    { key: 'OPENAI_API_KEY',    label: 'OpenAI API key',    note: 'Optional fallback — platform.openai.com',             required: false },
+    { key: 'ANTHROPIC_API_KEY', label: 'Anthropic API key', note: 'Optional fallback — console.anthropic.com',          required: false },
+    { key: 'BRAVE_API_KEY',     label: 'Brave Search key',  note: 'Live web search (500/mo) — api.search.brave.com',    required: false },
+    { key: 'GROQ_API_KEY',      label: 'Groq API key',      note: 'Fast inference fallback — console.groq.com',         required: false },
 ];
 
 const collectedKeys = { ...existingKeys };
@@ -324,7 +324,7 @@ ${C.green}${C.bold}  ╔══════════════════�
   ${C.cyan}  Manual   →${C.reset}  SOMA_LOAD_HEAVY=true node --max-old-space-size=4096 launcher_ULTRA.mjs
 
   ${C.bold}Dashboard:${C.reset}  http://localhost:3001
-  ${C.bold}Chat API: ${C.reset}  POST http://localhost:3001/api/chat
+  ${C.bold}Chat API: ${C.reset}  POST http://localhost:3001/api/soma/chat
 
   ${C.dim}Run this wizard again any time to add more persona packs or knowledge seeds.${C.reset}
   ${C.dim}Questions → https://github.com/unimaginative-artist/SOMA${C.reset}
