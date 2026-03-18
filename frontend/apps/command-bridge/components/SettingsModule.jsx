@@ -545,29 +545,80 @@ const EvolutionDomain = ({ isLocked, setIsLocked }) => (
     </div>
 );
 
-const NetworkDomain = () => {
+const NetworkDomain = ({ somaBackend }) => {
     const [nodes, setNodes] = React.useState([]);
     const [isLoading, setIsLoading] = React.useState(true);
+    const [peerInput, setPeerInput] = React.useState('');
+    const [connectStatus, setConnectStatus] = React.useState(null); // null | 'connecting' | 'ok' | 'err'
+
+    const fetchNodes = React.useCallback(async () => {
+        try {
+            const res = await fetch('/api/soma/gmn/nodes');
+            const data = await res.json();
+            if (data.success) setNodes(data.nodes);
+        } catch (err) {
+            console.error("Failed to fetch GMN nodes", err);
+        } finally {
+            setIsLoading(false);
+        }
+    }, []);
 
     React.useEffect(() => {
-        const fetchNodes = async () => {
-            try {
-                const res = await fetch('/api/soma/gmn/nodes');
-                const data = await res.json();
-                if (data.success) setNodes(data.nodes);
-            } catch (err) {
-                console.error("Failed to fetch GMN nodes", err);
-            } finally {
-                setIsLoading(false);
-            }
-        };
         fetchNodes();
         const interval = setInterval(fetchNodes, 10000);
-        return () => clearInterval(interval);
-    }, []);
+
+        // Real-time push: re-fetch immediately when a peer connects or disconnects
+        const handlePeerChanged = () => fetchNodes();
+        somaBackend?.on?.('gmn_peer_changed', handlePeerChanged);
+
+        return () => {
+            clearInterval(interval);
+            somaBackend?.off?.('gmn_peer_changed', handlePeerChanged);
+        };
+    }, [fetchNodes, somaBackend]);
+
+    const handleConnect = async () => {
+        const address = peerInput.trim();
+        if (!address) return;
+        setConnectStatus('connecting');
+        try {
+            const res = await fetch('/api/soma/gmn/connect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ address })
+            });
+            const data = await res.json();
+            setConnectStatus(data.success ? 'ok' : 'err');
+            if (data.success) { setPeerInput(''); setTimeout(() => setConnectStatus(null), 3000); }
+        } catch {
+            setConnectStatus('err');
+        }
+    };
 
     return (
         <div className="space-y-6">
+            <SectionCard title="Connect to Remote Node" description="Manually add a SOMA instance across any network. Requires port 7777 accessible on the remote machine.">
+                <div className="flex items-center space-x-3">
+                    <input
+                        type="text"
+                        value={peerInput}
+                        onChange={e => setPeerInput(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && handleConnect()}
+                        placeholder="e.g. 203.0.113.42:7777"
+                        className="flex-1 bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-sm font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-cyan-500/50"
+                    />
+                    <button
+                        onClick={handleConnect}
+                        disabled={connectStatus === 'connecting' || !peerInput.trim()}
+                        className="px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                        {connectStatus === 'connecting' ? 'Connecting...' : 'Connect'}
+                    </button>
+                </div>
+                {connectStatus === 'ok' && <p className="text-xs text-emerald-400 mt-2">Handshake initiated — peer will appear once verified.</p>}
+                {connectStatus === 'err' && <p className="text-xs text-rose-400 mt-2">Connection failed. Check address and ensure port 7777 is open on the remote machine.</p>}
+            </SectionCard>
+
             <SectionCard title="Graymatter Network Topology" description="Live status of connected Command Bridge nodes across the GMN.">
                 <div className="grid grid-cols-1 gap-4">
                     {isLoading ? (

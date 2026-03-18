@@ -178,6 +178,13 @@ export function setupWebSocket(server, wss, system) {
         broker.on('plan_updated', (payload) => broadcast('plan_updated', payload.payload));
     } catch { /* non-fatal — plan tab will still work via REST poll */ }
 
+    // Forward real GMN peer connect/disconnect events → frontend in real-time
+    try {
+        const broker = require('../../core/MessageBroker.cjs');
+        broker.subscribe('WebSocketLoader.gmn', 'gmn.peer.changed');
+        broker.on('gmn.peer.changed', (envelope) => broadcast('gmn_peer_changed', envelope.payload || envelope));
+    } catch { /* non-fatal — GMN tab will still work via REST poll */ }
+
     // ── Heartbeat: ping all clients every 30s, terminate any that don't pong ──
     // Silently-dead connections (NAT timeout, adapter sleep, background tab) never
     // fire 'close' without this — leaving dead sockets in dashboardClients forever

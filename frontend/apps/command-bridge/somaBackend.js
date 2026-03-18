@@ -238,6 +238,9 @@ class SomaBackend {
       case 'plan:updated': // This event name matches what backend emits
         this.emit('plan_updated', payload); // Emit as 'plan_updated' for existing frontend listeners
         break;
+      case 'gmn_peer_changed':
+        this.emit('gmn_peer_changed', payload);
+        break;
       default:
         console.log('[SomaBackend] Unknown message type:', type);
     }

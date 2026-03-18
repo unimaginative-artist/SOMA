@@ -27,7 +27,7 @@ export async function loadPlugins(systemContext = {}) {
     gmn.initialize().then(() => {
         console.log('      ✅ GMN Connectivity active (512-bit P2P)');
     }).catch(e => console.warn('      ⚠️ GMN init warning:', e.message));
-    plugins.gmn = gmn;
+    plugins.gmnConnectivity = gmn;
 
     // 1. Moltbook (Social Network)
     const moltbookArbiter = new MoltbookArbiter({ 

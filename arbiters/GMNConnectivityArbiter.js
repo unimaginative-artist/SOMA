@@ -16,6 +16,8 @@ import { GMNHandshakeEngine } from '../core/GMNHandshakeEngine.js';
 import { WebSocketServer, WebSocket } from 'ws';
 import crypto from 'node:crypto';
 import dgram from 'node:dgram';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import messageBroker from '../core/MessageBroker.js';
 
 export class GMNConnectivityArbiter extends BaseArbiterV4 {
@@ -41,25 +43,75 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
         this.peers = new Map(); // nodeId -> { socket, address, status, reputation, publicKey }
         this.trustedSynapses = new Set(); // Set of verified nodeIds
         this.seenMessages = new Set(); // Deduplication cache
-        
+
         this.server = null;
         this.reconnectTimer = null;
+        this.peersFile = path.resolve(process.cwd(), 'config', 'gmn-peers.json');
     }
 
     async onInitialize() {
         this.log('info', `Initializing GMN Connectivity on port ${this.port}...`);
-        
+
         // Start Peer Server
         this._startServer();
-        
+
         // Start Auto-Discovery Beacon
         this._startDiscoveryBeacon();
 
         // Section 3: Gossip Protocol Subscription
         messageBroker.subscribe('gmn.publication', (env) => this._gossipWisdom(env));
         messageBroker.subscribe('gmn.gossip', (env) => this._processGossip(env));
-        
+
+        // Reconnect to saved peers (cross-internet manual connections)
+        setTimeout(() => this._reconnectSavedPeers(), 5000);
+
         this.auditLogger.info('GMN Connectivity Arbiter Ready');
+    }
+
+    async _reconnectSavedPeers() {
+        try {
+            const raw = await fs.readFile(this.peersFile, 'utf8');
+            const saved = JSON.parse(raw);
+            if (Array.isArray(saved) && saved.length > 0) {
+                this.log('info', `🔗 Reconnecting to ${saved.length} saved peer(s)...`);
+                for (const address of saved) {
+                    try { this.connectToPeer(address); } catch { /* non-fatal */ }
+                }
+            }
+        } catch { /* file doesn't exist yet — normal on first run */ }
+    }
+
+    async _savePeers(addresses) {
+        try {
+            await fs.mkdir(path.dirname(this.peersFile), { recursive: true });
+            await fs.writeFile(this.peersFile, JSON.stringify(addresses, null, 2));
+        } catch (e) {
+            this.log('warn', `Could not save peers: ${e.message}`);
+        }
+    }
+
+    async addManualPeer(address) {
+        // Connect now
+        this.connectToPeer(address);
+
+        // Persist so it auto-reconnects on next boot
+        let saved = [];
+        try {
+            const raw = await fs.readFile(this.peersFile, 'utf8');
+            saved = JSON.parse(raw);
+        } catch { /* file doesn't exist yet */ }
+        if (!saved.includes(address)) {
+            saved.push(address);
+            await this._savePeers(saved);
+        }
+    }
+
+    async removeManualPeer(address) {
+        try {
+            const raw = await fs.readFile(this.peersFile, 'utf8');
+            const saved = JSON.parse(raw).filter(a => a !== address);
+            await this._savePeers(saved);
+        } catch { /* non-fatal */ }
     }
 
     /**
@@ -284,14 +336,16 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
                 if (verified) {
                     this.log('success', `✅ Node ${nodeId} VERIFIED via 512-bit Arbiter Handshake`);
                     this.trustedSynapses.add(nodeId);
-                    this.peers.set(nodeId, { socket, address, status: 'online', publicKey: nextMsg.publicKey });
-                    
+                    this.peers.set(nodeId, { socket, address, status: 'online', publicKey: nextMsg.publicKey, connectedAt: Date.now() });
+                    this._notifyPeerChanged();
+
                     // Cleanup this listener
                     socket.removeListener('message', responseHandler);
 
                     socket.on('close', () => {
                         this.log('warn', `Node ${nodeId} disconnected.`);
                         this.peers.delete(nodeId);
+                        this._notifyPeerChanged();
                     });
                 } else {
                     this.log('error', `🚨 Verification FAILED for node ${nodeId}. Closing connection.`);
@@ -344,6 +398,22 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
         } catch (e) {
             this.log('error', `Failed to bind UDP Beacon: ${e.message}`);
         }
+    }
+
+    _notifyPeerChanged() {
+        const peerList = [];
+        for (const [id, peer] of this.peers.entries()) {
+            peerList.push({
+                id,
+                address: peer.address,
+                status: peer.status || 'online',
+                connectedAt: peer.connectedAt || null,
+                trusted: this.trustedSynapses.has(id)
+            });
+        }
+        try {
+            messageBroker.publish('gmn.peer.changed', { peers: peerList });
+        } catch { /* non-fatal */ }
     }
 
     async onShutdown() {

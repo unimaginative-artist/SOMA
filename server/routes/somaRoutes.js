@@ -1298,50 +1298,73 @@ ${personaContext}${characterContext}`.trim()
     });
 
     // GET /api/soma/gmn/nodes
-    // List connected Graymatter Network nodes
+    // List real connected Graymatter Network peers (no fake data)
     router.get('/gmn/nodes', async (req, res) => {
         try {
-            const thalamus = system.localThalamus;
+            const gmn = system.gmnConnectivity;
             const nodes = [];
-            
-            // Add local node
-            if (thalamus) {
-                nodes.push({
-                    id: 'local-node',
-                    name: 'Primary Command Bridge',
-                    address: thalamus.nodeAddress || 'localhost',
-                    status: 'online',
-                    latency: '0ms',
-                    reputation: 1.0,
-                    isLocal: true
-                });
 
-                // Add nodes from reputation store
-                if (thalamus.reputationStore) {
-                    for (const [nodeId, data] of thalamus.reputationStore.entries()) {
-                        nodes.push({
-                            id: nodeId,
-                            name: `Node-${nodeId.substring(0, 6)}`,
-                            address: `${nodeId.toLowerCase()}.gmn.somaexample.cd`,
-                            status: 'online',
-                            latency: `${Math.floor(Math.random() * 50) + 10}ms`,
-                            reputation: (data.usefulness + data.consistency) / 2,
-                            isLocal: false
-                        });
-                    }
+            // Always include local node
+            nodes.push({
+                id: system.nodeId || 'local-node',
+                name: system.nodeName || 'Primary Command Bridge',
+                address: gmn?.nodeAddress || 'localhost',
+                status: 'online',
+                latency: '0ms',
+                reputation: 1.0,
+                isLocal: true
+            });
+
+            // Real peers from GMNConnectivityArbiter.peers
+            if (gmn?.peers instanceof Map) {
+                for (const [nodeId, peer] of gmn.peers.entries()) {
+                    nodes.push({
+                        id: nodeId,
+                        name: `Node-${nodeId.substring(0, 8)}`,
+                        address: peer.address || nodeId,
+                        status: peer.status || 'online',
+                        latency: '--',
+                        reputation: peer.reputation ?? 0.9,
+                        isLocal: false,
+                        trusted: gmn.trustedSynapses?.has(nodeId) ?? false
+                    });
                 }
             }
 
-            // Seed with some mock external nodes if store is empty for better UI demo
-            if (nodes.length <= 1) {
-                nodes.push(
-                    { id: 'alpha-node', name: 'Neural-Alpha', address: 'alpha.gmn.somaexample.cd', status: 'online', latency: '42ms', reputation: 0.95, isLocal: false },
-                    { id: 'bear-bridge', name: 'Bear-Bridge-Node', address: 'bear.gmn.somaexample.cd', status: 'standby', latency: '128ms', reputation: 0.82, isLocal: false },
-                    { id: 'imac-core', name: 'iMac-Cortex-01', address: 'imac.gmn.somaexample.cd', status: 'busy', latency: '15ms', reputation: 0.99, isLocal: false }
-                );
-            }
-
             res.json({ success: true, nodes });
+        } catch (error) {
+            res.status(500).json({ success: false, error: error.message });
+        }
+    });
+
+    // POST /api/soma/gmn/connect
+    // Manually connect to a remote SOMA instance (cross-internet)
+    router.post('/gmn/connect', async (req, res) => {
+        try {
+            const { address } = req.body || {};
+            if (!address || typeof address !== 'string') {
+                return res.status(400).json({ success: false, error: 'address required (e.g. "1.2.3.4:7777")' });
+            }
+            const gmn = system.gmnConnectivity;
+            if (!gmn) return res.status(503).json({ success: false, error: 'GMN not initialized' });
+
+            await gmn.addManualPeer(address.trim());
+            res.json({ success: true, message: `Connecting to ${address}...` });
+        } catch (error) {
+            res.status(500).json({ success: false, error: error.message });
+        }
+    });
+
+    // DELETE /api/soma/gmn/peer/:address
+    // Remove a saved peer (won't reconnect on next boot)
+    router.delete('/gmn/peer/:address', async (req, res) => {
+        try {
+            const address = decodeURIComponent(req.params.address);
+            const gmn = system.gmnConnectivity;
+            if (!gmn) return res.status(503).json({ success: false, error: 'GMN not initialized' });
+
+            await gmn.removeManualPeer(address);
+            res.json({ success: true, message: `Removed ${address} from saved peers` });
         } catch (error) {
             res.status(500).json({ success: false, error: error.message });
         }
