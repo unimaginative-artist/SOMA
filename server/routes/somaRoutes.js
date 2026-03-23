@@ -21,6 +21,28 @@ export default function(system) {
     // Helper to get active brain
     const getBrain = () => system.quadBrain || system.somArbiter || system.kevinArbiter || system.brain || system.superintelligence;
 
+    // ── MAX → SOMA file-changed notification ───────────────────
+    // Called by MAX's BuildLoop after it edits a SOMA file.
+    // Logs the event and broadcasts via MessageBroker so arbiters can react.
+    router.post('/api/soma/file-changed', async (req, res) => {
+        try {
+            const { path: filePath, source = 'MAX', ts } = req.body;
+            console.log(`[SOMA] 📡 File changed by ${source}: ${filePath}`);
+            try {
+                const broker = require('../../core/MessageBroker.cjs');
+                broker.publish('repo.file.changed', {
+                    path:     filePath,
+                    filename: filePath?.split(/[\\/]/).pop(),
+                    source,
+                    ts:       ts || Date.now()
+                });
+            } catch { /* broker may not be ready */ }
+            res.json({ received: true, path: filePath });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
     // ── MAX → SOMA modification result callback ────────────────
     router.post('/api/soma/modification-result', async (req, res) => {
         try {
