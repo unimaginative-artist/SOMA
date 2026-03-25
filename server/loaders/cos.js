@@ -53,6 +53,7 @@ export async function loadCOSSystems(system) {
             classification: 'engineering'
         });
         system.engineeringSwarm = engineeringSwarm;
+        if (system.arbiters) system.arbiters.set('engineeringSwarm', engineeringSwarm);
         console.log('      ✅ EngineeringSwarmArbiter online (Verified Transactional Execution)');
 
         // 4. Swarm Optimizer - Hourly performance analysis + self-improvement
@@ -72,6 +73,7 @@ export async function loadCOSSystems(system) {
             classification: 'optimizer'
         });
         system.swarmOptimizer = swarmOptimizer;
+        if (system.arbiters) system.arbiters.set('swarmOptimizer', swarmOptimizer);
         console.log('      ✅ SwarmOptimizer wired (self-improvement loop ACTIVE)');
 
         // 5. Discovery Swarm - Autonomous capability invention
@@ -88,6 +90,7 @@ export async function loadCOSSystems(system) {
             classification: 'discovery'
         });
         system.discoverySwarm = discoverySwarm;
+        if (system.arbiters) system.arbiters.set('discoverySwarm', discoverySwarm);
         console.log('      ✅ DiscoverySwarm online (capability invention scan ACTIVE)');
 
         // 6. Curiosity Reactor (The Wandering Mind)
@@ -96,7 +99,14 @@ export async function loadCOSSystems(system) {
             messageBroker: system.messageBroker,
             logger: console
         });
+        system.messageBroker.registerArbiter('CuriosityReactor', {
+            instance: curiosityReactor,
+            role: 'thinker',
+            lobe: 'limbic',
+            classification: 'curiosity'
+        });
         system.curiosityReactor = curiosityReactor;
+        if (system.arbiters) system.arbiters.set('curiosityReactor', curiosityReactor);
         console.log('      ✅ Curiosity Reactor active (Daydreaming enabled)');
 
         // 7. Register & Start Daemons
@@ -118,12 +128,14 @@ export async function loadCOSSystems(system) {
         }));
 
         // Social: Proactively greet Barry when he's active
-        daemonManager.register(new SocialImpulseDaemon({
+        const socialImpulse = new SocialImpulseDaemon({
             messageBroker: system.messageBroker,
             quadBrain: system.quadBrain,
             vision: system.visionArbiter || system.visionProcessing,
             intervalMs: 300000 // 5 minutes
-        }));
+        });
+        daemonManager.register(socialImpulse);
+        if (system.arbiters) system.arbiters.set('socialImpulse', socialImpulse);
 
         daemonManager.register(new OptimizationDaemon({
             optimizer: swarmOptimizer,

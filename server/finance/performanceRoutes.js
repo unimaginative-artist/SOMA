@@ -24,6 +24,19 @@ router.get('/summary', (req, res) => {
         const stats = tradeLogger.getStats(daysFilter);
         const strategyStats = tradeLogger.getStatsByStrategy();
 
+        // Sharpe/Sortino: calculate when we have enough closed trades
+        let sharpeRatio = null, sortinoRatio = null, maxDrawdownPct = null;
+        if ((stats.totalTrades || 0) >= 5) {
+            try {
+                const closedTrades = tradeLogger.getClosedTrades(daysFilter || 30);
+                const equityCurve = tradeLogger.getEquityCurve(daysFilter || 30);
+                const report = performanceCalculator.calculateReport(closedTrades, equityCurve);
+                sharpeRatio = report.metrics?.sharpeRatio ?? null;
+                sortinoRatio = report.metrics?.sortinoRatio ?? null;
+                maxDrawdownPct = report.metrics?.maxDrawdownPct ?? null;
+            } catch { /* non-fatal */ }
+        }
+
         // Get open trades so the dashboard shows live activity
         const openTrades = tradeLogger.getOpenTrades();
         const openByStrategy = {};
@@ -92,6 +105,9 @@ router.get('/summary', (req, res) => {
                 largest_win: parseFloat((stats.largestWin || 0).toFixed(2)),
                 largest_loss: parseFloat((stats.largestLoss || 0).toFixed(2)),
                 avg_slippage: parseFloat((stats.avgSlippage || 0).toFixed(4)),
+                sharpe_ratio: sharpeRatio,
+                sortino_ratio: sortinoRatio,
+                max_drawdown_pct: maxDrawdownPct,
                 agent_leaderboard: agentLeaderboard
             }
         });

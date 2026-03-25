@@ -222,6 +222,18 @@ async function main() {
         global.__SOMA_SERVER_READY = true;
         cLog('ULTRA', 'SOMA Fully Operational');
 
+        // Start MessageBroker network bridge — lets external agents (MAX, etc.)
+        // register as virtual arbiters and participate in the signal flow
+        try {
+            const { createRequire } = await import('module');
+            const req = createRequire(import.meta.url);
+            const broker = req('./core/MessageBroker.cjs');
+            const bridgePort = parseInt(process.env.SOMA_BRIDGE_PORT || '4201');
+            broker.startNetworkBridge(bridgePort);
+        } catch (e) {
+            cLog('WARN', `Network bridge skipped: ${e.message}`);
+        }
+
     } catch (error) {
         logSync(`[FATAL] main() error: ${error.message}\n${error.stack}`);
         cLog('ERROR', `main() error: ${error.message}`);

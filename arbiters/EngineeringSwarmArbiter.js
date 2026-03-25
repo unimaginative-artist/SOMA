@@ -74,6 +74,7 @@ export class EngineeringSwarmArbiter extends BaseArbiterV4 {
     });
 
     this.quadBrain = opts.quadBrain || null;
+    this.mnemonicArbiter = opts.mnemonicArbiter || null;
     this.rootPath = opts.rootPath || process.cwd();
     this.commandPolicy = new CommandPolicyEngine();
     this.optimizer = opts.swarmOptimizer || null;
@@ -89,16 +90,89 @@ export class EngineeringSwarmArbiter extends BaseArbiterV4 {
 
   async onInitialize() {
     await this.runtime.initialize();
-    this.auditLogger.info('🚀 Engineering Swarm (UPGRADED) Online', { 
+
+    // Register with MessageBroker so goal assignments via sendMessage({to:'EngineeringSwarmArbiter'}) work
+    try {
+      messageBroker.registerArbiter('EngineeringSwarmArbiter', {
+        instance: this,
+        type: 'engineering',
+        role: 'architect',
+        capabilities: ['modify_code', 'self_healing', 'engineering']
+      });
+    } catch (e) {
+      // Already registered or broker unavailable — non-fatal
+    }
+
+    this.auditLogger.info('🚀 Engineering Swarm (UPGRADED) Online', {
       mode: 'Verified Transactional Execution'
     });
+  }
+
+  /**
+   * Handle direct messages from MessageBroker (sendMessage({to:'EngineeringSwarmArbiter'})).
+   * Primary use: goal_assigned from GoalPlannerArbiter.
+   */
+  async handleMessage(envelope = {}) {
+    const { type, payload } = envelope;
+
+    if (type !== 'goal_assigned') {
+      return { success: true, message: 'acknowledged' };
+    }
+
+    const { goalId, goal } = payload || {};
+    if (!goalId || !goal) return { success: false, error: 'Invalid goal_assigned payload' };
+
+    this.auditLogger.info(`[EngSwarm] ⚡ Goal assigned: "${goal.title}" (${goalId.slice(0, 8)})`);
+
+    // Extract the first recognisable file path from the description
+    const fileMatch = (goal.description || '').match(/[\w./\\-]+\.(js|cjs|mjs|ts|jsx|tsx|json|py)/i);
+    if (!fileMatch) {
+      // Non-code goal — update progress to show it was acknowledged
+      this.auditLogger.warn(`[EngSwarm] Goal "${goal.title}" has no file target — cannot execute via modifyCode`);
+      messageBroker.sendMessage({
+        from: 'EngineeringSwarmArbiter', to: 'GoalPlannerArbiter',
+        type: 'update_goal_progress',
+        payload: { goalId, progress: 5, metadata: { note: 'Accepted by swarm but no file target' } }
+      }).catch(() => {});
+      return { success: true, message: 'Goal acknowledged, no file target' };
+    }
+
+    const filepath = fileMatch[0];
+
+    // Run modifyCode in the background — do NOT block handleMessage
+    (async () => {
+      try {
+        const result = await this.modifyCode(filepath, `${goal.title}: ${goal.description}`);
+        if (result?.success) {
+          messageBroker.sendMessage({
+            from: 'EngineeringSwarmArbiter', to: 'GoalPlannerArbiter',
+            type: 'update_goal_progress',
+            payload: { goalId, progress: 100, metadata: { sessionId: result.sessionId, duration: result.duration } }
+          }).catch(() => {});
+          this.auditLogger.info(`[EngSwarm] ✅ Goal "${goal.title}" completed (${result.duration}s)`);
+        } else {
+          messageBroker.sendMessage({
+            from: 'EngineeringSwarmArbiter', to: 'GoalPlannerArbiter',
+            type: 'cancel_goal',
+            payload: { goalId, reason: `EngineeringSwarm failed: ${result?.error || 'unknown'}` }
+          }).catch(() => {});
+          this.auditLogger.warn(`[EngSwarm] ❌ Goal "${goal.title}" failed: ${result?.error}`);
+        }
+      } catch (err) {
+        this.auditLogger.error(`[EngSwarm] Goal execution exception: ${err.message}`);
+      }
+    })();
+
+    return { success: true, message: 'goal execution started', filepath };
   }
 
   /**
    * Main Entry Point for Autonomous Engineering
    * Orchestrates the research, plan, debate, and synthesis cycle.
    */
-  async modifyCode(filepath, request) {
+  async modifyCode(filepath, request, onProgress = null) {
+    const emit = (phase, message) => { if (onProgress) onProgress(phase, message); };
+
     this.auditLogger.info(`⚡ [EngSwarm] Engineering loop started for ${filepath}`);
     const sessionStartTime = Date.now();
     const sessionId = `swarm_${crypto.randomBytes(4).toString('hex')}`;
@@ -120,32 +194,39 @@ export class EngineeringSwarmArbiter extends BaseArbiterV4 {
     while (swarmState.attempts < swarmState.maxAttempts) {
         swarmState.attempts++;
         this.auditLogger.info(`[Swarm] Phase Loop: Attempt ${swarmState.attempts}/${swarmState.maxAttempts}`);
+        emit('attempt', `Attempt ${swarmState.attempts}/${swarmState.maxAttempts}`);
 
         try {
             // 1. RESEARCH - Understand the context
+            emit('research', `Reading ${filepath} and understanding context...`);
             const research = await this.runResearch(filepath, swarmState.northStar);
             blackboard.post('insights', { type: 'research_complete', filepath, size: research.content.length });
-            
+
             // 2. PLAN - Generate verification commands (With Cybernetic context)
+            emit('plan', 'Generating verification plan...');
             const plan = await this.generatePlan(swarmState, research);
             blackboard.post('codeTargets', { type: 'verification_plan', commands: plan.map(p => p.command) });
 
             // 3. DEBATE - Technical adversarial reasoning (With North Star)
+            emit('debate', 'Running adversarial technical debate...');
             const debate = await this.runDebate(swarmState, research);
             blackboard.post('insights', { type: 'debate_consensus', content: debate.consensus });
-            
+
             // 4. SYNTHESIS - Drafting the final code patch
+            emit('synthesis', 'Synthesizing final patch...');
             const verdict = await this.runSynthesis(swarmState, research, debate);
             blackboard.post('codeTargets', { type: 'final_patch', files: verdict.patch.files.map(f => f.path) });
-            
+
             // 5. TRANSACTION - Multi-file safety layer
             const transaction = new SwarmPatchTransaction(this.rootPath);
 
             try {
+                emit('apply', `Applying patch to ${verdict.patch.files.length} file(s)...`);
                 this.auditLogger.info(`[Swarm] Applying patch transaction...`);
                 await transaction.applyPatch(verdict.patch);
 
                 // 6. VERIFICATION (Real-world Plan Monitor)
+                emit('verify', 'Running verification commands...');
                 const verification = await this.verifyPatch(verdict.patch, plan);
 
                 if (!verification.passed) {
@@ -159,7 +240,7 @@ export class EngineeringSwarmArbiter extends BaseArbiterV4 {
 
                 const duration = ((Date.now() - sessionStartTime) / 1000).toFixed(1);
                 const experienceData = { sessionId, filepath, request, success: true, duration, consensus: debate.consensus };
-                
+
                 if (this.optimizer) this.optimizer.record(experienceData);
                 await this._logToExperienceLedger(experienceData);
 
@@ -167,10 +248,11 @@ export class EngineeringSwarmArbiter extends BaseArbiterV4 {
 
             } catch (transErr) {
                 this.auditLogger.warn(`[Swarm] 🔄 CYBERNETIC PIVOT: Verification failed on attempt ${swarmState.attempts}. Rolling back and retrying with error context.`);
+                emit('pivot', `Attempt ${swarmState.attempts} failed — rolling back and retrying: ${transErr.message}`);
                 await transaction.rollback();
                 swarmState.lastError = transErr.message;
                 blackboard.post('risks', { type: 'attempt_failed', attempt: swarmState.attempts, error: transErr.message });
-                
+
                 if (swarmState.attempts >= swarmState.maxAttempts) {
                     throw transErr; // Out of attempts
                 }
@@ -180,7 +262,7 @@ export class EngineeringSwarmArbiter extends BaseArbiterV4 {
         } catch (err) {
             const duration = ((Date.now() - sessionStartTime) / 1000).toFixed(1);
             const errorData = { sessionId, filepath, request, success: false, error: err.message, duration };
-            
+
             if (this.optimizer) this.optimizer.record(errorData);
             blackboard.post('insights', { type: 'task_aborted', error: err.message });
             this.auditLogger.error(`[Swarm] ❌ ENGINEERING ABORTED after ${swarmState.attempts} attempts: ${err.message}`);
@@ -322,9 +404,10 @@ export class EngineeringSwarmArbiter extends BaseArbiterV4 {
     if (messageBroker && typeof messageBroker.publish === 'function') {
         await messageBroker.publish('swarm.experience', data);
     }
-    if (this.quadBrain && this.quadBrain.mnemonic) {
-        await this.quadBrain.mnemonic.remember(
-            `Engineering Swarm: ${data.request} on ${data.filepath}. Result: ${data.success}`,
+    const mnemonic = this.mnemonicArbiter || this.quadBrain?.mnemonic;
+    if (mnemonic && typeof mnemonic.remember === 'function') {
+        await mnemonic.remember(
+            `Engineering Swarm: ${data.request} on ${data.filepath}. Result: ${data.success ? 'success' : 'failure'}`,
             { type: 'swarm_experience', ...data }
         );
     }

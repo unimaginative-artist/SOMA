@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import somaBackend from '../../somaBackend.js';
 // import { GoogleGenAI, Type } from "@google/genai"; // Removed for browser compatibility
 import { ControlBar } from './components/ControlBar.jsx';
 import { ThreeBrains } from './components/ThreeBrains.jsx';
@@ -191,75 +192,6 @@ const KnowledgeApp = ({ brainStats }) => {
             });
     }, [personas, personaSearch]);
 
-    // WebSocket connection for real-time events
-    useEffect(() => {
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws`);
-
-        ws.onopen = () => {
-            console.log('[KnowledgeApp] WebSocket connected');
-        };
-
-        ws.onmessage = (event) => {
-            try {
-                const message = JSON.parse(event.data);
-
-                // Handle metrics (Brain Stats)
-                if (message.type === 'metrics' && message.payload.brainStats) {
-                    setRealBrainStats(message.payload.brainStats);
-                }
-
-                // Handle Society of Mind debate
-                if (message.type === 'cognitive:debate') {
-                    setDebateLogs(prev => [message.payload, ...prev].slice(0, 20));
-                    addLog("Internal Debate Concluded", BrainType.PROMETHEUS, 0.2);
-                }
-
-                // Handle learning activity events
-                if (message.type === 'learning:brain_activity') {
-                    const { brain, action, timestamp } = message.payload;
-                    addLearningActivity(brain, action);
-                }
-
-                // Handle node creation events
-                if (message.type === 'learning:node_created') {
-                    const node = message.payload.node;
-                    // Add new fragment with animation
-                    setFragments(prev => [...prev, {
-                        id: node.id || `node-${Date.now()}`,
-                        label: node.label || node.name || 'New Knowledge',
-                        type: node.type || 'concept',
-                        domain: node.domain || BrainType.AURORA,
-                        importance: node.importance || 5,
-                        usage: 1,
-                        confidence: node.confidence || 0.8,
-                        decay: 0.05,
-                        z: Math.random() * 400 - 200,
-                        isNew: true // Mark as new for animation
-                    }]);
-
-                    // Flash effect in log
-                    addLog(`New knowledge acquired: ${node.label || node.name}`, BrainType.AURORA, 0.1);
-                }
-
-            } catch (error) {
-                console.error('[KnowledgeApp] WebSocket message error:', error);
-            }
-        };
-
-        ws.onerror = (error) => {
-            console.error('[KnowledgeApp] WebSocket error:', error);
-        };
-
-        ws.onclose = () => {
-            console.log('[KnowledgeApp] WebSocket disconnected');
-        };
-
-        return () => {
-            ws.close();
-        };
-    }, []);
-
     const addLog = useCallback((text, brain, confidence = 0) => {
         setExternalLog({
             id: Math.random().toString(36).substr(2, 9),
@@ -293,6 +225,43 @@ const KnowledgeApp = ({ brainStats }) => {
         };
         setLearningActivities(prev => [...prev, activity]);
     }, []);
+
+    // Real-time events via shared somaBackend WebSocket (no second connection needed)
+    useEffect(() => {
+        const handleDebate = (payload) => {
+            setDebateLogs(prev => [payload, ...prev].slice(0, 20));
+            addLog('Internal Debate Concluded', BrainType.PROMETHEUS, 0.2);
+        };
+        const handleBrainActivity = (payload) => {
+            const { brain, action } = payload || {};
+            if (brain && action) addLearningActivity(brain, action);
+        };
+        const handleNodeCreated = (payload) => {
+            const node = payload?.node;
+            if (!node) return;
+            setFragments(prev => [...prev, {
+                id: node.id || `node-${Date.now()}`,
+                label: node.label || node.name || 'New Knowledge',
+                type: node.type || 'concept',
+                domain: node.domain || BrainType.AURORA,
+                importance: node.importance || 5,
+                usage: 1,
+                confidence: node.confidence || 0.8,
+                decay: 0.05,
+                z: Math.random() * 400 - 200,
+                isNew: true
+            }]);
+            addLog(`New knowledge acquired: ${node.label || node.name}`, BrainType.AURORA, 0.1);
+        };
+        somaBackend.on('cognitive:debate', handleDebate);
+        somaBackend.on('learning:brain_activity', handleBrainActivity);
+        somaBackend.on('learning:node_created', handleNodeCreated);
+        return () => {
+            somaBackend.off('cognitive:debate', handleDebate);
+            somaBackend.off('learning:brain_activity', handleBrainActivity);
+            somaBackend.off('learning:node_created', handleNodeCreated);
+        };
+    }, [addLog, addLearningActivity]);
 
     const handleLearnRequest = async (request) => {
         const { query, mode } = request;

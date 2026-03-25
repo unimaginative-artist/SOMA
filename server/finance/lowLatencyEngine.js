@@ -12,6 +12,7 @@
 
 import alpacaService from './AlpacaService.js';
 import { EventEmitter } from 'events';
+import messageBroker from '../../core/MessageBroker.cjs';
 
 class LowLatencyTradingEngine extends EventEmitter {
     constructor() {
@@ -231,6 +232,21 @@ class LowLatencyTradingEngine extends EventEmitter {
         // Update in-memory order book
         this.orderBook.set(tick.symbol, tick);
 
+        // Broadcast price tick to frontend dashboard (throttled: max 4/s per symbol)
+        try {
+            const now = Date.now();
+            if (!this._lastBroadcast) this._lastBroadcast = {};
+            if (now - (this._lastBroadcast[tick.symbol] || 0) >= 250) {
+                this._lastBroadcast[tick.symbol] = now;
+                messageBroker.emit('market.price_tick', {
+                    symbol: this.normalizeSymbol(tick.symbol),
+                    price: tick.price,
+                    volume: tick.size || 0,
+                    timestamp: tick.timestamp || now
+                });
+            }
+        } catch { /* non-fatal */ }
+
         // Emit tick event for AI decision making (async, non-blocking)
         setImmediate(() => {
             this.emit('tick', {
@@ -239,6 +255,18 @@ class LowLatencyTradingEngine extends EventEmitter {
                 processingTime: Number(process.hrtime.bigint() - processingStart) / 1000 // microseconds
             });
         });
+    }
+
+    /** Normalize exchange symbol formats to dashboard format (BTC-USD) */
+    normalizeSymbol(symbol) {
+        if (!symbol) return symbol;
+        if (symbol.includes('/')) return symbol.replace('/', '-');
+        const map = {
+            BTCUSDT: 'BTC-USD', ETHUSDT: 'ETH-USD', SOLUSDT: 'SOL-USD',
+            BNBUSDT: 'BNB-USD', ADAUSDT: 'ADA-USD', DOGEUSDT: 'DOGE-USD',
+            XRPUSDT: 'XRP-USD', AVAXUSDT: 'AVAX-USD', DOTUSDT: 'DOT-USD'
+        };
+        return map[symbol] || symbol;
     }
 
     /**

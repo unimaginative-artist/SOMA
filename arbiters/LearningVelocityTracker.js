@@ -162,19 +162,23 @@ export class LearningVelocityTracker extends BaseArbiterV4 {
     this.log('info', `[${this.name}] Connecting to Phase 1 agents...`);
 
     try {
-      await messageBroker.sendMessage({
-        from: this.name,
-        to: 'BlackAgent',
-        type: 'status_check',
-        payload: {}
-      });
+      if (messageBroker.getArbiter('BlackAgent')) {
+        await messageBroker.sendMessage({
+          from: this.name,
+          to: 'BlackAgent',
+          type: 'status_check',
+          payload: {}
+        });
+      }
 
-      await messageBroker.sendMessage({
-        from: this.name,
-        to: 'KuzeAgent',
-        type: 'status_check',
-        payload: {}
-      });
+      if (messageBroker.getArbiter('KuzeAgent')) {
+        await messageBroker.sendMessage({
+          from: this.name,
+          to: 'KuzeAgent',
+          type: 'status_check',
+          payload: {}
+        });
+      }
 
       this.log('info', `[${this.name}] Agent coordination established`);
     } catch (err) {
@@ -467,12 +471,14 @@ export class LearningVelocityTracker extends BaseArbiterV4 {
 
   async checkResourceConstraints() {
     try {
-      await messageBroker.sendMessage({
-        from: this.name,
-        to: 'BlackAgent',
-        type: 'get-metrics',
-        payload: {}
-      });
+      if (messageBroker.getArbiter('BlackAgent')) {
+        await messageBroker.sendMessage({
+          from: this.name,
+          to: 'BlackAgent',
+          type: 'get-metrics',
+          payload: {}
+        });
+      }
 
       let cpuLoad = 0;
       if (os.platform() === 'win32') {

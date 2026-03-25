@@ -99,7 +99,7 @@ export class SomaBootstrapV2 {
 
             // PHASE 6: API Routes
             try {
-                loadRoutes(app, this.system);
+                await loadRoutes(app, this.system);
             } catch (routeError) {
                 console.error('[SOMA V2] ⚠️ Route loading error (non-fatal):', routeError.message);
                 console.error('[SOMA V2] Core health/status endpoints still active');

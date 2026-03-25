@@ -1113,7 +1113,8 @@ class AutonomousTrader {
                 confidence: this._lastSignal.confidence,
                 recommendation: this._lastSignal.recommendation,
                 timestamp: this._lastSignal.timestamp
-            } : null
+            } : null,
+            guardrailsState: this.guardrails?.getStatus() || null
         };
     }
 

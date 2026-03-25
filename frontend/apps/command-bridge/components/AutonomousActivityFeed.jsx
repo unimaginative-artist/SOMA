@@ -38,8 +38,9 @@ const AutonomousActivityFeed = ({ isConnected }) => {
   useEffect(() => {
     if (!isConnected) return;
     fetchFeed();
-    const t = setInterval(fetchFeed, 5000);
-    return () => clearInterval(t);
+    let interval;
+    const t = setTimeout(() => { interval = setInterval(fetchFeed, 15000); }, Math.random() * 5000);
+    return () => { clearTimeout(t); clearInterval(interval); };
   }, [isConnected, fetchFeed]);
 
   return (

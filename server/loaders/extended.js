@@ -27,6 +27,7 @@ import CapabilityRegistry from '../../core/CapabilityRegistry.js';
 const HybridSearchArbiter = require('../../arbiters/HybridSearchArbiter.cjs');
 const TimekeeperArbiter = require('../../arbiters/TimekeeperArbiter.cjs');
 const GoalPlannerArbiter = require('../../arbiters/GoalPlannerArbiter.cjs');
+const DriveArbiter = require('../../arbiters/DriveArbiter.cjs');
 const SelfModificationArbiter = require('../../arbiters/SelfModificationArbiter.cjs');
 
 // Phase 1-3: User identity + Soul
@@ -115,6 +116,30 @@ import { ReportingArbiter } from '../../arbiters/ReportingArbiter.js';
 import { ComputerControlArbiter } from '../../arbiters/ComputerControlArbiter.js';
 import { VisionProcessingArbiter } from '../../arbiters/VisionProcessingArbiter.js';
 import { VirtualShell } from '../../arbiters/VirtualShell.js';
+
+// ──────────────────────────────────────────
+// ENGINEERING SWARM: Self-modification + Optimization
+// ──────────────────────────────────────────
+import { EngineeringSwarmArbiter } from '../../arbiters/EngineeringSwarmArbiter.js';
+import { SwarmOptimizer } from '../../arbiters/SwarmOptimizer.js';
+import { DiscoverySwarm } from '../../arbiters/DiscoverySwarm.js';
+import { ProactiveCouncilArbiter } from '../../arbiters/ProactiveCouncilArbiter.js';
+
+// ──────────────────────────────────────────
+// PHASE H3: ASI Intelligence Loop + Arbiter Inventory
+// ──────────────────────────────────────────
+import { ArbiterLoader } from '../../core/ArbiterLoader.js';
+
+// ──────────────────────────────────────────
+// (original H3 label kept below for clarity)
+// PHASE H3: ASI Intelligence Loop
+// Measure → Identify bottleneck → Transfer cross-domain wins → Generate goal → Verify
+// ──────────────────────────────────────────
+import { CapabilityBenchmark } from '../../core/CapabilityBenchmark.js';
+import { LongHorizonPlanner } from '../../core/LongHorizonPlanner.js';
+import { TransferSynthesizer } from '../../core/TransferSynthesizer.js';
+import { ConstitutionalCore } from '../../core/ConstitutionalCore.js';
+import { ASIKernel } from '../../core/ASIKernel.js';
 
 // ──────────────────────────────────────────
 // SECURITY COMMAND: Kevin + IdolSenturian
@@ -704,6 +729,14 @@ export async function loadExtendedSystems(system) {
             })
         );
     }
+
+    // ── DriveArbiter: intrinsic motivation — tension/satisfaction loop ────
+    ext.drive = await safeLoad('DriveArbiter', async () => {
+        const drive = new DriveArbiter({ name: 'DriveArbiter' });
+        await drive.initialize();
+        return drive;
+    });
+    if (ext.drive) system.drive = ext.drive;  // expose to systemState + routes
 
     // ── SelfModificationArbiter: 4x verification pipeline + MAX forwarding ──
     ext.selfModification = await safeLoad('SelfModificationArbiter', async () => {
@@ -1451,7 +1484,7 @@ export async function loadExtendedSystems(system) {
 
     // ── EngineeringSwarmArbiter: SOMA's hands for code self-modification ──
     ext.engineeringSwarm = await safeLoad('EngineeringSwarmArbiter', () =>
-        new EngineeringSwarmArbiter({ name: 'EngineeringSwarm', quadBrain: system.quadBrain, rootPath })
+        new EngineeringSwarmArbiter({ name: 'EngineeringSwarm', quadBrain: system.quadBrain, rootPath, mnemonicArbiter: system.mnemonicArbiter })
     );
     if (ext.engineeringSwarm) system.engineeringSwarm = ext.engineeringSwarm;
 
@@ -1523,7 +1556,7 @@ export async function loadExtendedSystems(system) {
 
     // ── Kevin: Security Chief ──
     ext.kevinArbiter = await safeLoad('KevinArbiter', () =>
-        new KevinArbiter({ name: 'KevinArbiter', messageBroker: system.messageBroker })
+        new KevinArbiter({ name: 'KevinArbiter', messageBroker: system.messageBroker }), { timeoutMs: 30000 }
     );
     if (ext.kevinArbiter) {
         system.kevinArbiter = ext.kevinArbiter;
@@ -1547,6 +1580,125 @@ export async function loadExtendedSystems(system) {
         new ThalamusArbiter({ name: 'LocalThalamus', beliefSystem: system.beliefSystem || system.worldModel || null })
     );
     if (ext.thalamusArbiter) system.thalamusArbiter = ext.thalamusArbiter;
+
+    // ── MAX Agent Bridge: Dispatch engineering goals to MAX autonomously ──
+    try {
+        const broker = require('../../core/MessageBroker.cjs');
+        const maxBridgeMod = await import('../../core/MaxAgentBridge.js');
+        const maxBridge = maxBridgeMod.default;
+        system.maxBridge = maxBridge;
+
+        const ENGINEERING_KEYWORDS = ['implement', 'build', 'create', 'add', 'develop', 'wire',
+            'migrate', 'refactor', 'fix', 'upgrade', 'integrate', 'enable', 'deploy'];
+        const SKIP_CATEGORIES = ['learning'];
+        const dispatchedToMax = new Set();
+
+        broker.subscribe('MaxAgentBridge.dispatch', 'goal_created');
+        broker.on('goal_created', async (envelope) => {
+            const goal = envelope?.payload?.goal || envelope?.goal;
+            if (!goal || !goal.id) return;
+            if (dispatchedToMax.has(goal.id)) return;
+            if (goal.status === 'proposed') return; // Needs human approval first
+            if (SKIP_CATEGORIES.includes(goal.category)) return;
+
+            const titleLower = (goal.title || '').toLowerCase();
+            const isEngineeringGoal = goal.category === 'engineering' ||
+                ENGINEERING_KEYWORDS.some(kw => titleLower.includes(kw));
+            if (!isEngineeringGoal) return;
+
+            dispatchedToMax.add(goal.id);
+            try {
+                await maxBridge.injectGoal(goal.title, {
+                    description: goal.description || goal.title,
+                    priority: Math.min(1, (goal.priority || 50) / 100),
+                });
+                console.log(`    🤝 [MAX] Goal dispatched: "${goal.title}"`);
+            } catch (e) {
+                console.warn(`    ⚠️ MAX offline — goal queued locally: ${e.message}`);
+                dispatchedToMax.delete(goal.id);
+            }
+        });
+        console.log('    🤝 MAX Agent Bridge: goal_created → MAX GoalEngine (engineering goals auto-dispatch)');
+    } catch (e) {
+        console.warn(`    ⚠️ MAX Agent Bridge wiring skipped: ${e.message}`);
+    }
+
+    // ── ProactiveCouncilArbiter: Executive function — "What should SOMA do next?" ──
+    ext.proactiveCouncil = await safeLoad('ProactiveCouncilArbiter', () =>
+        new ProactiveCouncilArbiter({
+            name:               'ProactiveCouncil',
+            quadBrain:          system.quadBrain,
+            goalPlanner:        ext.goalPlanner || system.goalPlanner,
+            engineeringSwarm:   ext.engineeringSwarm,
+            kevinArbiter:       ext.kevinArbiter,
+            mnemonicArbiter:    system.mnemonicArbiter,
+            autonomousHeartbeat: ext.autonomousHeartbeat,
+            steveArbiter:       system.steveArbiter || system.executiveCortex,
+            system,             // for ArbiterLoader fallback delegation
+        })
+    );
+    if (ext.proactiveCouncil) {
+        system.proactiveCouncil = ext.proactiveCouncil;
+        await ext.proactiveCouncil.initialize();
+        console.log('    🏛️  ProactiveCouncilArbiter ← QuadBrain, GoalPlanner, EngineeringSwarm, Kevin, AutonomousHeartbeat');
+    }
+
+    // ── ArbiterLoader: on-demand loading of the ~94 unbooted arbiters ──────
+    // Scans arbiters/ dir, builds capability manifest, enables lazy loading.
+    // ProactiveCouncilArbiter uses this as fallback when a delegate isn't live.
+    try {
+        ext.arbiterLoader = new ArbiterLoader({
+            system,
+            messageBroker: system.messageBroker,
+        });
+        await ext.arbiterLoader.initialize();
+        system.arbiterLoader = ext.arbiterLoader;
+        console.log('    📚 ArbiterLoader ONLINE — arbiter inventory mapped, lazy loading enabled');
+    } catch (e) {
+        console.warn(`    ⚠️ ArbiterLoader skipped: ${e.message}`);
+    }
+
+    // ── ASI Intelligence Loop: the recursive self-improvement cycle ────────
+    // ConstitutionalCore → CapabilityBenchmark → LongHorizonPlanner → TransferSynthesizer → ASIKernel
+    // All routes at /api/asi/* were already written — they just needed system objects.
+    try {
+        // 1. Safety gate — must load first, hardcoded principles cannot be overwritten
+        ext.constitutional = new ConstitutionalCore();
+        await ext.constitutional.initialize();
+        system.constitutional = ext.constitutional;
+
+        // 2. Measurement — 6 capability dimensions, no LLM calls for probes
+        ext.benchmark = new CapabilityBenchmark({ system });
+        await ext.benchmark.initialize();
+        system.benchmark = ext.benchmark;
+
+        // 3. Vision — week/month level milestone tracking
+        ext.longHorizon = new LongHorizonPlanner({ system, brain: system.quadBrain });
+        await ext.longHorizon.initialize();
+        system.longHorizon = ext.longHorizon;
+
+        // 4. Cross-domain transfer — learnings from trading flow into coding, etc.
+        ext.transfer = new TransferSynthesizer({ system, brain: system.quadBrain });
+        await ext.transfer.initialize();
+        system.transfer = ext.transfer;
+
+        // 5. ASI Kernel — orchestrates the full MEASURE→IDENTIFY→TRANSFER→GOAL→VERIFY loop
+        ext.asiKernel = new ASIKernel({ system });
+        await ext.asiKernel.initialize();
+        system.asiKernel = ext.asiKernel;
+
+        // First cycle after 10 min (let everything settle), then every 2 hours
+        setTimeout(() => {
+            ext.asiKernel.runCycle().catch(err => console.warn('[ASIKernel] First cycle error:', err.message));
+            setInterval(() => {
+                ext.asiKernel.runCycle().catch(err => console.warn('[ASIKernel] Cycle error:', err.message));
+            }, 2 * 60 * 60 * 1000); // 2 hours
+        }, 10 * 60 * 1000); // 10 min after boot
+
+        console.log('    🧠 ASI Intelligence Loop ONLINE ← Constitutional, Benchmark, LongHorizon, Transfer → first cycle in 10min');
+    } catch (e) {
+        console.warn(`    ⚠️ ASI Intelligence Loop skipped: ${e.message}`);
+    }
 
     // Count what loaded
     const loaded = Object.values(ext).filter(v => v !== null).length;

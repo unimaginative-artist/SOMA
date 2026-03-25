@@ -38,8 +38,9 @@ const NeuralDissonanceMonitor = ({ isConnected }) => {
     };
 
     fetchDissonanceData();
-    const interval = setInterval(fetchDissonanceData, 3000);
-    return () => clearInterval(interval);
+    let interval;
+    const t = setTimeout(() => { interval = setInterval(fetchDissonanceData, 20000); }, Math.random() * 7000);
+    return () => { clearTimeout(t); clearInterval(interval); };
   }, [isConnected]);
 
   return (

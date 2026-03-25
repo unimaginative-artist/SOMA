@@ -46,6 +46,9 @@ export const useMarketEngine = (riskMetrics, isDemoMode, tickers, selectedSymbol
     // Real telemetry from scalping engine
     const [telemetry, setTelemetry] = useState({ latency: 0, tradesPerSecond: 0, avgFill: 0 });
 
+    // Top-5 bid/ask levels from the live orderbook (used for depth bar rendering)
+    const [obLevels, setObLevels] = useState({ bids: [], asks: [] });
+
     // Single consolidated poll — all three fetches run sequentially in one loop.
     // An in-flight ref prevents overlapping polls if the backend is slow.
     // Consecutive failures back off exponentially (5s → 10s → 20s → max 30s).
@@ -106,6 +109,10 @@ export const useMarketEngine = (riskMetrics, isDemoMode, tickers, selectedSymbol
                         const askDepth = asks?.reduce((sum, a) => sum + (a.qty * a.price), 0) || 0;
                         const buyVol = bids?.slice(0, 5).reduce((sum, b) => sum + b.qty, 0) || 0;
                         const sellVol = asks?.slice(0, 5).reduce((sum, a) => sum + a.qty, 0) || 0;
+                        // Store top-5 levels for depth bar rendering (no more Math.random)
+                        if (bids?.length && asks?.length) {
+                            setObLevels({ bids: bids.slice(0, 5), asks: asks.slice(0, 5) });
+                        }
                         setEngineData(prev => ({
                             ...prev,
                             bidDepth: bidDepth || prev.bidDepth,
@@ -193,7 +200,7 @@ export const useMarketEngine = (riskMetrics, isDemoMode, tickers, selectedSymbol
     const pnlPercent = riskMetrics ? (pnl / riskMetrics.initialBalance) * 100 : 0;
     const isProfit = pnl >= 0;
 
-    return { engineData, obMetrics, stormMetrics, pnl, pnlPercent, isProfit, realPnL, telemetry };
+    return { engineData, obMetrics, stormMetrics, pnl, pnlPercent, isProfit, realPnL, telemetry, obLevels };
 };
 
 
@@ -275,7 +282,33 @@ export const MarketMonitor = ({ engine }) => {
 
 // RIGHT BOTTOM COMPONENT: Liquidity + Map + Telemetry (Mascots moved to header)
 export const MarketDeepScan = ({ engine, tickers, onSelect, selectedSymbol, marketSentiment }) => {
-    const { engineData, obMetrics } = engine;
+    const { engineData, obMetrics, obLevels } = engine;
+
+    // Derive stable depth bar heights from real bid/ask levels.
+    // If live orderbook data is available, normalise to the top bid's notional value.
+    // Otherwise fall back to imbalance-derived heights (still deterministic — no Math.random).
+    const bidBarHeights = useMemo(() => {
+        if (obLevels?.bids?.length >= 5) {
+            const maxNotional = obLevels.bids[0].qty * obLevels.bids[0].price || 1;
+            return obLevels.bids.slice(0, 5).map(b =>
+                Math.max(12, Math.min(80, (b.qty * b.price / maxNotional) * 75))
+            );
+        }
+        // Stable fallback derived from imbalance (no Math.random)
+        const base = 40 + Math.min(35, obMetrics.imbalance * 35);
+        return [base, base * 0.82, base * 0.65, base * 0.50, base * 0.38];
+    }, [obLevels?.bids, obMetrics.imbalance]);
+
+    const askBarHeights = useMemo(() => {
+        if (obLevels?.asks?.length >= 5) {
+            const maxNotional = obLevels.asks[0].qty * obLevels.asks[0].price || 1;
+            return obLevels.asks.slice(0, 5).map(a =>
+                Math.max(12, Math.min(80, (a.qty * a.price / maxNotional) * 75))
+            );
+        }
+        const base = 40 - Math.min(35, obMetrics.imbalance * 35);
+        return [base, base * 0.82, base * 0.65, base * 0.50, base * 0.38];
+    }, [obLevels?.asks, obMetrics.imbalance]);
     const [radarAngle, setRadarAngle] = useState(0);
 
     useEffect(() => {
@@ -333,14 +366,14 @@ export const MarketDeepScan = ({ engine, tickers, onSelect, selectedSymbol, mark
 
                 <div className="flex-1 flex items-end justify-center gap-0.5 relative opacity-80 min-h-[30px] border-t border-white/5 pt-1 mt-1">
                     <div className="flex-1 h-full flex items-end justify-end px-1 gap-0.5">
-                        {[...Array(5)].map((_, i) => (
-                            <div key={i} className="w-1.5 bg-soma-success/60 hover:bg-soma-success transition-all rounded-t-sm" style={{ height: `${40 + Math.random() * 40}%` }}></div>
+                        {bidBarHeights.map((h, i) => (
+                            <div key={i} className="w-1.5 bg-soma-success/60 hover:bg-soma-success transition-all duration-500 rounded-t-sm" style={{ height: `${h}%` }}></div>
                         ))}
                     </div>
                     <div className="w-[1px] h-full bg-slate-700"></div>
                     <div className="flex-1 h-full flex items-end justify-start px-1 gap-0.5">
-                        {[...Array(5)].map((_, i) => (
-                            <div key={i} className="w-1.5 bg-soma-danger/60 hover:bg-soma-danger transition-all rounded-t-sm" style={{ height: `${40 + Math.random() * 40}%` }}></div>
+                        {askBarHeights.map((h, i) => (
+                            <div key={i} className="w-1.5 bg-soma-danger/60 hover:bg-soma-danger transition-all duration-500 rounded-t-sm" style={{ height: `${h}%` }}></div>
                         ))}
                     </div>
                 </div>

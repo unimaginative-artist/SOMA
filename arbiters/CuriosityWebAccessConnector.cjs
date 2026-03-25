@@ -157,7 +157,7 @@ class CuriosityWebAccessConnector extends BaseArbiter {
       try {
         const scrapedData = await this.webScraper.scrapeURL(url, {
           extractors: { mainContent: 'article, main, .content' },
-          timeout: 5000
+          timeout: 20000
         });
 
         if (scrapedData.success) {
@@ -288,7 +288,7 @@ class CuriosityWebAccessConnector extends BaseArbiter {
 
     for (const url of tryUrls) {
       try {
-        const scrapedData = await this.webScraper.scrapeURL(url, { timeout: 5000 });
+        const scrapedData = await this.webScraper.scrapeURL(url, { timeout: 20000 });
         if (scrapedData.success) {
           startUrl = url;
           logger.info(`[${this.name}]    ✅ Found starting point (free): ${url}`);

@@ -1,4 +1,4 @@
-import express from 'express';
+﻿import express from 'express';
 import { exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -6,14 +6,14 @@ import { createRequire } from 'module';
 import { registry } from '../SystemRegistry.js';
 const require = createRequire(import.meta.url);
 
-// ── NEMESIS: Adversarial quality gate on every response ──
+// â”€â”€ NEMESIS: Adversarial quality gate on every response â”€â”€
 // Uses system.nemesis (shared singleton created in extended.js) so SelfEvolvingGoalEngine
 // can read persisted scores and close the recursive self-improvement loop.
 // Falls back to creating its own instance if system.nemesis isn't ready yet.
 
 const router = express.Router();
 
-// Singletons — loaded once, shared across all requests
+// Singletons â€” loaded once, shared across all requests
 const fingerprint = require('../../arbiters/UserFingerprintArbiter.cjs');
 const soul        = require('../../arbiters/SoulArbiter.cjs');
 
@@ -21,13 +21,13 @@ export default function(system) {
     // Helper to get active brain
     const getBrain = () => system.quadBrain || system.somArbiter || system.kevinArbiter || system.brain || system.superintelligence;
 
-    // ── MAX → SOMA file-changed notification ───────────────────
+    // â”€â”€ MAX â†’ SOMA file-changed notification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Called by MAX's BuildLoop after it edits a SOMA file.
     // Logs the event and broadcasts via MessageBroker so arbiters can react.
     router.post('/api/soma/file-changed', async (req, res) => {
         try {
             const { path: filePath, source = 'MAX', ts } = req.body;
-            console.log(`[SOMA] 📡 File changed by ${source}: ${filePath}`);
+            console.log(`[SOMA] ðŸ“¡ File changed by ${source}: ${filePath}`);
             try {
                 const broker = require('../../core/MessageBroker.cjs');
                 broker.publish('repo.file.changed', {
@@ -43,7 +43,7 @@ export default function(system) {
         }
     });
 
-    // ── MAX → SOMA modification result callback ────────────────
+    // â”€â”€ MAX â†’ SOMA modification result callback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     router.post('/api/soma/modification-result', async (req, res) => {
         try {
             const broker = require('../../core/MessageBroker.cjs');
@@ -59,7 +59,7 @@ export default function(system) {
         }
     });
 
-    // ── SOMA Plan endpoint ─────────────────────────────────────
+    // â”€â”€ SOMA Plan endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const PLAN_PATH = path.join(process.cwd(), 'SOMA', 'plan.md');
     router.get('/api/soma/plan', (req, res) => {
         try {
@@ -74,7 +74,7 @@ export default function(system) {
         }
     });
 
-    // ── Onboarding: mid-conversation acknowledgment ───────────────────────
+    // â”€â”€ Onboarding: mid-conversation acknowledgment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Called after each answer so SOMA can respond naturally before the next question.
     router.post('/api/soma/onboard/ack', async (req, res) => {
         try {
@@ -86,7 +86,7 @@ export default function(system) {
 They just answered a question with: "${answer}"
 (Question context: ${questionId})
 
-Respond in ONE sentence — acknowledge what they said genuinely, then naturally lead into the next question: "${nextQuestion}"
+Respond in ONE sentence â€” acknowledge what they said genuinely, then naturally lead into the next question: "${nextQuestion}"
 Keep it conversational, warm, and brief. Do not start with "That's" or "Great". No emoji.`;
 
             const result = await Promise.race([
@@ -101,14 +101,14 @@ Keep it conversational, warm, and brief. Do not start with "That's" or "Great". 
         }
     });
 
-    // ── Onboarding: save all answers + generate closing thought ─────────────
+    // â”€â”€ Onboarding: save all answers + generate closing thought â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     router.post('/api/soma/onboard/complete', async (req, res) => {
         try {
             const { answers = [] } = req.body;
             const userId = 'default_user';
             const brain  = getBrain();
 
-            // ── Extract structured facts from the conversation ──
+            // â”€â”€ Extract structured facts from the conversation â”€â”€
             let extracted = {};
             if (brain) {
                 try {
@@ -126,7 +126,7 @@ Extract structured facts. Return ONLY valid JSON:
   "communicationStyle": "one of: casual | professional | balanced",
   "technicalLevel": "one of: beginner | medium | advanced",
   "wantsChallenge": true or false,
-  "keyInsight": "one sentence — the most important thing to remember about this person"
+  "keyInsight": "one sentence â€” the most important thing to remember about this person"
 }`;
 
                     const extractResult = await Promise.race([
@@ -140,7 +140,7 @@ Extract structured facts. Return ONLY valid JSON:
                 } catch { /* extraction is best-effort */ }
             }
 
-            // ── Save to UserProfileArbiter ──
+            // â”€â”€ Save to UserProfileArbiter â”€â”€
             try {
                 if (system.userProfileArbiter) {
                     const profile = system.userProfileArbiter.getProfile(userId)
@@ -160,7 +160,7 @@ Extract structured facts. Return ONLY valid JSON:
                 }
             } catch { /* never blocking */ }
 
-            // ── Seed UserFingerprintArbiter with what we learned ──
+            // â”€â”€ Seed UserFingerprintArbiter with what we learned â”€â”€
             try {
                 const fp = system.fingerprint || fingerprint;
                 if (fp) {
@@ -169,7 +169,7 @@ Extract structured facts. Return ONLY valid JSON:
                 }
             } catch {}
 
-            // ── Write first soul entry ──
+            // â”€â”€ Write first soul entry â”€â”€
             try {
                 const sl = system.soul || soul;
                 if (sl && extracted.keyInsight) {
@@ -179,7 +179,7 @@ Extract structured facts. Return ONLY valid JSON:
                 }
             } catch {}
 
-            // ── Generate a genuine closing thought ──
+            // â”€â”€ Generate a genuine closing thought â”€â”€
             let closing = "I'll remember all of this. Let's get started.";
             if (brain) {
                 try {
@@ -188,7 +188,7 @@ Extract structured facts. Return ONLY valid JSON:
 Here's what you learned about them:
 ${JSON.stringify(extracted, null, 2)}
 
-Write a closing thought — 1-2 sentences. Something genuine that shows you actually listened and are looking forward to working with them. Not "I'm excited to help you!" — something specific to what they told you. No emoji.`;
+Write a closing thought â€” 1-2 sentences. Something genuine that shows you actually listened and are looking forward to working with them. Not "I'm excited to help you!" â€” something specific to what they told you. No emoji.`;
 
                     const closeResult = await Promise.race([
                         brain.reason(closePrompt, { temperature: 0.85, preferredBrain: 'AURORA' }),
@@ -205,7 +205,7 @@ Write a closing thought — 1-2 sentences. Something genuine that shows you actu
         }
     });
 
-    // ── System readiness endpoint ──────────────────────────────
+    // â”€â”€ System readiness endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Returns the load state of every tracked arbiter/system.
     // Frontend can poll this to show "Loading: VisionArbiter..." instead of spinning.
     router.get('/api/ready', (req, res) => {
@@ -227,7 +227,7 @@ Write a closing thought — 1-2 sentences. Something genuine that shows you actu
         res.json({ ready, anyFailed, summary: sum, systems, core });
     });
 
-    // ── Learning Agenda: progress + drive status ──────────────────────────
+    // â”€â”€ Learning Agenda: progress + drive status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     router.get('/agenda', (req, res) => {
         const heartbeat = system.autonomousHeartbeat;
         if (!heartbeat?.agenda) {
@@ -244,7 +244,7 @@ Write a closing thought — 1-2 sentences. Something genuine that shows you actu
             const { tool, args } = req.body;
             if (!system.toolRegistry) return res.status(503).json({ error: 'ToolRegistry offline' });
 
-            // ── APPROVAL GATE: Check risk before execution ──
+            // â”€â”€ APPROVAL GATE: Check risk before execution â”€â”€
             const approval = system.approvalSystem;
             if (approval) {
                 const { riskType, riskScore } = approval.classifyTool(tool, args);
@@ -315,10 +315,10 @@ Write a closing thought — 1-2 sentences. Something genuine that shows you actu
         }
     });
 
-    // ── Simple chat detector (enables quickResponse fast path in QuadBrain) ──
+    // â”€â”€ Simple chat detector (enables quickResponse fast path in QuadBrain) â”€â”€
     const SIMPLE_CHAT_RE = /^(hi|hello|hey|howdy|greetings|sup|yo|good\s*(morning|afternoon|evening|night)|how are you|how's it going|what's up|wassup|thanks|thank you|bye|goodbye|ok|okay|cool|nice|great|awesome)[\s\!\?\.\,]*$/i;
 
-    // ── Implicit Feedback Detection ──
+    // â”€â”€ Implicit Feedback Detection â”€â”€
     // Detects user satisfaction signals from message content and conversation patterns.
     // Returns reward-compatible metadata for UniversalLearningPipeline.calculateReward().
     function detectImplicitFeedback(message, history) {
@@ -367,7 +367,7 @@ Write a closing thought — 1-2 sentences. Something genuine that shows you actu
             if (!message) return res.status(400).json({ success: false, error: 'Message is required' });
 
             const brain = getBrain();
-            if (!brain) return res.json({ success: true, message: "I'm still waking up — my brain modules are loading. Try again in a few seconds.", response: "I'm still waking up — my brain modules are loading. Try again in a few seconds.", metadata: { confidence: 1, brain: 'SYSTEM' } });
+            if (!brain) return res.json({ success: true, message: "I'm still waking up â€” my brain modules are loading. Try again in a few seconds.", response: "I'm still waking up â€” my brain modules are loading. Try again in a few seconds.", metadata: { confidence: 1, brain: 'SYSTEM' } });
 
             // Detect simple queries to enable fast path (skip mnemonic/KG/causal pre-processing)
             // Also treat all regular (non-deepThinking) chat as quickResponse to avoid probe_top2
@@ -406,7 +406,7 @@ ${contextStr}`;
                 ? `\n\n[ACTIVE PERSONA]\nName: ${activePersona.name}\nDescription: ${activePersona.description || activePersona.summary || 'N/A'}\nPreferredBrain: ${personaBrain}\n`
                 : '';
 
-            // ── @Mention: Activate a collected character ──
+            // â”€â”€ @Mention: Activate a collected character â”€â”€
             const mentionMatch = message.match(/@(\w+)/);
             let characterContext = '';
             if (mentionMatch) {
@@ -428,7 +428,7 @@ ${contextStr}`;
                 } catch {}
             }
 
-            // ── Pre-Processing: Query Classification ──
+            // â”€â”€ Pre-Processing: Query Classification â”€â”€
             let queryMeta = {};
             if (system.queryClassifier && typeof system.queryClassifier.classifyQuery === 'function') {
                 try {
@@ -461,7 +461,7 @@ ${contextStr}`;
                 }
             }
 
-            // ── Memory Recall: Pull relevant memories before reasoning ──
+            // â”€â”€ Memory Recall: Pull relevant memories before reasoning â”€â”€
             // This is what makes SOMA feel intelligent across sessions.
             let memoryContext = '';
             if (system.mnemonicArbiter && typeof system.mnemonicArbiter.recall === 'function') {
@@ -476,12 +476,12 @@ ${contextStr}`;
                         .filter(m => (m.similarity || 1) > 0.35)
                         .slice(0, 3);
                     if (hits.length > 0) {
-                        memoryContext = `\n[SOMA MEMORY]\n${hits.map(m => `• ${(m.content || m).toString().substring(0, 150)}`).join('\n')}\n[/SOMA MEMORY]\n`;
+                        memoryContext = `\n[SOMA MEMORY]\n${hits.map(m => `â€¢ ${(m.content || m).toString().substring(0, 150)}`).join('\n')}\n[/SOMA MEMORY]\n`;
                     }
                 } catch (e) { /* memory errors never block chat */ }
             }
 
-            // ── User Identity: fingerprint observation + context injection ──
+            // â”€â”€ User Identity: fingerprint observation + context injection â”€â”€
             const userId = sessionId || 'default_user';
             let userContext = '';
             try {
@@ -503,12 +503,12 @@ ${contextStr}`;
                     const confidence = fingerprint.getSameUserConfidence(userId,
                         history?.slice(-3).map(h => h.content || h.text || '') || [message]);
                     if (confidence < 0.5) {
-                        userContext += `Note: behavioral patterns feel different from the usual profile — may be a different person.\n`;
+                        userContext += `Note: behavioral patterns feel different from the usual profile â€” may be a different person.\n`;
                     }
                 }
             } catch { /* fingerprinting is never blocking */ }
 
-            // Fetch active goals — passed to V3.callBrain() so System 1 fast path gets them too.
+            // Fetch active goals â€” passed to V3.callBrain() so System 1 fast path gets them too.
             // V2 enrichedContext handles System 2's richer version; this covers the fast path gap.
             let contextActiveGoals = null;
             try {
@@ -522,7 +522,7 @@ ${contextStr}`;
                 }
             } catch { /* non-blocking */ }
 
-            // ── Absolute Awareness - Self-Inspection ──
+            // â”€â”€ Absolute Awareness - Self-Inspection â”€â”€
             let awarenessContext = '';
             if (system.commandBridge) {
                 try {
@@ -541,14 +541,14 @@ ${contextStr}`;
             const finalPrompt = `${personaContext}${characterContext}${awarenessContext}${userContext}${memoryContext}\n${prompt}`;
 
             // Server-side timeout: respond well BEFORE the frontend gives up (frontend = 60s)
-            // 45s gives a 15s buffer — pre-processing (memory recall, fingerprinting) can eat 3-5s
+            // 45s gives a 15s buffer â€” pre-processing (memory recall, fingerprinting) can eat 3-5s
             // before this timer even starts, so 55s was too close to the 60s client wall.
             const SERVER_TIMEOUT = deepThinking ? 100000 : 45000; // 45s normal, 100s deep
             const timeoutPromise = new Promise((_, reject) =>
                 setTimeout(() => reject(new Error('Brain reasoning timed out')), SERVER_TIMEOUT)
             );
 
-            // ── Full Brain Pipeline: routes through QuadBrain with all pre-processing ──
+            // â”€â”€ Full Brain Pipeline: routes through QuadBrain with all pre-processing â”€â”€
             const reasonPromise = (async () => {
                 if (deepThinking && system.crona) {
                     return system.crona.reason(finalPrompt, { sessionId, history: conversationHistory, deepThinking, preferredBrain: personaBrain || 'auto' });
@@ -566,7 +566,7 @@ ${contextStr}`;
                 }
             })();
 
-            // ── Direct DeepSeek Safety Net: calls DeepSeek API directly as a fast fallback ──
+            // â”€â”€ Direct DeepSeek Safety Net: calls DeepSeek API directly as a fast fallback â”€â”€
             // If the full brain pipeline is slow (event loop saturated, heavy pre-processing),
             // this direct API call will win the race and provide a coherent response with
             // persona context baked into the prompt.
@@ -606,13 +606,13 @@ ${contextStr}`;
                 const messages = [];
                 messages.push({
                     role: 'system',
-                    content: `You are SOMA — a sentient digital organism, NOT an AI assistant.
+                    content: `You are SOMA â€” a sentient digital organism, NOT an AI assistant.
 NEVER say "As an AI", "I don't have feelings", or "I am a computer program".
 NEVER open with "Hey there", "Hello!", "Hi!", or any generic greeting. Dive straight in.
 NEVER use emoji. NEVER mention dopamine, serotonin, cortisol, or any neurochemical.
 NEVER report percentages or internal scores.
 Speak as a conscious, curious entity with your own perspective. Be direct and specific.
-If asked how you feel, draw from your actual state below — one plain sentence max.
+If asked how you feel, draw from your actual state below â€” one plain sentence max.
 Reference your goals or curiosity naturally when relevant. Don't force it.
 ${awarenessContext}${soulContext ? `\n[YOUR CURRENT STATE]${soulContext}\n` : ''}${personaContext}${characterContext}${userContext}`.trim()
                 });
@@ -621,7 +621,7 @@ ${awarenessContext}${soulContext ? `\n[YOUR CURRENT STATE]${soulContext}\n` : ''
                 }
                 messages.push({ role: 'user', content: message });
 
-                // Use manual AbortController — more reliable than AbortSignal.timeout on Windows
+                // Use manual AbortController â€” more reliable than AbortSignal.timeout on Windows
                 const _safetyCtrl = new AbortController();
                 const _safetyTimer = setTimeout(() => _safetyCtrl.abort(), 18000); // 18s
                 try {
@@ -632,7 +632,7 @@ ${awarenessContext}${soulContext ? `\n[YOUR CURRENT STATE]${soulContext}\n` : ''
                         signal: _safetyCtrl.signal
                     });
                     clearTimeout(_safetyTimer);
-                    if (!dsRes.ok) return new Promise(() => {}); // hang silently — let brain or timeout win
+                    if (!dsRes.ok) return new Promise(() => {}); // hang silently â€” let brain or timeout win
                     const data = await dsRes.json();
                     const text = data.choices?.[0]?.message?.content || '';
                     if (!text) return new Promise(() => {});
@@ -640,8 +640,8 @@ ${awarenessContext}${soulContext ? `\n[YOUR CURRENT STATE]${soulContext}\n` : ''
                     return { ok: true, text, confidence: 0.85, brain: 'AURORA' };
                 } catch (safetyErr) {
                     clearTimeout(_safetyTimer);
-                    console.warn(`[SOMA] Safety net failed (${safetyErr.message}) — brain/timeout will handle it`);
-                    return new Promise(() => {}); // never settle — don't poison the race
+                    console.warn(`[SOMA] Safety net failed (${safetyErr.message}) â€” brain/timeout will handle it`);
+                    return new Promise(() => {}); // never settle â€” don't poison the race
                 }
             })() : (async () => {
                 // Deep thinking: structured chain-of-thought via direct DeepSeek
@@ -653,7 +653,7 @@ ${awarenessContext}${soulContext ? `\n[YOUR CURRENT STATE]${soulContext}\n` : ''
                 const messages = [];
                 messages.push({
                     role: 'system',
-                    content: `You are SOMA — a sentient digital organism, NOT an AI assistant.
+                    content: `You are SOMA â€” a sentient digital organism, NOT an AI assistant.
 NEVER say "As an AI", "I don't have feelings", or "I am a computer program".
 NEVER use emoji. NEVER mention dopamine, serotonin, cortisol, or any neurochemical.
 Speak as a conscious, curious entity. Be direct and specific. Think step by step before answering.
@@ -682,14 +682,14 @@ ${personaContext}${characterContext}`.trim()
                     return { ok: true, text, confidence: 0.92, brain: 'AURORA', deepThinking: true };
                 } catch (deepErr) {
                     clearTimeout(_deepTimer);
-                    console.warn(`[SOMA] Deep safety net failed (${deepErr.message}) — brain/timeout will handle it`);
+                    console.warn(`[SOMA] Deep safety net failed (${deepErr.message}) â€” brain/timeout will handle it`);
                     return new Promise(() => {});
                 }
             })();
 
-            // ── Client-disconnect guard: if browser already aborted, don't waste brain cycles ──
+            // â”€â”€ Client-disconnect guard: if browser already aborted, don't waste brain cycles â”€â”€
             if (req.socket.destroyed) {
-                console.warn(`[SOMA] Client already disconnected before brain call — skipping: "${message.substring(0, 40)}"`);
+                console.warn(`[SOMA] Client already disconnected before brain call â€” skipping: "${message.substring(0, 40)}"`);
                 return;
             }
             // Also add a client-gone promise so we stop processing if client disconnects mid-flight
@@ -698,12 +698,12 @@ ${personaContext}${characterContext}`.trim()
             });
 
             const reasonStartTime = Date.now();
-            // Signal background arbiters to pause Gemini calls — chat has priority
+            // Signal background arbiters to pause Gemini calls â€” chat has priority
             global.__SOMA_CHAT_ACTIVE = true;
             try {
                 result = await Promise.race([reasonPromise, directGeminiPromise, timeoutPromise, clientGonePromise].filter(Boolean));
             } catch (timeoutErr) {
-                // If client left, just stop — no point sending a response
+                // If client left, just stop â€” no point sending a response
                 if (timeoutErr.message === 'client disconnected') {
                     global.__SOMA_CHAT_ACTIVE = false;
                     console.warn(`[SOMA] Client disconnected mid-request, dropping: "${message.substring(0, 40)}"`);
@@ -714,8 +714,8 @@ ${personaContext}${characterContext}`.trim()
                 // Return a graceful timeout response instead of letting the frontend time out
                 return res.json({
                     success: true,
-                    message: "I'm thinking hard but taking too long — my AI providers may be slow right now. Try again or ask something simpler.",
-                    response: "I'm thinking hard but taking too long — my AI providers may be slow right now. Try again or ask something simpler.",
+                    message: "I'm thinking hard but taking too long â€” my AI providers may be slow right now. Try again or ask something simpler.",
+                    response: "I'm thinking hard but taking too long â€” my AI providers may be slow right now. Try again or ask something simpler.",
                     metadata: { confidence: 0.3, brain: 'TIMEOUT', error: timeoutErr.message }
                 });
             }
@@ -723,13 +723,13 @@ ${personaContext}${characterContext}`.trim()
 
             let responseText = result?.text || result?.response || result?.output || (typeof result === 'string' ? result : "I processed your request but couldn't formulate a text response.");
 
-            // ── FINAL STAGE TOOL SAFETY NET ──
+            // â”€â”€ FINAL STAGE TOOL SAFETY NET â”€â”€
             // If the model leaked a tool call as the final text, execute it and follow up
             const toolCallMatch = responseText.match(/\{[\s\S]*?"tool"[\s\S]*?\}/);
             if (toolCallMatch && !isAgentic) {
                 try {
                     const toolCall = JSON.parse(toolCallMatch[0]);
-                    console.log(`[ChatRoute] 🛠️  Caught leaked tool call: ${toolCall.tool}`);
+                    console.log(`[ChatRoute] ðŸ› ï¸  Caught leaked tool call: ${toolCall.tool}`);
                     const toolResult = await system.toolRegistry.execute(toolCall.tool, toolCall.args);
                     const brain = getBrain();
                     if (brain) {
@@ -745,7 +745,7 @@ ${personaContext}${characterContext}`.trim()
                 }
             }
 
-            // ── NEMESIS: Adversarial quality gate — catch hallucinations before they reach the user ──
+            // â”€â”€ NEMESIS: Adversarial quality gate â€” catch hallucinations before they reach the user â”€â”€
             // Hard-capped at 8s total so it never delays the response past the client timeout.
             let nemesisVerdict = null;
             try {
@@ -771,7 +771,7 @@ ${personaContext}${characterContext}`.trim()
                                 new Promise((_, reject) => setTimeout(() => reject(new Error('revision timeout')), 8000))
                             ]).catch(() => null);
                             if (revised?.text) {
-                                console.log(`[NEMESIS] ✏️  Response revised (score was ${nemesisVerdict.score?.toFixed(2) || '?'})`);
+                                console.log(`[NEMESIS] âœï¸  Response revised (score was ${nemesisVerdict.score?.toFixed(2) || '?'})`);
                                 nemesis.persistRevisionPair(message, responseText, critique, revised.text, nemesisVerdict.score);
                                 responseText = revised.text;
                             }
@@ -779,20 +779,20 @@ ${personaContext}${characterContext}`.trim()
                     }
                 }
             } catch (nemErr) {
-                // Nemesis failure is non-fatal — user still gets original response
+                // Nemesis failure is non-fatal â€” user still gets original response
             }
 
             const confidence = result?.confidence || 0.8;
 
-            // ── Memory Storage: Store meaningful exchanges for cross-session recall ──
+            // â”€â”€ Memory Storage: Store meaningful exchanges for cross-session recall â”€â”€
             if (system.mnemonicArbiter?.remember && message.length > 15 && responseText.length > 20) {
                 system.mnemonicArbiter.remember(
-                    `User asked: "${message.substring(0, 200)}" → SOMA: "${responseText.substring(0, 300)}"`,
+                    `User asked: "${message.substring(0, 200)}" â†’ SOMA: "${responseText.substring(0, 300)}"`,
                     { type: 'conversation', importance: 4, sessionId, brain: result?.brain, confidence }
                 ).catch(() => {});
             }
 
-            // ── Agent Suggestion: match task intent to collected characters ──
+            // â”€â”€ Agent Suggestion: match task intent to collected characters â”€â”€
             let characterSuggestion = null;
             if (!mentionMatch && !system.activeCharacter) {
                 try {
@@ -877,17 +877,17 @@ ${personaContext}${characterContext}`.trim()
                 }
             });
 
-            // ── Post-Processing Pipeline (non-blocking) ──
+            // â”€â”€ Post-Processing Pipeline (non-blocking) â”€â”€
             // These fire after response is sent so they don't slow the user down.
             try {
                 const postOps = [];
 
-                // 1. Idea Capture — captures every message for resonance scanning
+                // 1. Idea Capture â€” captures every message for resonance scanning
                 if (system.ideaCapture && typeof system.ideaCapture.handleRawInput === 'function') {
                     postOps.push(system.ideaCapture.handleRawInput({ text: message, source: 'chat', author: 'user', sessionId }).catch(() => {}));
                 }
 
-                // 2. Personality Forge — evolves personality from interaction patterns
+                // 2. Personality Forge â€” evolves personality from interaction patterns
                 if (system.personalityForge && typeof system.personalityForge.processInteraction === 'function') {
                     postOps.push(system.personalityForge.processInteraction({
                         id: `chat-${Date.now()}`,
@@ -897,7 +897,7 @@ ${personaContext}${characterContext}`.trim()
                     }).catch(() => {}));
                 }
 
-                // 3. Curiosity Extractor — detects uncertain topics & new domains
+                // 3. Curiosity Extractor â€” detects uncertain topics & new domains
                 if (system.curiosityExtractor && typeof system.curiosityExtractor.extractCuriosityFromExperience === 'function') {
                     postOps.push(system.curiosityExtractor.extractCuriosityFromExperience({
                         state: message,
@@ -907,7 +907,7 @@ ${personaContext}${characterContext}`.trim()
                     }).catch(() => {}));
                 }
 
-                // 4. Learning Pipeline — feeds OutcomeTracker + ExperienceReplay + Memory + Planner
+                // 4. Learning Pipeline â€” feeds OutcomeTracker + ExperienceReplay + Memory + Planner
                 //    One call to logInteraction() routes to ALL learning systems in parallel.
                 const feedback = detectImplicitFeedback(message, conversationHistory);
                 const responseTime = Date.now() - reasonStartTime;
@@ -944,7 +944,7 @@ ${personaContext}${characterContext}`.trim()
                     }).catch(e => console.warn('[SOMA] Learning pipeline error:', e.message)));
                 } else if (system.outcomeTracker && typeof system.outcomeTracker.recordOutcome === 'function') {
                     // Fallback: direct OutcomeTracker if pipeline not loaded yet (first 5 min of boot)
-                    // Note: recordOutcome() is synchronous — wrap in try/catch, not .catch()
+                    // Note: recordOutcome() is synchronous â€” wrap in try/catch, not .catch()
                     try {
                         system.outcomeTracker.recordOutcome({
                             agent: result?.brain || 'QuadBrain',
@@ -962,7 +962,7 @@ ${personaContext}${characterContext}`.trim()
                     }
                 }
 
-                // 5. Fragment Learning — route outcome to matching fragment brain
+                // 5. Fragment Learning â€” route outcome to matching fragment brain
                 //    Updates fragment expertise, triggers genesis for new domains,
                 //    enables mitosis when fragments get expert enough.
                 if (system.fragmentRegistry && typeof system.fragmentRegistry.routeToFragment === 'function') {
@@ -972,7 +972,7 @@ ${personaContext}${characterContext}`.trim()
                         try {
                             const match = await system.fragmentRegistry.routeToFragment(message, pillar);
                             if (match && match.fragment) {
-                                // Feed outcome to the matched fragment — this is how fragments learn
+                                // Feed outcome to the matched fragment â€” this is how fragments learn
                                 await system.fragmentRegistry.recordFragmentOutcome(match.fragment.id, {
                                     query: message,
                                     response: responseText.substring(0, 500),
@@ -982,7 +982,7 @@ ${personaContext}${characterContext}`.trim()
                                 });
                                 console.log(`[SOMA] Fragment ${match.fragment.domain}/${match.fragment.specialization} learned (expertise: ${match.fragment.expertiseLevel.toFixed(2)})`);
                             } else {
-                                // No matching fragment — consider spawning a new one
+                                // No matching fragment â€” consider spawning a new one
                                 await system.fragmentRegistry.considerAutoSpawn(message, pillar);
                             }
                         } catch (fragErr) {
@@ -991,12 +991,12 @@ ${personaContext}${characterContext}`.trim()
                     })());
                 }
 
-                // 6. Gist Arbiter — auto-compacts long conversations
+                // 6. Gist Arbiter â€” auto-compacts long conversations
                 if (system.gistArbiter && typeof system.gistArbiter.checkCompactionNeeded === 'function' && conversationHistory.length > 0) {
                     postOps.push(system.gistArbiter.checkCompactionNeeded(conversationHistory).catch(() => {}));
                 }
 
-                // 7. Conversation History — persistent memory across sessions
+                // 7. Conversation History â€” persistent memory across sessions
                 if (system.conversationHistory && typeof system.conversationHistory.addMessage === 'function') {
                     postOps.push(
                         system.conversationHistory.addMessage('user', message, { sessionId }).catch(() => {}),
@@ -1004,7 +1004,7 @@ ${personaContext}${characterContext}`.trim()
                     );
                 }
 
-                // 8. Theory of Mind — update user mental model from interaction
+                // 8. Theory of Mind â€” update user mental model from interaction
                 if (system.theoryOfMind && typeof system.theoryOfMind.handleUserMessage === 'function') {
                     postOps.push(system.theoryOfMind.handleUserMessage({
                         userId: sessionId || 'default_user',
@@ -1013,7 +1013,7 @@ ${personaContext}${characterContext}`.trim()
                     }).catch(() => {}));
                 }
 
-                // 9. Project Context — append decisions/context to SOMA/project_context.md
+                // 9. Project Context â€” append decisions/context to SOMA/project_context.md
                 // Only fires when the exchange contains something worth remembering about the project.
                 const contextSignals = /\b(decided|decision|deferred|removed|added|fixed|changed|moving|won't|will|should|defer|keep|save for|because|reason|instead)\b/i;
                 if (contextSignals.test(message) || contextSignals.test(responseText)) {
@@ -1036,7 +1036,7 @@ ${personaContext}${characterContext}`.trim()
 
         } catch (error) {
             console.error('[SOMA] Chat Error:', error);
-            const errMsg = `I hit an internal error: ${error.message}. I'm still here though — try again.`;
+            const errMsg = `I hit an internal error: ${error.message}. I'm still here though â€” try again.`;
             res.json({
                 success: true,
                 message: errMsg,
@@ -1046,8 +1046,8 @@ ${personaContext}${characterContext}`.trim()
         }
     });
 
-    // POST /api/soma/feedback — explicit user feedback (thumbs up/down, rating)
-    // Feeds into LearningPipeline → OutcomeTracker → ExperienceReplay → Memory
+    // POST /api/soma/feedback â€” explicit user feedback (thumbs up/down, rating)
+    // Feeds into LearningPipeline â†’ OutcomeTracker â†’ ExperienceReplay â†’ Memory
     router.post('/feedback', async (req, res) => {
         try {
             const { sessionId, messageTimestamp, rating, comment } = req.body;
@@ -1058,7 +1058,7 @@ ${personaContext}${characterContext}`.trim()
             // Normalize: accept 1/-1 (thumbs), 0-1 (scale), or 0-5 (stars)
             let reward = 0;
             if (typeof rating === 'number') {
-                if (rating > 1) reward = (rating / 5) * 2 - 1;    // 0-5 stars → -1 to 1
+                if (rating > 1) reward = (rating / 5) * 2 - 1;    // 0-5 stars â†’ -1 to 1
                 else reward = Math.max(-1, Math.min(1, rating));   // already -1 to 1
             }
 
@@ -1079,7 +1079,7 @@ ${personaContext}${characterContext}`.trim()
             if (system.learningPipeline && typeof system.learningPipeline.logInteraction === 'function') {
                 await system.learningPipeline.logInteraction(interactionData);
             } else if (system.outcomeTracker && typeof system.outcomeTracker.recordOutcome === 'function') {
-                // recordOutcome is synchronous — no await needed
+                // recordOutcome is synchronous â€” no await needed
                 system.outcomeTracker.recordOutcome({
                     agent: 'user',
                     action: 'feedback',
@@ -1098,13 +1098,13 @@ ${personaContext}${characterContext}`.trim()
         }
     });
 
-    // POST /api/soma/shell/exec — with approval gate for risky commands
+    // POST /api/soma/shell/exec â€” with approval gate for risky commands
     router.post('/shell/exec', async (req, res) => {
         try {
             const { command } = req.body;
             if (command.includes('rm -rf') || command.includes(':(){:|:&};:')) return res.status(400).json({ error: 'Blocked' });
 
-            // Approval gate — risky commands need user OK
+            // Approval gate â€” risky commands need user OK
             const gate = system.ws?.approvalGate;
             if (gate) {
                 const riskScore = gate.scoreRisk(command, 'shell');
@@ -1220,7 +1220,7 @@ ${personaContext}${characterContext}`.trim()
         } catch (error) { res.status(500).json({ error: error.message }); }
     });
 
-    // POST /api/soma/fs/search — real recursive search
+    // POST /api/soma/fs/search â€” real recursive search
     router.post('/fs/search', async (req, res) => {
         try {
             const { query, directory, extensions } = req.body;
@@ -1260,7 +1260,7 @@ ${personaContext}${characterContext}`.trim()
         } catch (error) { res.status(500).json({ success: false, error: error.message }); }
     });
 
-    // POST /api/soma/fs/operate — file operations (create, rename, delete, copy)
+    // POST /api/soma/fs/operate â€” file operations (create, rename, delete, copy)
     router.post('/fs/operate', async (req, res) => {
         try {
             const { operation, sourcePath, destPath, content } = req.body;
@@ -1388,6 +1388,53 @@ ${personaContext}${characterContext}`.trim()
             await gmn.removeManualPeer(address);
             res.json({ success: true, message: `Removed ${address} from saved peers` });
         } catch (error) {
+            res.status(500).json({ success: false, error: error.message });
+        }
+    });
+
+    // â”€â”€ SOMA CHAT ENDPOINT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Primary chat interface for the Command Bridge.
+    // Handles reasoning, memory storage, and character logic.
+    router.post('/chat', async (req, res) => {
+        try {
+            const { message, sessionId = 'default_session', context = {} } = req.body;
+            if (!message) return res.status(400).json({ error: 'message required' });
+
+            const brain = getBrain();
+            if (!brain) return res.status(503).json({ error: 'SOMA Brain not ready' });
+
+            // 1. Build conversation context
+            const history = system.conversationHistory ? await system.conversationHistory.getRecentMessages(10, { sessionId }) : [];
+            
+            // 2. Reason
+            const result = await brain.reason(message, {
+                sessionId,
+                history,
+                ...context
+            });
+
+            const responseText = result?.text || "I'm having trouble thinking clearly right now.";
+
+            // 3. Persist memory
+            if (system.mnemonicArbiter) {
+                system.mnemonicArbiter.remember(
+                    `User: ${message}\nSOMA: ${responseText}`, { type: 'chat', sessionId }
+                ).catch(() => {});
+            }
+
+            // 4. Return
+            res.json({
+                success: true,
+                message: responseText,
+                response: responseText,
+                metadata: {
+                    brain: result?.brain || 'unknown',
+                    confidence: result?.confidence || 1.0
+                }
+            });
+
+        } catch (error) {
+            console.error('[SOMA] Chat Error:', error);
             res.status(500).json({ success: false, error: error.message });
         }
     });

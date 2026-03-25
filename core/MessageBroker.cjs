@@ -724,6 +724,136 @@ class MessageBroker extends EventEmitter {
     console.log(`History Size: ${this.messageHistory.length}`);
     console.log('============================\n');
   }
+
+  // ===========================
+  // Network Bridge (Remote Agents)
+  // ===========================
+  // Starts a WebSocket server so external processes (MAX, Agent0, etc.)
+  // can register as virtual arbiters and participate in the signal flow.
+  //
+  // Protocol (all JSON):
+  //   client → server:  { type: 'register', name, subscriptions: [topic, ...] }
+  //   client → server:  { type: 'publish', topic, payload }
+  //   client → server:  { type: 'message_response', id, result }
+  //   client → server:  { type: 'ping' }
+  //   server → client:  { type: 'registered', name }
+  //   server → client:  { type: 'signal', topic, payload }     ← pub/sub delivery
+  //   server → client:  { type: 'message', id, envelope }      ← direct sendMessage delivery
+  //   server → client:  { type: 'pong' }
+
+  startNetworkBridge(port = 4201) {
+    const { WebSocketServer } = require('ws');
+    const wss = new WebSocketServer({ port });
+
+    // topic → Set<WebSocket>  (which remotes subscribed to which topics)
+    const topicSubs = new Map();
+    // ws → agentName
+    const agentNames = new Map();
+    // pending direct-message responses: id → { resolve, timer }
+    const pending = new Map();
+
+    // Wire a single broker subscription per topic that fans out to all remote subscribers.
+    // Called once when the first remote agent subscribes to a topic.
+    const wireTopicForward = (topic) => {
+      this.subscribe(topic, (envelope) => {
+        const clients = topicSubs.get(topic);
+        if (!clients || clients.size === 0) return;
+        const msg = JSON.stringify({
+          type: 'signal',
+          topic,
+          payload: envelope.payload ?? envelope
+        });
+        for (const ws of clients) {
+          if (ws.readyState === 1) {
+            try { ws.send(msg); } catch { /* dead socket */ }
+          }
+        }
+      });
+    };
+
+    wss.on('connection', (ws) => {
+      ws.on('message', (raw) => {
+        let msg;
+        try { msg = JSON.parse(raw.toString()); } catch { return; }
+
+        // ── register ─────────────────────────────────────────────────
+        if (msg.type === 'register') {
+          const name = msg.name;
+          agentNames.set(ws, name);
+
+          // Register as a virtual arbiter — sendMessage({ to: name }) will call handleMessage
+          this.registerArbiter(name, {
+            instance: {
+              name,
+              remote: true,
+              handleMessage: (envelope) => new Promise((resolve) => {
+                if (ws.readyState !== 1) { resolve(null); return; }
+                const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                const timer = setTimeout(() => {
+                  pending.delete(id);
+                  resolve(null);
+                }, 30000);
+                pending.set(id, { resolve, timer });
+                ws.send(JSON.stringify({ type: 'message', id, envelope }));
+              })
+            },
+            role: 'remote_agent',
+            classification: 'bridge',
+            lobe: 'network'
+          });
+
+          // Subscribe remote to requested topics
+          for (const topic of (msg.subscriptions || [])) {
+            if (!topicSubs.has(topic)) {
+              topicSubs.set(topic, new Set());
+              wireTopicForward(topic);
+            }
+            topicSubs.get(topic).add(ws);
+          }
+
+          ws.send(JSON.stringify({ type: 'registered', name }));
+          console.log(`[MessageBroker] 🌐 Remote agent "${name}" connected (subscribed to ${(msg.subscriptions || []).length} topics)`);
+        }
+
+        // ── publish ───────────────────────────────────────────────────
+        if (msg.type === 'publish' && agentNames.has(ws)) {
+          this.publish(msg.topic, {
+            from: agentNames.get(ws),
+            payload: msg.payload
+          });
+        }
+
+        // ── message_response ──────────────────────────────────────────
+        if (msg.type === 'message_response' && pending.has(msg.id)) {
+          const { resolve, timer } = pending.get(msg.id);
+          clearTimeout(timer);
+          pending.delete(msg.id);
+          resolve(msg.result);
+        }
+
+        // ── ping ──────────────────────────────────────────────────────
+        if (msg.type === 'ping') {
+          ws.send(JSON.stringify({ type: 'pong' }));
+        }
+      });
+
+      ws.on('close', () => {
+        const name = agentNames.get(ws);
+        if (name) {
+          for (const clients of topicSubs.values()) clients.delete(ws);
+          this.unregisterArbiter(name);
+          agentNames.delete(ws);
+          console.log(`[MessageBroker] 🌐 Remote agent "${name}" disconnected`);
+        }
+      });
+
+      ws.on('error', () => { /* close fires after error */ });
+    });
+
+    this._networkBridge = wss;
+    console.log(`[MessageBroker] 🌐 Network bridge listening on ws://localhost:${port}`);
+    return wss;
+  }
 }
 
 // Singleton instance

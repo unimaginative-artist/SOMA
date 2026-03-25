@@ -10,6 +10,7 @@ set SOMA_GPU=true
 set SOMA_LOAD_HEAVY=true
 set SOMA_LOAD_TRADING=true
 set SOMA_HYBRID_SEARCH=true
+set SOMA_LOAD_VISION=true
 
 echo   [2] Checking for dependencies...
 if not exist "node_modules" (

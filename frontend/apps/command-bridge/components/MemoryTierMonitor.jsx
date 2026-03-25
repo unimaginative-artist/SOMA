@@ -21,8 +21,9 @@ const MemoryTierMonitor = ({ isConnected }) => {
     };
 
     fetchMemoryStats();
-    const interval = setInterval(fetchMemoryStats, 3000);
-    return () => clearInterval(interval);
+    let interval;
+    const t = setTimeout(() => { interval = setInterval(fetchMemoryStats, 20000); }, Math.random() * 7000);
+    return () => { clearTimeout(t); clearInterval(interval); };
   }, [isConnected]);
 
   if (!isConnected || isLoading) {

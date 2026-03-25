@@ -29,15 +29,10 @@ export const ManualWorkstation = ({
     const [price, setPrice] = useState(tickerData?.price || 0);
     const [stopLoss, setStopLoss] = useState('');
     const [takeProfit, setTakeProfit] = useState('');
+    const [trailPercent, setTrailPercent] = useState(2);
     const [riskAssessment, setRiskAssessment] = useState(null);
     const [sizingRec, setSizingRec] = useState(null);
-    const [intelItems, setIntelItems] = useState([
-        { time: '14:32:05', source: 'REUTERS', headline: 'Fed Chair indicates pause in rate hikes likely next quarter', impact: 'HIGH' },
-        { time: '14:30:12', source: 'SOMA AI', headline: 'Abnormal volume spike detected on ES futures', impact: 'MED' },
-        { time: '14:28:45', source: 'BLOOMBERG', headline: 'Tech sector showing relative weakness vs broad market', impact: 'LOW' },
-        { time: '14:25:00', source: 'SEC FILING', headline: 'Form 8-K: NVDA reports strategic partnership', impact: 'HIGH' },
-        { time: '14:22:10', source: 'SOMA AI', headline: 'Order book imbalance favors buyers (1.4 ratio)', impact: 'MED' },
-    ]);
+    const [intelItems, setIntelItems] = useState([]);
 
     // --- POSITION SIZING RECOMMENDATION ---
     useEffect(() => {
@@ -55,7 +50,29 @@ export const ManualWorkstation = ({
         return () => clearInterval(iv);
     }, [selectedSymbol]);
 
-    // --- REAL INTEL FETCHING ---
+    // --- REAL NEWS FEED (Alpaca News API — fast, no AI) ---
+    useEffect(() => {
+        const fetchNews = async () => {
+            if (!selectedSymbol) return;
+            try {
+                const res = await fetch(`/api/finance/news?symbol=${encodeURIComponent(selectedSymbol)}&limit=5`);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!data.items?.length) return;
+                const newsItems = data.items.map(n => ({ ...n, _type: 'news' }));
+                setIntelItems(prev => [
+                    ...prev.filter(i => i._type !== 'news'),
+                    ...newsItems
+                ].slice(0, 50));
+            } catch (e) { /* news not available, silent */ }
+        };
+
+        fetchNews();
+        const interval = setInterval(fetchNews, 60000);
+        return () => clearInterval(interval);
+    }, [selectedSymbol]);
+
+    // --- AI ANALYSIS INTEL (SOMA thesis + quant — slower, rate-limited) ---
     useEffect(() => {
         const fetchAnalysis = async () => {
             if (!selectedSymbol) return;
@@ -74,7 +91,7 @@ export const ManualWorkstation = ({
 
                     if (data.thesis) {
                         newItems.push({
-                            time, source: 'SOMA CHIEF',
+                            time, source: 'SOMA CHIEF', _type: 'analysis',
                             headline: data.thesis.slice(0, 120) + '...',
                             impact: 'HIGH'
                         });
@@ -83,23 +100,20 @@ export const ManualWorkstation = ({
                     if (data.quant?.technical_indicators) {
                         const rsi = data.quant.technical_indicators.rsi;
                         newItems.push({
-                            time, source: 'QUANT ENGINE',
+                            time, source: 'QUANT ENGINE', _type: 'analysis',
                             headline: `RSI: ${rsi.value} (${rsi.signal}) | MACD Divergence detected`,
                             impact: 'MED'
                         });
                     }
 
-                    if (data.research?.news) {
-                        data.research.news.slice(0, 2).forEach(n => {
-                            newItems.push({
-                                time, source: n.source || 'NEWS WIRE',
-                                headline: n.title, impact: 'LOW'
-                            });
-                        });
+                    if (newItems.length) {
+                        setIntelItems(prev => [
+                            ...newItems,
+                            ...prev.filter(i => i._type !== 'analysis')
+                        ].slice(0, 50));
                     }
-                    setIntelItems(prev => [...newItems, ...prev].slice(0, 50));
                 }
-            } catch (e) { console.error("Intel fetch failed", e); }
+            } catch (e) { /* analysis not available */ }
         };
 
         fetchAnalysis();
@@ -141,6 +155,27 @@ export const ManualWorkstation = ({
     };
 
     const handleSubmit = () => {
+        if (orderType === 'TRAILING_STOP') {
+            // Send directly to Alpaca trailing stop endpoint
+            fetch('/api/alpaca/trailing-stop', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    symbol: selectedSymbol,
+                    side: side.toLowerCase(),
+                    qty: parseFloat(quantity),
+                    trailPercent: parseFloat(trailPercent) || 2
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    onExecuteTrade({ symbol: selectedSymbol, type: 'TRAILING_STOP', side, quantity, trailPercent, _result: data.order });
+                }
+            })
+            .catch(() => {});
+            return;
+        }
         onExecuteTrade({
             symbol: selectedSymbol,
             type: orderType,
@@ -386,6 +421,7 @@ export const ManualWorkstation = ({
                             <option value="MARKET">MARKET</option>
                             <option value="LIMIT">LIMIT</option>
                             <option value="STOP">STOP</option>
+                            <option value="TRAILING_STOP">TRAILING STOP</option>
                         </select>
                     </div>
 
@@ -446,6 +482,20 @@ export const ManualWorkstation = ({
                                 className="w-24 bg-[#0a0a0c] border border-zinc-700 p-1 text-right text-white outline-none focus:border-zinc-500 font-mono text-xs"
                             />
                         </div>
+                        {orderType === 'TRAILING_STOP' && (
+                            <div className="flex justify-between items-center">
+                                <label className="text-[10px] text-amber-400 uppercase font-bold">Trail %</label>
+                                <input
+                                    type="number"
+                                    min="0.1"
+                                    max="50"
+                                    step="0.5"
+                                    value={trailPercent}
+                                    onChange={(e) => setTrailPercent(e.target.value)}
+                                    className="w-24 bg-[#0a0a0c] border border-amber-500/40 p-1 text-right text-amber-300 outline-none focus:border-amber-500 font-mono text-xs"
+                                />
+                            </div>
+                        )}
                     </div>
 
                     {/* AI RISK HOLOGRAM (Visible on Hover) */}

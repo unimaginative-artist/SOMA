@@ -1,12 +1,14 @@
 import express from 'express';
 import messageBroker from '../../core/MessageBroker.js';
+import { readdir, readFile } from 'fs/promises';
+import { join } from 'path';
 
 const router = express.Router();
 
 export default function(system) {
     // GET /api/knowledge/fragments
     // Returns real fragments from the registry + persistent thought network + mnemonic memory
-    router.get('/fragments', (req, res) => {
+    router.get('/fragments', async (req, res) => {
         try {
             const allFragments = [];
             const allLinks = [];
@@ -116,7 +118,42 @@ export default function(system) {
                 });
             }
 
-            // 5. Structural Clustering (If links are sparse)
+            // 5. Seed fallback — read directly from seeds/*.json when no in-memory knowledge is ready yet
+            if (allFragments.length === 0) {
+                try {
+                    const seedsDir = join(process.cwd(), 'seeds');
+                    const files = await readdir(seedsDir).catch(() => []);
+                    for (const file of files.filter(f => f.endsWith('.json'))) {
+                        const raw = await readFile(join(seedsDir, file), 'utf8').catch(() => null);
+                        if (!raw) continue;
+                        const pack = JSON.parse(raw);
+                        for (const node of (pack.nodes || [])) {
+                            let domain = 'AURORA';
+                            const text = (node.content || '').toLowerCase();
+                            const tags = node.tags || [];
+                            if (text.match(/logic|proof|code|deduct|infer|math|data|system|algorithm|engineer/) || tags.includes('code') || tags.includes('engineering')) domain = 'LOGOS';
+                            if (text.match(/strategy|goal|objective|plan|mission|target|future|risk|forecast/) || tags.includes('strategy')) domain = 'PROMETHEUS';
+                            if (text.match(/security|safety|guard|protect|threat|privacy|rule|ethical|trust/) || tags.includes('security')) domain = 'THALAMUS';
+                            allFragments.push({
+                                id: node.id,
+                                label: node.content,
+                                type: node.type || 'concept',
+                                domain,
+                                importance: 6 + (node.strength || 0.5) * 4,
+                                usage: node.accessCount || 1,
+                                confidence: node.confidence || 0.8,
+                                decay: 0.05,
+                                z: Math.random() * 400 - 200
+                            });
+                            for (const conn of (node.connections || [])) {
+                                allLinks.push({ source: node.id, target: conn.id, type: conn.type || 'related' });
+                            }
+                        }
+                    }
+                } catch (_) { /* non-fatal */ }
+            }
+
+            // 6. Structural Clustering (If links are sparse)
             if (allLinks.length === 0 && allFragments.length > 0) {
                 const byDomain = {};
                 allFragments.forEach(f => {

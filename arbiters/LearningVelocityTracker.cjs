@@ -168,20 +168,23 @@ class LearningVelocityTracker extends BaseArbiter {
     // For now, we'll establish message-based coordination
 
     try {
-      // Ping agents to verify they're available
-      await messageBroker.sendMessage({
-        from: this.name,
-        to: 'BlackAgent',
-        type: 'status_check',
-        payload: {}
-      });
+      if (messageBroker.getArbiter('BlackAgent')) {
+        await messageBroker.sendMessage({
+          from: this.name,
+          to: 'BlackAgent',
+          type: 'status_check',
+          payload: {}
+        });
+      }
 
-      await messageBroker.sendMessage({
-        from: this.name,
-        to: 'KuzeAgent',
-        type: 'status_check',
-        payload: {}
-      });
+      if (messageBroker.getArbiter('KuzeAgent')) {
+        await messageBroker.sendMessage({
+          from: this.name,
+          to: 'KuzeAgent',
+          type: 'status_check',
+          payload: {}
+        });
+      }
 
       this.logger.info(`[${this.name}] Agent coordination established`);
     } catch (err) {
@@ -497,12 +500,14 @@ class LearningVelocityTracker extends BaseArbiter {
   async checkResourceConstraints() {
     // Query Black for current system health
     try {
-      await messageBroker.sendMessage({
-        from: this.name,
-        to: 'BlackAgent',
-        type: 'get-metrics',
-        payload: {}
-      });
+      if (messageBroker.getArbiter('BlackAgent')) {
+        await messageBroker.sendMessage({
+          from: this.name,
+          to: 'BlackAgent',
+          type: 'get-metrics',
+          payload: {}
+        });
+      }
 
       // In production, would wait for response and analyze
       // For now, use local os metrics

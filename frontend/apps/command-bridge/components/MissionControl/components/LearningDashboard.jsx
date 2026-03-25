@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { TrendingUp, TrendingDown, Brain, Award, Target, Activity, Zap, Radio } from 'lucide-react';
+import { AreaChart, Area, YAxis, ResponsiveContainer, ReferenceLine, Tooltip } from 'recharts';
 
 /**
  * Learning Dashboard - Shows SOMA's learning progress and agent performance
@@ -8,6 +9,7 @@ import { TrendingUp, TrendingDown, Brain, Award, Target, Activity, Zap, Radio } 
 export const LearningDashboard = ({ isDemo }) => {
     const [performance, setPerformance] = useState(null);
     const [learningEvents, setLearningEvents] = useState([]);
+    const [equityCurve, setEquityCurve] = useState([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -18,16 +20,19 @@ export const LearningDashboard = ({ isDemo }) => {
 
     const fetchPerformanceData = async () => {
         try {
-            const [perfRes, eventsRes] = await Promise.all([
+            const [perfRes, eventsRes, eqRes] = await Promise.all([
                 fetch('/api/performance/summary'),
-                fetch('/api/learning/events?limit=5')
+                fetch('/api/learning/events?limit=5'),
+                fetch('/api/performance/equity-curve?days=30')
             ]);
 
             const perfData = await perfRes.json();
             const eventsData = await eventsRes.json();
+            const eqData = await eqRes.json().catch(() => ({}));
 
             setPerformance(perfData.summary || perfData);
             setLearningEvents(eventsData.events || []);
+            if (eqData.curve?.length >= 2) setEquityCurve(eqData.curve);
             setLoading(false);
         } catch (error) {
             console.error('Failed to fetch performance data:', error);
@@ -142,6 +147,45 @@ export const LearningDashboard = ({ isDemo }) => {
                     )}
                 </div>
             </div>
+
+            {/* Equity Curve */}
+            {equityCurve.length >= 2 && (() => {
+                const first = equityCurve[0]?.equity || 0;
+                const last = equityCurve[equityCurve.length - 1]?.equity || 0;
+                const isUp = last >= first;
+                return (
+                    <div className="bg-black/40 border border-white/10 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-2">
+                            <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                                <TrendingUp className="w-3 h-3" /> 30-Day Equity
+                            </p>
+                            <span className={`text-[10px] font-mono font-bold ${isUp ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {isUp ? '+' : ''}${(last - first).toFixed(0)}
+                            </span>
+                        </div>
+                        <div className="h-16">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={equityCurve} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+                                    <defs>
+                                        <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor={isUp ? '#10b981' : '#ef4444'} stopOpacity={0.3} />
+                                            <stop offset="95%" stopColor={isUp ? '#10b981' : '#ef4444'} stopOpacity={0} />
+                                        </linearGradient>
+                                    </defs>
+                                    <YAxis domain={['auto', 'auto']} hide={true} />
+                                    <ReferenceLine y={first} stroke="#94a3b8" strokeOpacity={0.3} strokeDasharray="3 3" />
+                                    <Tooltip
+                                        contentStyle={{ background: '#0a0a0f', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', fontSize: '9px', padding: '4px 8px' }}
+                                        formatter={(v) => [`$${(v || 0).toFixed(0)}`, 'Equity']}
+                                        labelStyle={{ color: '#71717a' }}
+                                    />
+                                    <Area type="monotone" dataKey="equity" stroke={isUp ? '#10b981' : '#ef4444'} strokeWidth={1.5} fill="url(#eqGrad)" dot={false} isAnimationActive={false} />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        </div>
+                    </div>
+                );
+            })()}
 
             {/* Open Positions — only show when no closed trades yet */}
             {hasLiveActivity && !hasClosed && openPositions.length > 0 && (

@@ -419,4 +419,59 @@ router.get('/slippage', (req, res) => {
     }
 });
 
+/**
+ * GET /api/finance/news
+ * Fetch real financial news for a symbol via Alpaca News API
+ * Falls back to empty array if Alpaca not connected or unavailable
+ * Query: ?symbol=BTC-USD&limit=5
+ */
+const HIGH_NEWS_WORDS = ['crash', 'surge', 'fed ', 'rate hike', 'inflation', 'bankrupt', 'sec ', 'halt', 'ban ', 'record high', 'record low', 'plunge', 'soar', 'spike', 'collapse', 'crisis', 'emergency', 'default'];
+const LOW_NEWS_WORDS = ['update', 'announces', 'partnership', 'launches', 'quarterly earnings', 'hires', 'names ', 'appoints', 'expands'];
+
+function classifyNewsImpact(headline) {
+    const h = (headline || '').toLowerCase();
+    if (HIGH_NEWS_WORDS.some(w => h.includes(w))) return 'HIGH';
+    if (LOW_NEWS_WORDS.some(w => h.includes(w))) return 'LOW';
+    return 'MED';
+}
+
+router.get('/news', async (req, res) => {
+    const { symbol, limit = 5 } = req.query;
+    if (!symbol) return res.json({ success: true, items: [] });
+
+    // Normalize: BTC-USD → BTC/USD for Alpaca crypto news, stocks stay as-is
+    const alpacaSymbol = symbol.includes('-USD')
+        ? symbol.replace('-USD', '/USD')
+        : symbol;
+
+    try {
+        if (alpacaService.isConnected && alpacaService.apiKey) {
+            const url = `https://data.alpaca.markets/v1beta1/news?symbols=${encodeURIComponent(alpacaSymbol)}&limit=${parseInt(limit)}&sort=desc`;
+            const resp = await fetch(url, {
+                headers: {
+                    'APCA-API-KEY-ID': alpacaService.apiKey,
+                    'APCA-API-SECRET-KEY': alpacaService.secretKey
+                },
+                signal: AbortSignal.timeout(5000)
+            });
+
+            if (resp.ok) {
+                const data = await resp.json();
+                const items = (data.news || []).map(n => ({
+                    time: new Date(n.created_at).toLocaleTimeString(),
+                    source: (n.source || 'ALPACA NEWS').toUpperCase().slice(0, 16),
+                    headline: n.headline,
+                    url: n.url || null,
+                    impact: classifyNewsImpact(n.headline)
+                }));
+                return res.json({ success: true, items });
+            }
+        }
+    } catch (e) {
+        console.warn('[Finance/News] Alpaca news unavailable:', e.message);
+    }
+
+    res.json({ success: true, items: [] });
+});
+
 export default router;

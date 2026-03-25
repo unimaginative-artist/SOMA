@@ -105,7 +105,7 @@ export class SOMArbiterV3 extends SOMArbiterV2_QuadBrain {
     }
 
     // System 2: Slow Path
-    const qbResult = await super.reason(query, context);
+    const qbResult = await super.reason(queryStr, context);
     const response = {
         ok: true,
         text: qbResult?.text || qbResult?.response || (typeof qbResult === 'string' ? qbResult : ''),

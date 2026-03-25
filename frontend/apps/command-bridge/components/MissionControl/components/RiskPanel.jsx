@@ -195,6 +195,27 @@ export const RiskPanel = ({ metrics, onUpdateAllocation, onUpdateWallet }) => {
                             </div>
                         </div>
 
+                        {/* Sharpe / Sortino — shows once we have ≥5 closed trades */}
+                        {(metrics.sharpeRatio != null || metrics.sortinoRatio != null) && (
+                            <div className="p-2 rounded bg-black/40 border border-white/5">
+                                <div className="text-[9px] text-slate-500 uppercase mb-2">Risk-Adjusted Returns</div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <div className="text-[9px] text-slate-500 mb-0.5">SHARPE</div>
+                                        <div className={`text-base font-mono font-bold ${metrics.sharpeRatio == null ? 'text-slate-600' : metrics.sharpeRatio >= 1 ? 'text-emerald-400' : metrics.sharpeRatio >= 0 ? 'text-amber-400' : 'text-red-400'}`}>
+                                            {metrics.sharpeRatio != null ? metrics.sharpeRatio.toFixed(2) : '--'}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[9px] text-slate-500 mb-0.5">SORTINO</div>
+                                        <div className={`text-base font-mono font-bold ${metrics.sortinoRatio == null ? 'text-slate-600' : metrics.sortinoRatio >= 1 ? 'text-emerald-400' : metrics.sortinoRatio >= 0 ? 'text-amber-400' : 'text-red-400'}`}>
+                                            {metrics.sortinoRatio != null ? metrics.sortinoRatio.toFixed(2) : '--'}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                     </div>
                 </div>
             </div>

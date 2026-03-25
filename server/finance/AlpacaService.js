@@ -476,6 +476,52 @@ class AlpacaService {
   }
 
   /**
+   * Place a trailing stop order.
+   * @param {string} symbol
+   * @param {string} side - 'buy' or 'sell'
+   * @param {number} qty
+   * @param {number} trailPercent - trail distance as % (e.g. 2 = 2%)
+   */
+  async placeTrailingStopOrder(symbol, side, qty, trailPercent) {
+    this._checkConnection();
+    this._checkRateLimit();
+
+    if (!symbol || !side || !qty || !trailPercent) {
+      throw new Error('symbol, side, qty, and trailPercent are required');
+    }
+    if (trailPercent <= 0 || trailPercent > 50) {
+      throw new Error('trailPercent must be between 0 and 50');
+    }
+
+    try {
+      console.log(`[Alpaca] Placing trailing stop: ${side.toUpperCase()} ${qty} ${symbol} trail=${trailPercent}%`);
+      const order = await this.client.createOrder({
+        symbol: symbol.toUpperCase(),
+        qty,
+        side,
+        type: 'trailing_stop',
+        time_in_force: 'gtc',
+        trail_percent: trailPercent.toString()
+      });
+
+      console.log(`[Alpaca] Trailing stop submitted: ${order.id} (${order.status})`);
+      return {
+        id: order.id,
+        symbol: order.symbol,
+        side: order.side,
+        qty: parseFloat(order.qty),
+        type: 'trailing_stop',
+        trailPercent,
+        status: order.status,
+        submitted_at: order.submitted_at
+      };
+    } catch (error) {
+      console.error(`[Alpaca] Trailing stop failed:`, error.message);
+      throw new Error(`Failed to place trailing stop: ${error.message}`);
+    }
+  }
+
+  /**
    * Get order status
    */
   async getOrderStatus(orderId) {

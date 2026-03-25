@@ -210,6 +210,24 @@ router.post('/order', async (req, res) => {
 });
 
 /**
+ * POST /api/alpaca/trailing-stop
+ * Place a trailing stop order
+ * Body: { symbol, side, qty, trailPercent }
+ */
+router.post('/trailing-stop', async (req, res) => {
+    try {
+        const { symbol, side, qty, trailPercent } = req.body;
+        if (!symbol || !side || !qty || !trailPercent) {
+            return res.status(400).json({ success: false, error: 'symbol, side, qty, and trailPercent are required' });
+        }
+        const order = await alpacaService.placeTrailingStopOrder(symbol, side, parseFloat(qty), parseFloat(trailPercent));
+        res.json({ success: true, order });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
  * GET /api/alpaca/quote/:symbol
  * Get real-time quote for a symbol
  */

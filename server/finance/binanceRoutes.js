@@ -279,4 +279,101 @@ router.post('/emergency-stop', async (req, res) => {
     }
 });
 
+// ==================== BATCH PRICES ====================
+
+/**
+ * GET /api/binance/prices?symbols=BTC-USD,ETH-USD,SOL-USD
+ * Returns current prices for multiple symbols in one call (no auth required).
+ * Used by MissionControlApp to hydrate INITIAL_TICKERS on mount.
+ */
+const SYMBOL_TO_BINANCE = {
+    'BTC-USD': 'BTCUSDT', 'ETH-USD': 'ETHUSDT', 'SOL-USD': 'SOLUSDT',
+    'DOGE-USD': 'DOGEUSDT', 'XRP-USD': 'XRPUSDT', 'ADA-USD': 'ADAUSDT',
+    'AVAX-USD': 'AVAXUSDT', 'DOT-USD': 'DOTUSDT', 'LINK-USD': 'LINKUSDT',
+    'BNB-USD': 'BNBUSDT', 'MATIC-USD': 'MATICUSDT', 'UNI-USD': 'UNIUSDT',
+    'ATOM-USD': 'ATOMUSDT', 'LTC-USD': 'LTCUSDT', 'BCH-USD': 'BCHUSDT',
+    'NEAR-USD': 'NEARUSDT', 'APT-USD': 'APTUSDT', 'INJ-USD': 'INJUSDT',
+    'SUI-USD': 'SUIUSDT'
+};
+const BINANCE_TO_SYMBOL = Object.fromEntries(Object.entries(SYMBOL_TO_BINANCE).map(([k, v]) => [v, k]));
+
+router.get('/prices', async (req, res) => {
+    const requested = (req.query.symbols || 'BTC-USD,ETH-USD,SOL-USD,DOGE-USD,XRP-USD')
+        .split(',').map(s => s.trim()).filter(Boolean);
+
+    const binanceSymbols = requested
+        .map(s => SYMBOL_TO_BINANCE[s])
+        .filter(Boolean); // skip unmapped (stocks, futures — no Binance price)
+
+    if (!binanceSymbols.length) return res.json({ success: true, prices: {} });
+
+    try {
+        const symbolsJson = JSON.stringify(binanceSymbols);
+        const url = `https://api.binance.com/api/v3/ticker/price?symbols=${encodeURIComponent(symbolsJson)}`;
+        const resp = await fetch(url, { signal: AbortSignal.timeout(4000) });
+        if (!resp.ok) throw new Error(`Binance ${resp.status}`);
+        const data = await resp.json();
+
+        const prices = {};
+        for (const item of (Array.isArray(data) ? data : [])) {
+            const dashSymbol = BINANCE_TO_SYMBOL[item.symbol];
+            if (dashSymbol) prices[dashSymbol] = parseFloat(item.price);
+        }
+
+        return res.json({ success: true, prices });
+    } catch (e) {
+        return res.json({ success: false, prices: {}, error: e.message });
+    }
+});
+
+// ==================== ORDER BOOK ====================
+
+/**
+ * GET /api/binance/orderbook/:symbol
+ * Returns bid/ask depth for MarketRadar. Tries LowLatencyEngine cache first,
+ * then falls back to live Binance REST snapshot.
+ */
+router.get('/orderbook/:symbol', async (req, res) => {
+    const { symbol } = req.params;
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+
+    // Try LowLatencyEngine in-memory orderbook (populated when ENGAGED)
+    try {
+        const llEngine = global.SOMA?.lowLatencyEngine;
+        if (llEngine?.orderBook?.has?.(symbol)) {
+            const ob = llEngine.orderBook.get(symbol);
+            if (ob?.bids || ob?.asks) {
+                return res.json({ success: true, data: { bids: ob.bids || [], asks: ob.asks || [], metrics: ob.metrics || {} } });
+            }
+        }
+    } catch { /* fall through */ }
+
+    // Normalize symbol for Binance (BTC-USD → BTCUSDT)
+    const symbolMap = {
+        'BTC-USD': 'BTCUSDT', 'ETH-USD': 'ETHUSDT', 'SOL-USD': 'SOLUSDT',
+        'BNB-USD': 'BNBUSDT', 'ADA-USD': 'ADAUSDT', 'DOGE-USD': 'DOGEUSDT',
+        'XRP-USD': 'XRPUSDT', 'AVAX-USD': 'AVAXUSDT', 'DOT-USD': 'DOTUSDT'
+    };
+    const binanceSymbol = symbolMap[symbol] || symbol.replace(/[-/]/g, '').toUpperCase();
+
+    try {
+        const url = `https://api.binance.com/api/v3/depth?symbol=${binanceSymbol}&limit=${limit}`;
+        const resp = await fetch(url, { signal: AbortSignal.timeout(3000) });
+        if (!resp.ok) throw new Error(`Binance depth API returned ${resp.status}`);
+
+        const raw = await resp.json();
+        const bids = (raw.bids || []).map(([price, qty]) => ({ price: parseFloat(price), qty: parseFloat(qty) }));
+        const asks = (raw.asks || []).map(([price, qty]) => ({ price: parseFloat(price), qty: parseFloat(qty) }));
+
+        const bidTotal = bids.reduce((s, b) => s + b.qty * b.price, 0);
+        const askTotal = asks.reduce((s, a) => s + a.qty * a.price, 0);
+        const imbalance = bidTotal + askTotal > 0 ? (bidTotal - askTotal) / (bidTotal + askTotal) : 0;
+
+        return res.json({ success: true, data: { bids, asks, metrics: { imbalance } } });
+    } catch (e) {
+        // Graceful failure — MarketRadar will use its own simulation fallback
+        return res.json({ success: false, data: null, error: e.message });
+    }
+});
+
 export default router;

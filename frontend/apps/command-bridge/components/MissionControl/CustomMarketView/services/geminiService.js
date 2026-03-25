@@ -1,96 +1,67 @@
-import { GoogleGenAI, Type } from "@google/genai";
-
-const getClient = () => {
-    // Safe access to process.env and import.meta.env
-    let apiKey = undefined;
-    if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
-        apiKey = process.env.API_KEY;
-    } else if (import.meta && import.meta.env && import.meta.env.VITE_API_KEY) {
-        apiKey = import.meta.env.VITE_API_KEY;
-    }
-
-    if (!apiKey) {
-        console.warn("API Key missing in environment");
-        return null;
-    }
-    return new GoogleGenAI({ apiKey });
-};
+/**
+ * Market atmosphere analysis — previously called Gemini (cancelled).
+ * Now routes through SOMA's QuadBrain (DeepSeek → Ollama fallback).
+ *
+ * Returns { atmosphere, poeticState, protocolAdaptation, predictions }
+ * On failure returns null → CustomMarketView falls back to generateFallbackAnalysis()
+ */
 
 export const analyzeMarketAtmosphere = async (data, activeProtocol = 'UNKNOWN') => {
-    const ai = getClient();
-    if (!ai) return null;
+    const bars = (data || []).slice(-30);
+    if (!bars.length) return null;
 
-    // Simplify data for token efficiency
-    const recentData = data.slice(-50).map(p => ({
-        c: p.close.toFixed(2),
-        v: p.volume
-    }));
+    const latest = bars[bars.length - 1];
+    const first = bars[0];
+    if (!latest?.close || !first?.close) return null;
 
-    const prompt = `
-    You are 'Market View', a cyberpunk market observer and strategist.
-    
-    CONTEXT:
-    - Active Protocol: "${activeProtocol}"
-    - Task: Analyze market structure and advise the active protocol on tactical adaptations.
-    
-    Analyze this sequence of market price data.
-    1. Describe the "shape" and "weather" of the market terrain.
-    2. PROJECT 4 distinct future scenarios (20 points each) based on the data.
-       CRITICAL: Ensure the first point of every prediction is close to the last data point.
-    3. ADVISE specific behavioral changes for the "${activeProtocol}" strategy based on this terrain (e.g., "Tighten stops", "Increase aggression", "Hedge now").
-    
-    Use terms like: Ridge, Valley, Flow, Fracture, Tension, Bloom, Static, Void.
-  `;
+    const trend = latest.close > first.close ? 'bullish' : 'bearish';
+    const pctChange = ((latest.close - first.close) / first.close * 100).toFixed(2);
 
-    // Define schema for strict JSON output
-    const schema = {
-        type: Type.OBJECT,
-        properties: {
-            atmosphere: {
-                type: Type.STRING,
-                description: "A single uppercase word describing the vibe (e.g. ELECTRIC, DORMANT, FRACTURED)."
-            },
-            poeticState: {
-                type: Type.STRING,
-                description: "A short, haiku-like sentence describing the movement pattern visually."
-            },
-            protocolAdaptation: {
-                type: Type.STRING,
-                description: "A tactical directive for the active protocol (max 5 words, uppercase). E.g. 'ENGAGE DEFENSIVE SUB-ROUTINES' or 'MAXIMIZE ALPHA CAPTURE'."
-            },
-            predictions: {
-                type: Type.ARRAY,
-                description: "Four distinct projected price paths: SAFE, BREAKOUT, DROP, and AVERAGE.",
-                items: {
-                    type: Type.OBJECT,
-                    properties: {
-                        type: { type: Type.STRING, enum: ['SAFE', 'BREAKOUT', 'AVERAGE', 'DROP'] },
-                        data: { type: Type.ARRAY, items: { type: Type.NUMBER } }
-                    },
-                    required: ['type', 'data']
-                }
-            }
-        },
-        required: ["atmosphere", "poeticState", "predictions", "protocolAdaptation"]
-    };
+    // Recent bar summary for SOMA context (last 10 bars)
+    const barSummary = bars.slice(-10).map(b =>
+        `${b.time || ''}: C=${parseFloat(b.close).toFixed(2)} V=${Math.round((b.volume || 0) / 1000)}k`
+    ).join(' | ');
 
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.0-flash-exp',
-            contents: [
-                { role: 'user', parts: [{ text: prompt }, { text: `DATA_PACKET: ${JSON.stringify(recentData)}` }] }
-            ],
-            config: {
-                responseMimeType: 'application/json',
-                responseSchema: schema
-            }
+        const res = await fetch('/api/soma/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message:
+                    `You are Market View, a cyberpunk market analyst for protocol ${activeProtocol}. ` +
+                    `Market trend: ${trend} (${pctChange}% over ${bars.length} bars). ` +
+                    `Last 10 bars [time: close volume]: ${barSummary}. ` +
+                    `Respond ONLY with valid JSON, no markdown, no explanation:\n` +
+                    `{"atmosphere":"ELECTRIC|DORMANT|FRACTURED|VOLATILE|CALM","poeticState":"one evocative sentence describing price movement","protocolAdaptation":"MAX 5 WORDS UPPERCASE TACTICAL DIRECTIVE"}`
+            })
         });
 
-        const text = response.text();
-        if (!text) return null;
-        return JSON.parse(text);
-    } catch (error) {
-        console.error("Gemini interpretation failed:", error);
-        return null;
+        if (!res.ok) throw new Error(`${res.status}`);
+        const body = await res.json();
+        const text = (body.response || body.message || '').trim();
+
+        // Extract JSON — SOMA sometimes wraps in markdown
+        const jsonMatch = text.match(/\{[\s\S]*?\}/);
+        if (!jsonMatch) throw new Error('No JSON in response');
+
+        const parsed = JSON.parse(jsonMatch[0]);
+
+        // Validate required fields
+        const validAtmospheres = ['ELECTRIC', 'DORMANT', 'FRACTURED', 'VOLATILE', 'CALM'];
+        if (!validAtmospheres.includes(parsed.atmosphere)) {
+            parsed.atmosphere = trend === 'bullish' ? 'ELECTRIC' : 'FRACTURED';
+        }
+
+        // Return qualitative fields; CustomMarketView will use its own generateFallbackAnalysis()
+        // for the prediction paths (which require canvas-context math best done locally)
+        return {
+            atmosphere: parsed.atmosphere,
+            poeticState: parsed.poeticState || 'Price moves through uncertain terrain.',
+            protocolAdaptation: parsed.protocolAdaptation || 'ADAPT TO CURRENT CONDITIONS',
+            predictions: null // signal to CustomMarketView to generate paths locally
+        };
+    } catch (e) {
+        console.warn('[MarketAtmosphere] SOMA unavailable, falling back:', e.message);
+        return null; // CustomMarketView calls generateFallbackAnalysis() on null
     }
 };

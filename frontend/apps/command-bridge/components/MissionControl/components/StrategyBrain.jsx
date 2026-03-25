@@ -88,8 +88,8 @@ export const StrategyBrain = ({ strategies }) => {
 
                                     <div className="bg-black/30 p-2 rounded border border-soma-800">
                                         <span className="text-slate-500 block mb-0.5">PROFIT FACTOR</span>
-                                        <span className="text-soma-success font-mono text-lg">
-                                            {strategy.profitFactor ? strategy.profitFactor.toFixed(2) : (strategy.pnl > 0 ? '1.45' : '0.85')}
+                                        <span className={`font-mono text-lg ${strategy.profitFactor ? (parseFloat(strategy.profitFactor) >= 1 ? 'text-soma-success' : 'text-soma-danger') : 'text-slate-600'}`}>
+                                            {strategy.profitFactor || '--'}
                                         </span>
                                     </div>
 
@@ -98,14 +98,13 @@ export const StrategyBrain = ({ strategies }) => {
                                             <span className="text-slate-500 block">LAST EXECUTION</span>
                                             <div className="flex items-center gap-1 text-slate-300 mt-1">
                                                 <Clock className="w-3 h-3" />
-                                                <span>{strategy.lastExecution || (strategy.active ? 'Just now' : 'Inactive')}</span>
+                                                <span>{strategy.lastExecution || (strategy.active ? '--' : 'Inactive')}</span>
                                             </div>
                                         </div>
                                         <div className="text-right">
                                             <span className="text-slate-500 block">AVG RETURN</span>
-                                            <span className={`font-mono ${strategy.avgReturn >= 0 ? 'text-soma-success' : 'text-soma-danger'}`}>
-                                                {strategy.avgReturn ? `${strategy.avgReturn > 0 ? '+' : ''}${strategy.avgReturn.toFixed(2)}%` :
-                                                 strategy.pnl > 0 ? '+0.42%' : '-0.18%'}
+                                            <span className={`font-mono ${strategy.avgReturn != null ? (strategy.avgReturn >= 0 ? 'text-soma-success' : 'text-soma-danger') : 'text-slate-600'}`}>
+                                                {strategy.avgReturn != null ? `${strategy.avgReturn > 0 ? '+' : ''}${strategy.avgReturn.toFixed(2)}%` : '--'}
                                             </span>
                                         </div>
                                     </div>

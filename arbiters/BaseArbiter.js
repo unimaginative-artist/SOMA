@@ -619,9 +619,11 @@ export const ArbiterCapability = {
   HIGH_LEVEL_PLANNING: 'high-level-planning',
   MARKET_ANALYSIS: 'market-analysis',
   CAUSAL_REASONING: 'causal-reasoning',
-  SIMULATIONS: 'simulations',
-  PATTERN_RECOGNITION: 'pattern-recognition',
-  TRAINING_INITIATION: 'training-initiation'
+  REASONING: 'reasoning',
+  TOOL_EXECUTION: 'tool_execution',
+  ADVERSARIAL_DEBATE: 'adversarial_debate',
+  KNOWLEDGE_SYNTHESIS: 'knowledge_synthesis',
+  PATTERN_RECOGNITION: 'pattern-recognition'
 };
 
 export class BaseArbiterV4 extends EventEmitter {
@@ -697,280 +699,79 @@ export class BaseArbiterV4 extends EventEmitter {
     this.heartbeatInterval = null;
     
     this._setupRateLimits();
-    
-    if (this.registry) {
-      this.registry.register(this);
-      this._startHeartbeat();
-    }
-    
-    this.auditLogger.info('Arbiter initialized', {
-      arbiter: this.name,
-      role: this.role,
-      generation: this.generation,
-      version: this.version
-    });
   }
-  
+
   _validateConfig(opts) {
     const schema = {
       name: { type: 'string' },
-      role: { type: 'string', enum: Object.values(ArbiterRole) },
-      capabilities: { 
-        type: 'object',
-        validate: (caps) => {
-            const validValues = Object.values(ArbiterCapability);
-            const allValid = Array.isArray(caps) && caps.every(c => validValues.includes(c));
-            if (!allValid) {
-                console.error(`[BaseArbiter] Capability Validation Failed!`);
-                console.error(`  Received: ${JSON.stringify(caps)}`);
-                console.error(`  Expected one of: ${JSON.stringify(validValues)}`);
-            }
-            return allValid;
-        }
-      },
-      generation: { type: 'number', min: 0 },
-      maxContextSize: { type: 'number', min: 1, max: 10000 },
-      maxClones: { type: 'number', min: 1, max: 100 },
-      maxMicroAgents: { type: 'number', min: 1, max: 1000 }
+      role: { type: 'string', enum: Object.values(ArbiterRole) }
     };
     
-    ConfigValidator.validate(opts, schema);
-  }
-  
-  _setupRateLimits() {
-    this.rateLimiter.setLimit('memorize', 100, 60000);
-    this.rateLimiter.setLimit('recall', 200, 60000);
-    this.rateLimiter.setLimit('clone', 5, 300000);
-    this.rateLimiter.setLimit('spawnMicroAgent', 20, 60000);
+    return ConfigValidator.validate(opts, schema);
   }
 
-  // ========== LOGGING WRAPPER ==========
-
-  log(level, message, context = {}) {
-    this.auditLogger.log(level, message, { arbiter: this.name, ...context });
-  }
-
-  info(message, context) { this.log('info', message, context); }
-  success(message, context) { this.log('success', message, context); }
-  warn(message, context) { this.log('warn', message, context); }
-  error(message, context) { this.log('error', message, context); }
-  debug(message, context) { this.log('debug', message, context); }
-  
-  // ========== HEARTBEAT (SUPERVISION) ==========
-  
-  _startHeartbeat() {
-    this.heartbeatInterval = setInterval(() => {
-      if (this.registry) {
-        this.registry.heartbeat(this.name, this._getHealthStatus());
-      }
-    }, 5000);
-  }
-
-  /**
-   * Lifecycle hook for subclasses to perform initialization logic.
-   */
-  async onInitialize() {
-    return true;
-  }
-
-  // ========== CORE FUNCTIONALITY (OVERRIDES EXPECTED) ==========
-  
-  async initialize() {
-    this.status = 'initializing';
-    try {
-      await this.memory.stats(); // Check memory connection
-      
-      // Call subclass-specific initialization
-      await this.onInitialize();
-      
-      this.status = 'active';
-      this.auditLogger.info('Arbiter active');
-    } catch (error) {
-      this.status = 'error';
-      throw new ArbiterError('Initialization failed', { cause: error });
-    }
-  }
-
-  async handleMessage(message) {
-    // Override this
-    this.auditLogger.debug('Message received', { type: message.type });
-    return { status: 'acknowledged' };
-  }
-
-  // ========== MICRO-AGENT MANAGEMENT ==========
-  
-  async spawnMicroAgent(type, task) {
-    return await this.circuitBreaker.execute(async () => {
-      const timer = this.performanceMonitor.startTimer('agentSpawn');
-      
-      try {
-        if (this.microAgents.size >= this.maxMicroAgents) {
-          // Cleanup finished agents first
-          for (const [id, agent] of this.microAgents) {
-            if (agent.status === 'completed' || agent.status === 'failed') {
-              this.microAgents.delete(id);
-            }
-          }
-          
-          if (this.microAgents.size >= this.maxMicroAgents) {
-             throw new ArbiterError('Micro-agent limit reached', { code: 'RESOURCE_EXHAUSTED' });
-          }
-        }
-        
-        await this.rateLimiter.waitForToken('spawnMicroAgent');
-        
-        const agentId = uid('agent');
-        const agent = new BaseMicroAgent({
-          agentId,
-          agentType: type,
-          task
-        });
-        
-        this.microAgents.set(agentId, agent);
-        this.microAgentHistory.add({ id: agentId, type, task, startTime: iso() });
-        this.metrics.microAgentsSpawned++;
-        
-        // Start agent
-        agent.run().then(result => {
-           this.handleAgentResult(agentId, result);
-        }).catch(err => {
-           this.handleAgentResult(agentId, { error: err.message });
-        });
-        
-        this.auditLogger.info('Micro-agent spawned', { agentId, type });
-        return agentId;
-        
-      } finally {
-        timer.end();
-      }
-    });
-  }
-  
-  handleAgentResult(agentId, result) {
-    const agent = this.microAgents.get(agentId);
-    if (agent) {
-       this.auditLogger.info('Micro-agent finished', { agentId, result });
-       // Logic to process result...
-    }
-  }
-
-  // ========== MEMORY OPERATIONS ==========
-
-  async memorize(content, tags = []) {
-    return await this.circuitBreaker.execute(async () => {
-      const timer = this.performanceMonitor.startTimer('memorize');
-      try {
-        await this.rateLimiter.waitForToken('memorize');
-        
-        const item = {
-          content,
-          tags,
-          source: this.name,
-          timestamp: iso()
-        };
-        
-        const result = await this.memory.addItemToBest(item);
-        this.metrics.memoriesStored++;
-        return result;
-      } finally {
-        timer.end();
-      }
-    });
-  }
-
-  async recall(query, limit = 5) {
-    return await this.circuitBreaker.execute(async () => {
-      const timer = this.performanceMonitor.startTimer('recall');
-      try {
-        await this.rateLimiter.waitForToken('recall');
-        const results = await this.memory.hybridSearch(query, limit);
-        this.metrics.memoriesRecalled++;
-        return results;
-      } finally {
-        timer.end();
-      }
-    });
-  }
-
-  // ========== CLONING (SCALING) ==========
-
-  async clone() {
-    return await this.circuitBreaker.execute(async () => {
-      const timer = this.performanceMonitor.startTimer('clone');
-      try {
-        if (this.clones.size >= this.config.maxClones) {
-          throw new ArbiterError('Max clones reached', { code: 'RESOURCE_EXHAUSTED' });
-        }
-        
-        await this.rateLimiter.waitForToken('clone');
-        
-        const cloneId = uid(`${this.name}_clone`);
-        const clone = new this.constructor({
-           ...this.config,
-           name: cloneId,
-           role: this.role,
-           parentId: this.name,
-           generation: this.generation + 1
-        });
-        
-        this.clones.set(cloneId, clone);
-        await clone.initialize();
-        
-        this.metrics.clonesSpawned++;
-        this.auditLogger.info('Cloned self', { cloneId });
-        return clone;
-      } finally {
-        timer.end();
-      }
-    });
-  }
-
-  // ========== EVOLUTION (DNA) ==========
-  
   _generateDNA() {
     return crypto.randomBytes(32).toString('hex');
   }
-  
-  mutate() {
-     const mutation = {
-       timestamp: iso(),
-       type: 'random_shift',
-       change: 'parameters_tweaked'
-     };
-     this.mutations.push(mutation);
-     this.evolutionHistory.push(mutation);
-     // Apply mutation logic...
+
+  _setupRateLimits() {
+    this.rateLimiter.setLimit('memory_store', 100, 60000); // 100 stores per min
+    this.rateLimiter.setLimit('memory_recall', 200, 60000); // 200 recalls per min
+    this.rateLimiter.setLimit('agent_spawn', 10, 60000);   // 10 spawns per min
   }
 
-  // ========== SHUTDOWN ==========
-
-  async shutdown() {
-    this.shutdownRequested = true;
-    this.status = 'shutting_down';
-    
-    if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
-    
-    // Kill clones
-    for (const clone of this.clones.values()) {
-      await clone.shutdown();
+  /**
+   * Legacy compatibility method for logging
+   */
+  log(level, message, context = {}) {
+    if (this.auditLogger && typeof this.auditLogger.log === 'function') {
+        this.auditLogger.log(level, message, context);
+    } else {
+        console.log(`[${this.name}] [${level.toUpperCase()}] ${message}`);
     }
-    
-    // Kill agents
-    for (const agent of this.microAgents.values()) {
-      if (agent.kill) agent.kill();
-    }
-    
-    this.status = 'offline';
-    this.auditLogger.info('Arbiter shutdown complete');
   }
-  
-  // ========== STATUS REPORTING ==========
-  
+
+  async initialize() {
+    if (this.status !== 'idle') return;
+    
+    this.status = 'initializing';
+    this.auditLogger.info(`[${this.name}] 🚀 Booting...`);
+    
+    try {
+      await this.onInitialize();
+      this.status = 'ready';
+      this.auditLogger.success(`[${this.name}] ✅ Active`);
+      
+      // Start heartbeat
+      this.heartbeatInterval = setInterval(() => this._pulse(), 30000);
+      
+    } catch (error) {
+      this.status = 'error';
+      this.auditLogger.error(`[${this.name}] ❌ Failed to start: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async onInitialize() {
+    // Override in subclasses
+  }
+
+  _pulse() {
+    if (this.shutdownRequested) return;
+    this.metrics.uptime = now() - new Date(this.created).getTime();
+    this.emit('heartbeat', this.getStatus());
+  }
+
+  getMetrics() {
+    return this.getStatus();
+  }
+
   getStatus() {
     return {
+      id: this.name,
       name: this.name,
       role: this.role,
-      capabilities: this.capabilities,
+      status: this.status,
       metrics: this.metrics,
       performance: this.performanceMonitor.getStats(),
       circuitBreaker: this.circuitBreaker.getState(),
@@ -983,153 +784,44 @@ export class BaseArbiterV4 extends EventEmitter {
       contextSize: this.context.count,
       created: this.created,
       lastActive: this.lastActive,
-      uptime: Math.floor((now() - this.metrics.uptime) / 1000),
-      status: this.status,
-      health: this._getHealthStatus()
+      uptime: Math.floor(this.metrics.uptime / 1000)
     };
   }
 
-  getMetrics() {
-    return {
-      ...this.metrics,
-      load: this.calculateLoad(),
-      health: this._getHealthStatus().status
-    };
-  }
-
-  calculateLoad() {
-    const agentLoad = this.microAgents.size / this.maxMicroAgents;
-    const contextLoad = this.context.count / this.context.size;
-    const cloneLoad = this.clones.size / this.config.maxClones;
+  async shutdown() {
+    this.shutdownRequested = true;
+    this.status = 'shutting_down';
+    if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+    this.rateLimiter.destroy();
     
-    return Math.min((agentLoad + contextLoad + cloneLoad) / 3, 1);
-  }
-  
-  _getHealthStatus() {
-    const performance = this.performanceMonitor.getStats();
-    const circuitState = this.circuitBreaker.getState();
-    const load = this.calculateLoad();
-    
-    let health = 'healthy';
-    const issues = [];
-    
-    if (circuitState.state === 'OPEN') {
-      health = 'degraded';
-      issues.push('Circuit breaker is open');
+    // Kill all micro-agents
+    for (const agent of this.microAgents.values()) {
+      agent.kill();
     }
     
-    if (performance.memorizeLatency.avg > 1000) {
-      health = 'degraded';
-      issues.push('High memory latency');
-    }
-    
-    if (this.metrics.errorsHandled > 100) {
-      health = 'degraded';
-      issues.push('High error count');
-    }
-    
-    if (load > 0.9) {
-      health = 'degraded';
-      issues.push('High load');
-    }
-    
-    if (this.metrics.timeouts > 10) {
-      health = 'degraded';
-      issues.push('Multiple timeouts');
-    }
-    
-    return { status: health, issues, load };
-  }
-  
-  async killMicroAgent(agentId) {
-    try {
-      const agent = this.microAgents.get(agentId);
-      if (agent) {
-        agent.kill();
-        this.microAgents.delete(agentId);
-        
-        this.auditLogger.info('Micro-agent killed', {
-          arbiter: this.name,
-          agentId
-        });
-        
-        return true;
-      }
-      return false;
-    } catch (error) {
-      this.auditLogger.error('Failed to kill micro-agent', {
-        arbiter: this.name,
-        agentId,
-        error: error.message
-      });
-      throw error;
-    }
-  }
-  
-  getDiagnostics() {
-    return {
-      status: this.getStatus(),
-      logs: this.auditLogger.getLogs({ arbiter: this.name }),
-      performance: this.performanceMonitor.getStats(),
-      circuitBreaker: this.circuitBreaker.getState(),
-      rateLimiter: this.rateLimiter.getStats(),
-      dna: this.dna,
-      evolutionHistory: this.evolutionHistory,
-      recentMicroAgents: this.microAgentHistory.getRecent(10),
-      recentContext: this.context.getRecent(10)
-    };
+    this.emit('shutdown');
+    this.status = 'offline';
+    return { success: true };
   }
 }
 
-// ========== ERROR CLASSES ==========
-
-class Task {
-  constructor(id, type, data) {
-    this.id = id;
-    this.type = type;
-    this.data = data;
-    this.status = 'pending';
-  }
-}
-
-class ArbiterResult {
-  constructor(success, data = null, error = null) {
-    this.success = success;
-    this.data = data;
-    this.error = error;
-  }
-}
-
-class ArbiterError extends Error {
+/**
+ * Custom Error Classes
+ */
+export class ArbiterError extends Error {
   constructor(message, context = {}) {
     super(message);
     this.name = 'ArbiterError';
     this.context = context;
-    this.timestamp = iso();
+    this.timestamp = new Date().toISOString();
   }
 }
 
-class ArbiterMemoryError extends ArbiterError { constructor(m, c) { super(m, c); this.name = 'ArbiterMemoryError'; } }
-class ArbiterSecurityError extends ArbiterError { constructor(m, c) { super(m, c); this.name = 'ArbiterSecurityError'; } }
-class ArbiterCapabilityError extends ArbiterError { constructor(m, c) { super(m, c); this.name = 'ArbiterCapabilityError'; } }
-class ArbiterTimeoutError extends ArbiterError { constructor(m, c) { super(m, c); this.name = 'ArbiterTimeoutError'; } }
-
-export {
-  CircularBuffer,
-  MovingAverage,
-  PerformanceMonitor,
-  CircuitBreaker,
-  RateLimiter,
-  ConfigValidator,
-  AuditLogger,
-  withTimeout,
-  ArbiterResult,
-  Task,
-  ArbiterError,
-  ArbiterMemoryError,
-  ArbiterSecurityError,
-  ArbiterCapabilityError,
-  ArbiterTimeoutError
-};
+export class ArbiterTimeoutError extends ArbiterError {
+  constructor(message, context = {}) {
+    super(message, context);
+    this.name = 'ArbiterTimeoutError';
+  }
+}
 
 export default BaseArbiterV4;

@@ -14,18 +14,14 @@ const SomaPlanViewer = ({ isConnected }) => {
     if (!isConnected) return;
     setLoading(true);
     try {
-      const response = await somaBackend.sendMessage({
-        from: 'SomaPlanViewer',
-        to: 'SomaUnifiedBackend',
-        type: 'plan:fetch',
-        payload: {}
-      });
-
-      if (response.success) {
-        setContent(response.plan || '');
-        setUpdatedAt(response.updatedAt);
+      const res = await fetch('/api/soma/plan');
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      const data = await res.json();
+      if (data.success) {
+        setContent(data.plan || '');
+        setUpdatedAt(data.updatedAt);
       } else {
-        setContent(`*Failed to load plan: ${response.error || 'Unknown error'}.*`);
+        setContent(`*Failed to load plan: ${data.error || 'Unknown error'}.*`);
       }
     } catch (error) {
       console.error('Error fetching plan:', error);

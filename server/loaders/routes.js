@@ -16,10 +16,10 @@ import exchangeRoutes from '../../server/finance/exchangeRoutes.js';
 import binanceRoutes from '../../server/finance/binanceRoutes.js';
 import hyperliquidRoutes from '../../server/finance/hyperliquidRoutes.js';
 import backtestRoutes from '../../server/finance/backtestRoutes.js';
+import alertRoutes from '../../server/finance/alertRoutes.js';
 import createGuardianRoutes from '../../server/finance/guardianRoutes.js';
 import autonomousRoutes from '../../server/finance/autonomousRoutes.js';
 import gridBotRoutes from '../../server/finance/gridBotRoutes.js';
-import conceiveRoutes from '../../server/routes/conceiveRoutes.js';
 import kevinRoutes from '../../server/routes/kevinRoutes.js';
 import pulseRoutes from '../../server/routes/pulseRoutes.js';
 import arbiteriumRoutes from '../../server/routes/arbiteriumRoutes.js';
@@ -30,7 +30,7 @@ import { toggleAutopilot, getAutopilotStatus } from './extended.js';
 import { buildSystemSnapshot } from '../utils/systemState.js';
 import { executeCommand } from '../utils/commandRouter.js';
 
-export function loadRoutes(app, system) {
+export async function loadRoutes(app, system) {
     console.log('\n[Loader] 🛣️  Mounting Production API Routes...');
 
     const allowedRoots = (process.env.SOMA_ALLOWED_PATHS || '')
@@ -172,7 +172,7 @@ export function loadRoutes(app, system) {
         const vt = system.velocityTracker || system.learningVelocityTracker;
         res.json({
             success: true,
-            metrics: vt?.getMetrics ? vt.getStats() : { velocity: 1.0, progress: 0 }
+            metrics: vt?.getMetrics ? vt.getMetrics() : { velocity: 1.0, progress: 0 }
         });
     });
 
@@ -297,6 +297,82 @@ export function loadRoutes(app, system) {
         } catch (error) {
             console.error('[Routes] /api/soma/reason error:', error.message);
             res.status(500).json({ success: false, error: error.message });
+        }
+    });
+
+    // ── Arbiter Inventory: SOMA's self-knowledge of available capabilities ──
+    app.get('/api/arbiter/inventory', (req, res) => {
+        if (!system.arbiterLoader) return res.status(503).json({ error: 'ArbiterLoader offline' });
+        res.json({ success: true, inventory: system.arbiterLoader.getInventory() });
+    });
+
+    app.post('/api/arbiter/load', async (req, res) => {
+        const { capability, file } = req.body || {};
+        if (!system.arbiterLoader) return res.status(503).json({ error: 'ArbiterLoader offline' });
+        try {
+            const instance = capability
+                ? await system.arbiterLoader.loadForCapability(capability)
+                : await system.arbiterLoader.loadByFile(file);
+            if (!instance) return res.status(404).json({ success: false, error: 'Arbiter not found or failed to load' });
+            res.json({ success: true, name: instance.name || file || capability });
+        } catch (err) {
+            res.status(500).json({ success: false, error: err.message });
+        }
+    });
+
+    app.post('/api/arbiter/rebuild-manifest', async (req, res) => {
+        if (!system.arbiterLoader) return res.status(503).json({ error: 'ArbiterLoader offline' });
+        try {
+            const count = await system.arbiterLoader.rebuildManifest();
+            res.json({ success: true, capabilities: count });
+        } catch (err) {
+            res.status(500).json({ success: false, error: err.message });
+        }
+    });
+
+    // ── Engineering Swarm: on-demand self-modification trigger ──────────────
+    // Accepts { filepath, request } and streams SSE phase events back.
+    // Used by MAX and manual triggers. Safe: CommandPolicyEngine blocks dangerous cmds.
+    app.post('/api/soma/engineering/modify', async (req, res) => {
+        const { filepath, request: modRequest } = req.body || {};
+
+        if (!filepath || !modRequest) {
+            return res.status(400).json({ error: 'filepath and request are both required' });
+        }
+
+        const swarm = system.engineeringSwarm;
+        if (!swarm) {
+            return res.status(503).json({ error: 'EngineeringSwarm offline — system still booting (try again in ~90s)' });
+        }
+
+        // SSE headers
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders();
+
+        const send = (event, data) => {
+            try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* client disconnected */ }
+        };
+
+        send('accepted', { filepath, request: modRequest, timestamp: new Date().toISOString() });
+        console.log(`[EngineeringRoute] 🔧 Swarm modify started — ${filepath}: ${modRequest.slice(0, 80)}`);
+
+        try {
+            const result = await swarm.modifyCode(filepath, modRequest, (phase, message) => {
+                send('phase', { phase, message });
+            });
+
+            if (result.success) {
+                send('complete', { success: true, sessionId: result.sessionId, duration: result.duration });
+            } else {
+                send('error', { success: false, error: result.error });
+            }
+        } catch (err) {
+            console.error('[EngineeringRoute] Swarm error:', err.message);
+            send('error', { success: false, error: err.message });
+        } finally {
+            res.end();
         }
     });
 
@@ -1150,10 +1226,18 @@ export function loadRoutes(app, system) {
     safeMount('/api/binance', checkReady, binanceRoutes);
     safeMount('/api/hyperliquid', checkReady, hyperliquidRoutes);
     safeMount('/api/backtest', checkReady, backtestRoutes);
+    safeMount('/api/alerts', checkReady, alertRoutes);
     safeMount('/api/guardian', checkReady, createGuardianRoutes(system.guardian || null));
     safeMount('/api/autonomous', checkReady, autonomousRoutes);
     safeMount('/api/gridbot',   checkReady, gridBotRoutes);
-    safeMount('/api/conceive',  conceiveRoutes);
+    // Conceive module — optional, not always committed to repo
+    try {
+        const { default: conceiveRoutes } = await import('../../server/routes/conceiveRoutes.js');
+        safeMount('/api/conceive', conceiveRoutes);
+        console.log('    ✅ Conceive routes mounted');
+    } catch (e) {
+        console.warn('    ⚠️  conceiveRoutes.js not found — Conceive module disabled (safe to ignore)');
+    }
 
     // ── ASI System Routes ─────────────────────────────────────────────────
     app.get('/api/asi/status', (req, res) => {
@@ -1290,6 +1374,19 @@ export function loadRoutes(app, system) {
     app.get('/api/conversation/history', (req, res) => res.json({ success: true, history: system.conversationManager?.getHistory?.(req.query.count || 20) || [] }));
     app.get('/api/soma/vision/last', (req, res) => res.json({ success: true, url: system.visionArbiter?.getLastImage?.() || null }));
 
+    // Plan viewer — reliable REST endpoint (bypasses WS sendMessage race conditions)
+    app.get('/api/soma/plan', async (req, res) => {
+        try {
+            const planPath = path.join(process.cwd(), 'SOMA', 'plan.md');
+            const stat = await fs.stat(planPath).catch(() => null);
+            if (!stat) return res.json({ success: true, plan: '', updatedAt: null });
+            const content = await fs.readFile(planPath, 'utf8');
+            res.json({ success: true, plan: content, updatedAt: stat.mtime });
+        } catch (e) {
+            res.status(500).json({ success: false, error: e.message });
+        }
+    });
+
     // 8. SOCIAL (Fixing Social Tab)
     app.get('/api/identity/personas', (req, res) => res.json({ success: true, personas: Array.from(system.identityArbiter?.personas?.values() || []) }));
     app.get('/api/identity/active', (req, res) => {
@@ -1404,6 +1501,18 @@ export function loadRoutes(app, system) {
                 }
             }
         } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    });
+
+    // ── Drive tension status ─────────────────────────────────────────────────
+    app.get('/api/drive/status', (req, res) => {
+        const drive = system.drive;
+        if (!drive) return res.json({ success: false, error: 'DriveArbiter not loaded', tension: null, satisfaction: null });
+        res.json({
+            success: true,
+            tension: drive.tension,
+            satisfaction: drive.satisfaction,
+            stats: drive.stats || {}
+        });
     });
 
     const kevin = system.kevinArbiter || system.kevinManager;

@@ -198,6 +198,10 @@ export function buildSystemSnapshot(system = {}) {
       learning: {
         sessions: system.nighttimeLearning?.metrics?.totalSessions || 0,
         active: system.nighttimeLearning?.activeSessions?.size || 0
+      },
+      drive: {
+        tension:      system.drive?.tension      ?? null,
+        satisfaction: system.drive?.satisfaction ?? null
       }
     }
   };

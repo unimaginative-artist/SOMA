@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Cpu, Activity, Brain, Zap, HardDrive, Wifi, CheckCircle,
   Archive, Workflow, Database, Play, Pause, RotateCw, Trash2,
@@ -29,6 +29,7 @@ import { useRealtimeEvents } from './hooks/useRealtimeEvents';
 import FloatingChat from './components/FloatingChat';
 import MemoryTierMonitor from './components/MemoryTierMonitor';
 import NeuralDissonanceMonitor from './components/NeuralDissonanceMonitor';
+import EconomicSovereigntyMonitor from './components/EconomicSovereigntyMonitor';
 import AutonomousActivityFeed from './components/AutonomousActivityFeed';
 import SkillProficiencyRadar from './components/SkillProficiencyRadar';
 import MindsEye from './components/MindsEye';
@@ -235,7 +236,7 @@ const SystemDetailModal = ({ metricId, systemMetrics, onClose }) => {
                 >
                   Load Top Processes
                 </button>
-                {loading && <div className="text-[10px] text-zinc-500 mt-2">Loading…</div>}
+                {loading && <div className="text-[10px] text-zinc-500 mt-2">Loadingâ€¦</div>}
                 {error && <div className="text-[10px] text-rose-400 mt-2">{error}</div>}
                 {processes.length > 0 && (
                   <div className="mt-3 space-y-2">
@@ -259,7 +260,7 @@ const SystemDetailModal = ({ metricId, systemMetrics, onClose }) => {
               >
                 Fetch GPU Telemetry
               </button>
-              {loading && <div className="text-[10px] text-zinc-500">Loading…</div>}
+              {loading && <div className="text-[10px] text-zinc-500">Loadingâ€¦</div>}
               {error && <div className="text-[10px] text-rose-400">{error}</div>}
               {gpuInfo.length === 0 && !loading && !error && (
                 <div className="text-center py-6 text-zinc-500">
@@ -341,7 +342,7 @@ const SystemDetailModal = ({ metricId, systemMetrics, onClose }) => {
                 >
                   Fetch Adapter Stats
                 </button>
-                {loading && <div className="text-[10px] text-zinc-500 mt-2">Loading…</div>}
+                {loading && <div className="text-[10px] text-zinc-500 mt-2">Loadingâ€¦</div>}
                 {error && <div className="text-[10px] text-rose-400 mt-2">{error}</div>}
                 {netAdapters.length > 0 && (
                   <div className="mt-3 space-y-2">
@@ -368,7 +369,6 @@ const SystemDetailModal = ({ metricId, systemMetrics, onClose }) => {
 // Main Command Bridge Component
 // ==========================================
 const SomaCommandBridge = () => {
-  console.log('[SOMA] Rendering Command Bridge...');
   // Navigation State
   const [activeModule, setActiveModule] = useState('core');
 
@@ -470,6 +470,7 @@ const SomaCommandBridge = () => {
   });
   const [systemCounts, setSystemCounts] = useState({ arbiters: 0, microAgents: 0, fragments: 0 });
   const [brainStats, setBrainStats] = useState(null);
+  const [driveTension, setDriveTension] = useState(null);
 
   // Categorized Agent Swarm
   const [agents, setAgents] = useState([]);
@@ -542,7 +543,7 @@ const SomaCommandBridge = () => {
   const traceEndRef = useRef(null);
 
   const formatPercent = (value) => {
-    return Number.isFinite(value) ? value.toFixed(1) : '—';
+    return Number.isFinite(value) ? value.toFixed(1) : 'â€”';
   };
 
   const categorizeAgents = useCallback((rawAgents = []) => {
@@ -702,7 +703,7 @@ const SomaCommandBridge = () => {
     };
 
     pollSystemTelemetry();
-    const interval = setInterval(pollSystemTelemetry, 30000); // 30s — hardware queries don't need sub-second freshness
+    const interval = setInterval(pollSystemTelemetry, 30000); // 30s â€” hardware queries don't need sub-second freshness
     return () => {
       isMounted = false;
       clearInterval(interval);
@@ -742,7 +743,7 @@ const SomaCommandBridge = () => {
       type: item.status === 'failed' || item.status === 'denied' ? 'error'
         : item.status === 'completed' || item.status === 'approved' ? 'success'
           : 'info',
-      message: `${item.agent || 'System'}: ${item.action || item.type || 'event'}${item.detail ? ` — ${item.detail}` : ''}`,
+      message: `${item.agent || 'System'}: ${item.action || item.type || 'event'}${item.detail ? ` â€” ${item.detail}` : ''}`,
       timestamp: item.timestamp || Date.now()
     });
 
@@ -809,7 +810,7 @@ const SomaCommandBridge = () => {
         setProposedGoals(prev => {
           // Prevent duplicates if the event fires multiple times
           if (!prev.some(pg => pg.id === goal.id)) {
-            toast.info(`📝 New Proposed Goal: ${goal.title}`, { theme: 'dark', autoClose: 8000 });
+            toast.info(`ðŸ“ New Proposed Goal: ${goal.title}`, { theme: 'dark', autoClose: 8000 });
             return [...prev, goal];
           }
           return prev;
@@ -820,7 +821,7 @@ const SomaCommandBridge = () => {
     somaBackend.on('proactive_question', (payload) => {
       // payload will contain: questionId, question, options (optional), goalId (optional), type, context
       setActiveQuestion(payload);
-      toast.info(`❓ SOMA has a question for you!`, { theme: 'dark', autoClose: 8000 });
+      toast.info(`â“ SOMA has a question for you!`, { theme: 'dark', autoClose: 8000 });
       // Optionally, highlight the chat badge or open the chat
     });
 
@@ -913,6 +914,9 @@ const SomaCommandBridge = () => {
         setMicroAgents(microAgentsList);
       }
 
+      // Drive tension (intrinsic motivation)
+      if (data.drive?.tension != null) setDriveTension(data.drive.tension);
+
       // Map Memory System (HMS)
       if (data.cache) setCacheTiers(data.cache);
 
@@ -973,7 +977,7 @@ const SomaCommandBridge = () => {
     somaBackend.on('soma_proactive', (payload) => {
       const text = payload.message || payload.text || String(payload);
       if (!text) return;
-      toast.info(`💜 SOMA: ${text.substring(0, 100)}${text.length > 100 ? '…' : ''}`, { theme: 'dark', autoClose: 8000 });
+      toast.info(`ðŸ’œ SOMA: ${text.substring(0, 100)}${text.length > 100 ? 'â€¦' : ''}`, { theme: 'dark', autoClose: 8000 });
       setActivityStream(prev => [
         { id: Date.now(), type: 'info', message: `[Autonomous] ${text}`, timestamp: Date.now() },
         ...prev.slice(0, 49)
@@ -991,7 +995,7 @@ const SomaCommandBridge = () => {
       }
 
       const summary = output
-        ? `[${source}] ${description} → ${output.substring(0, 120)}`
+        ? `[${source}] ${description} â†’ ${output.substring(0, 120)}`
         : `[${source}] ${description}`;
       setActivityStream(prev => [
         { id: Date.now(), type: 'success', message: summary, timestamp: Date.now() },
@@ -1122,7 +1126,7 @@ const SomaCommandBridge = () => {
 
         ws.onopen = () => {
           setCognitiveWsConnected(true);
-          toast.success('⚡ Real-time cognitive streaming enabled', { theme: 'dark' });
+          toast.success('âš¡ Real-time cognitive streaming enabled', { theme: 'dark' });
         };
 
         ws.onmessage = (event) => {
@@ -1143,10 +1147,10 @@ const SomaCommandBridge = () => {
                   },
                   ...prev.slice(0, 19)
                 ]);
-                toast.info(`💭 Thought complete: ${(data.data.confidence * 100).toFixed(1)}% confidence`, { theme: 'dark', autoClose: 2000 });
+                toast.info(`ðŸ’­ Thought complete: ${(data.data.confidence * 100).toFixed(1)}% confidence`, { theme: 'dark', autoClose: 2000 });
               }
             } else if (data.event === 'perception.low_confidence') {
-              toast.warn(`⚠️ Low confidence from ${data.data.actor}`, { theme: 'dark' });
+              toast.warn(`âš ï¸ Low confidence from ${data.data.actor}`, { theme: 'dark' });
             }
           } catch (error) {
             console.error('[CognitiveWS] Failed to parse message:', error);
@@ -1245,7 +1249,7 @@ const SomaCommandBridge = () => {
       const phase = payload.phase || 'trace';
       const tool = payload.tool ? ` ${payload.tool}` : '';
       const count = payload.count != null ? ` (${payload.count})` : '';
-      const msg = payload.preview ? ` — ${payload.preview}` : '';
+      const msg = payload.preview ? ` â€” ${payload.preview}` : '';
       addActivityLog('info', `[${phase}]${tool}${count}${msg}`);
     };
     somaBackend.on('trace', handleTrace);
@@ -1611,6 +1615,14 @@ const SomaCommandBridge = () => {
                         {Number.isFinite(systemMetrics.neuralLoad?.load15) ? systemMetrics.neuralLoad.load15.toFixed(2) : '--'}
                       </span>
                     </div>
+                    {driveTension !== null && (
+                      <div className="flex justify-between text-xs pb-2 border-b border-white/5">
+                        <span className="text-zinc-500">Drive Tension</span>
+                        <span className={`font-mono font-bold ${driveTension >= 0.7 ? 'text-red-400' : driveTension >= 0.4 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                          {(driveTension * 100).toFixed(0)}%{driveTension >= 0.7 ? ' ðŸ”´' : driveTension >= 0.4 ? ' ðŸŸ¡' : ' ðŸŸ¢'}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-between text-xs pb-2 border-b border-white/5">
                       <span className="text-zinc-500">Primary Node</span>
                       <span className="text-fuchsia-400 font-bold uppercase tracking-tighter">ONLINE (LOCAL)</span>
@@ -1637,6 +1649,7 @@ const SomaCommandBridge = () => {
             <div className="grid grid-cols-2 gap-6">
               {/* Dashboard Panels */}
               <NeuralDissonanceMonitor isConnected={isConnected} />
+              <EconomicSovereigntyMonitor isConnected={isConnected} />
               <AutonomousActivityFeed isConnected={isConnected} />
             </div>
 
@@ -1697,7 +1710,7 @@ const SomaCommandBridge = () => {
                           {msg.text}
                         </div>
                         <span className="text-[8px] text-zinc-600 mt-1 uppercase font-mono tracking-tighter">
-                          {msg.role === 'user' ? 'Human' : 'SOMA'} • {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                          {msg.role === 'user' ? 'Human' : 'SOMA'} â€¢ {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                         </span>
                       </div>
                     ))
@@ -1753,7 +1766,7 @@ const SomaCommandBridge = () => {
                   }`}
                   onClick={() => isOrbConnected ? disconnectOrb() : connectOrb()}
                 >
-                  {isOrbConnected ? '● Disengage Neural Link' : '○ Establish Neural Link'}
+                  {isOrbConnected ? 'â— Disengage Neural Link' : 'â—‹ Establish Neural Link'}
                 </button>
 
                 {/* Manual Input Field */}
@@ -2633,7 +2646,7 @@ const SomaCommandBridge = () => {
         />
       )}
 
-      {/* Character Lab Modal — hidden from nav, preserved for Dementia OS */}
+      {/* Character Lab Modal â€” hidden from nav, preserved for Dementia OS */}
       <CharacterGacha isOpen={isCharacterLabOpen || activeModule === 'characters'} onClose={() => { setIsCharacterLabOpen(false); if (activeModule === 'characters') setActiveModule('core'); }} />
     </div>
   );

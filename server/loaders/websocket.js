@@ -185,6 +185,20 @@ export function setupWebSocket(server, wss, system) {
         broker.on('gmn.peer.changed', (envelope) => broadcast('gmn_peer_changed', envelope.payload || envelope));
     } catch { /* non-fatal — GMN tab will still work via REST poll */ }
 
+    // Forward LowLatencyEngine price ticks → frontend for live chart + ticker updates
+    try {
+        const broker = require('../../core/MessageBroker.cjs');
+        broker.subscribe('WebSocketLoader.priceTick', 'market.price_tick');
+        broker.on('market.price_tick', (envelope) => broadcast('price_tick', envelope.payload || envelope));
+    } catch { /* non-fatal — chart will fall back to polling */ }
+
+    // Forward price alert triggers → frontend for toast notifications
+    try {
+        const broker = require('../../core/MessageBroker.cjs');
+        broker.subscribe('WebSocketLoader.alertTrigger', 'alert.triggered');
+        broker.on('alert.triggered', (envelope) => broadcast('alert_triggered', envelope.payload || envelope));
+    } catch { /* non-fatal */ }
+
     // ── Heartbeat: ping all clients every 30s, terminate any that don't pong ──
     // Silently-dead connections (NAT timeout, adapter sleep, background tab) never
     // fire 'close' without this — leaving dead sockets in dashboardClients forever
@@ -285,10 +299,34 @@ Write ONE short, natural opening — something you genuinely want to say right n
                 return;
             }
 
-            const { type, payload } = data || {};
+            const { type, payload, messageId } = data || {};
             if (!type) return;
 
+            // Helper: send a response to a sendMessage() call on the frontend
+            const reply = (body) => {
+                if (messageId) ws.send(JSON.stringify({ ...body, responseToId: messageId }));
+            };
+
             try {
+                // ── plan:fetch — SomaPlanViewer requests the current plan ──────
+                if (type === 'plan:fetch') {
+                    try {
+                        const fs = await import('fs/promises');
+                        const path = await import('path');
+                        const planPath = path.default.join(process.cwd(), 'SOMA', 'plan.md');
+                        const stat = await fs.default.stat(planPath).catch(() => null);
+                        if (!stat) {
+                            reply({ success: true, plan: '', updatedAt: null });
+                        } else {
+                            const content = await fs.default.readFile(planPath, 'utf8');
+                            reply({ success: true, plan: content, updatedAt: stat.mtime });
+                        }
+                    } catch (e) {
+                        reply({ success: false, error: e.message });
+                    }
+                    return;
+                }
+
                 if (type === 'command') {
                     const { action, params } = payload || {};
                     const result = await executeCommand(action, params, system, broadcast);
@@ -365,14 +403,15 @@ Write ONE short, natural opening — something you genuinely want to say right n
                 neuralLoad: snapshot.neuralLoad,
                 contextWindow: snapshot.contextWindow,
                 counts: snapshot.counts,
-                cognitive: snapshot.cognitive
+                cognitive: snapshot.cognitive,
+                drive: snapshot.cognitive?.drive
             };
             broadcast('metrics', metricsPayload);
             broadcast('pulse', buildPulsePayload(snapshot));
         } catch (e) {
             console.warn('[WS] Metrics snapshot error (non-fatal):', e.message);
         }
-    }, 2000);
+    }, 5000);
 
     console.log('      ✅ Socket.IO & WebSocket Manager ready (Unified + Approval Gate)');
     return { io, dashboardClients, approvalGate, broadcast };

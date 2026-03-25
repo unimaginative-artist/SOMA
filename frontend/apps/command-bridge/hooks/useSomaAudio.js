@@ -108,9 +108,9 @@ const detectVoiceActivity = (analyser, frequencyData) => {
   const avgFormant = formantEnergy / (voiceFormantEnd - voiceFormantStart + 1);
   const avgNoise = noiseEnergy / (noiseBandEnd + 1);
   
-  const hasEnoughEnergy = avgTotal > 15; 
-  const voiceStrongerThanNoise = (avgFundamental + avgFormant) / 2 > avgNoise * 1.5;
-  const hasVoiceCharacteristics = avgFundamental > 20 && avgFormant > 12; 
+  const hasEnoughEnergy = avgTotal > 5;
+  const voiceStrongerThanNoise = (avgFundamental + avgFormant) / 2 > avgNoise * 1.2;
+  const hasVoiceCharacteristics = avgFundamental > 8 && avgFormant > 5;
   
   return hasEnoughEnergy && voiceStrongerThanNoise && hasVoiceCharacteristics;
 };
@@ -151,6 +151,8 @@ export function useSomaAudio(onResponse) {
   const isUserInterrupting = useRef(false);
   
   const acknowledgmentCacheRef = useRef(new Map());
+  const useWebSpeechRef = useRef(false);       // true when Whisper is down
+  const webSpeechRecRef = useRef(null);        // SpeechRecognition instance
 
   // Transcribe audio using local Whisper
   const transcribeAudio = async (audioBlob) => {
@@ -262,7 +264,12 @@ export function useSomaAudio(onResponse) {
       setSystemStatus(prev => ({ ...prev, elevenLabs: elevenLabsInitialized ? 'enabled' : 'fallback' }));
       
       const whisperHealthy = await checkWhisperHealth();
-      setSystemStatus(prev => ({ ...prev, whisperServer: whisperHealthy ? 'ready' : 'error' }));
+      const hasSpeechRecognition = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+      useWebSpeechRef.current = !whisperHealthy && hasSpeechRecognition;
+      setSystemStatus(prev => ({
+        ...prev,
+        whisperServer: whisperHealthy ? 'ready' : (hasSpeechRecognition ? 'fallback' : 'error')
+      }));
       
       audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: OUTPUT_SAMPLE_RATE });
       inputContextRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
@@ -318,14 +325,54 @@ export function useSomaAudio(onResponse) {
     }
   }, []);
 
-  // Recording loop effect
+  // Recording loop effect — uses Whisper if available, falls back to browser SpeechRecognition
   useEffect(() => {
     let recordingTimeout;
     let isActive = true;
 
+    // ── Branch A: Web Speech API fallback (no Whisper) ──────────────────
+    if (isConnected && useWebSpeechRef.current) {
+      const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRec) return;
+
+      const rec = new SpeechRec();
+      rec.continuous = true;
+      rec.interimResults = false;
+      rec.lang = 'en-US';
+      webSpeechRecRef.current = rec;
+
+      rec.onresult = (event) => {
+        if (!isActive || !isConnected || isTalking) return;
+        const transcript = event.results[event.results.length - 1][0].transcript.trim();
+        if (isValidTranscription(transcript)) {
+          console.log('📝 Web Speech heard:', transcript);
+          processWithSoma(transcript);
+        }
+      };
+      rec.onstart  = () => { if (isActive) setIsListening(true);  };
+      rec.onend    = () => {
+        setIsListening(false);
+        // Auto-restart unless we stopped intentionally
+        if (isActive && isConnected && !isTalking) {
+          try { rec.start(); } catch (e) {}
+        }
+      };
+      rec.onerror  = (e) => { if (e.error !== 'no-speech') console.warn('SpeechRec error:', e.error); };
+
+      try { rec.start(); } catch (e) {}
+
+      return () => {
+        isActive = false;
+        try { rec.stop(); } catch (e) {}
+        webSpeechRecRef.current = null;
+        setIsListening(false);
+      };
+    }
+
+    // ── Branch B: Whisper (MediaRecorder → POST to localhost:5002) ───────
     const runRecordingLoop = async () => {
       if (!isActive || !isConnected || !streamRef.current) return;
-      
+
       // Interruption check
       if (isTalking && inputAnalyserRef.current) {
         const dataArray = new Uint8Array(inputAnalyserRef.current.frequencyBinCount);
@@ -338,14 +385,12 @@ export function useSomaAudio(onResponse) {
           return;
         }
       }
-      
+
       // VAD Trigger
       if (inputAnalyserRef.current) {
         const dataArray = new Uint8Array(inputAnalyserRef.current.frequencyBinCount);
         if (!detectVoiceActivity(inputAnalyserRef.current, dataArray)) {
-          if (isActive && isConnected && !isTalking) {
-            setTimeout(() => runRecordingLoop(), 200);
-          }
+          if (isActive && isConnected && !isTalking) setTimeout(() => runRecordingLoop(), 200);
           return;
         }
       }
@@ -363,22 +408,18 @@ export function useSomaAudio(onResponse) {
           setIsListening(false);
           if (audioChunksRef.current.length > 0) {
             const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm;codecs=opus' });
-            if (audioBlob.size > 2000 && isActive && isConnected && !isTalking) {
+            if (audioBlob.size > 500 && isActive && isConnected && !isTalking) {
               await transcribeAudio(audioBlob);
             }
           }
-          if (isActive && isConnected && !isTalking) {
-            setTimeout(() => runRecordingLoop(), 500);
-          }
+          if (isActive && isConnected && !isTalking) setTimeout(() => runRecordingLoop(), 500);
         };
 
         mediaRecorder.start(500);
         setIsListening(true);
 
         recordingTimeout = setTimeout(() => {
-          if (isActive && mediaRecorder.state === 'recording') {
-            mediaRecorder.stop();
-          }
+          if (isActive && mediaRecorder.state === 'recording') mediaRecorder.stop();
         }, 4000);
 
       } catch (e) {
@@ -387,8 +428,7 @@ export function useSomaAudio(onResponse) {
     };
 
     if (isConnected && !isTalking) {
-      const cooldown = isTalking === false ? 1000 : 0;
-      setTimeout(() => { if (isActive && isConnected) runRecordingLoop(); }, cooldown);
+      setTimeout(() => { if (isActive && isConnected) runRecordingLoop(); }, 1000);
     }
 
     return () => {

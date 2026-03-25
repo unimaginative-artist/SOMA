@@ -130,38 +130,18 @@ class GoalPlannerArbiter extends BaseArbiter {
   }
 
   _subscribeBrokerMessages() {
-    // Goal management
-    messageBroker.subscribe(this.name, 'create_goal');
-    messageBroker.subscribe(this.name, 'update_goal_progress');
-    messageBroker.subscribe(this.name, 'query_goals');
-    messageBroker.subscribe(this.name, 'cancel_goal');
-    messageBroker.subscribe(this.name, 'approve_goal');
-    messageBroker.subscribe(this.name, 'reject_goal');
-    messageBroker.subscribe(this.name, 'query_plan'); // New subscription for plan queries
-    messageBroker.subscribe(this.name, 'question_response'); // New subscription for question responses
-    
-    // System observations for autonomous goal generation
-    messageBroker.subscribe(this.name, 'velocity_report');
-    messageBroker.subscribe(this.name, 'code_analysis_complete');
-    messageBroker.subscribe(this.name, 'memory_metrics');
-    messageBroker.subscribe(this.name, 'fitness_score_update');
-    messageBroker.subscribe(this.name, 'discovery_complete');
-    messageBroker.subscribe(this.name, 'contradiction_detected'); // BeliefSystemArbiter
-    messageBroker.subscribe(this.name, 'practice_reminder'); // SkillAcquisitionArbiter
-    messageBroker.subscribe(this.name, 'skill_degraded'); // SkillAcquisitionArbiter
-    messageBroker.subscribe(this.name, 'resource_pressure_critical'); // ResourceBudgetArbiter
-    messageBroker.subscribe(this.name, 'fix_proposed'); // FixProposalSystem
+    // Direct topic subscriptions (correct broker API: subscribe(topic, handler))
+    // DriveArbiter publishes here when tension >= planningThreshold
+    messageBroker.subscribe('drive.planning.needed', (envelope) => {
+      this.runPlanningCycle().catch(() => {});
+    });
 
-    // Conflict resolution (Conservative vs Progressive)
-    messageBroker.subscribe(this.name, 'arbitration_request'); // ProgressiveArbiter
-    messageBroker.subscribe(this.name, 'goal_concern'); // ConservativeArbiter
-    messageBroker.subscribe(this.name, 'goal_enhancement_suggestion'); // ProgressiveArbiter
+    // Broadcast goal lifecycle events so other arbiters can react
+    messageBroker.subscribe('planning_pulse', (envelope) => {
+      this.runPlanningCycle().catch(() => {});
+    });
 
-    // Planning triggers
-    messageBroker.subscribe(this.name, 'planning_pulse');
-    messageBroker.subscribe(this.name, 'time_pulse');
-    
-    this.logger.info(`[${this.name}] Subscribed to message types`);
+    this.logger.info(`[${this.name}] Subscribed to broker topics`);
   }
 
   async handleMessage(message = {}) {
@@ -1301,21 +1281,117 @@ class GoalPlannerArbiter extends BaseArbiter {
     try {
       // Rebalance priorities
       await this.rebalancePriorities();
-      
+
+      // Prune stale goals before dispatching
+      await this._pruneStaleGoals();
+
       // Check for stalled goals
       await this.reviewStalledGoals();
-      
+
       // Calculate statistics
       this.updateStatistics();
-      
+
+      // Dispatch the highest-priority pending goal
+      await this._dispatchHighestPriorityGoal();
+
       this.logger.info(`[${this.name}] Planning cycle complete`);
       this.logger.info(`[${this.name}]    Active: ${this.activeGoals.size}, Completed: ${this.completedGoals.length}, Failed: ${this.failedGoals.length}`);
-      
+
       return { success: true };
     } catch (err) {
       this.logger.error(`[${this.name}] Planning cycle error: ${err.message}`);
       return { success: false, error: err.message };
     }
+  }
+
+  // Pick the highest-priority pending (or proposed) goal and dispatch it
+  async _dispatchHighestPriorityGoal() {
+    // Include 'proposed' goals — NEMESIS already vetted them; waiting for human approval is too slow
+    // for autonomous operation. High-priority goals get dispatched regardless of proposed/pending.
+    const pending = Array.from(this.activeGoals)
+      .map(id => this.goals.get(id))
+      .filter(g => g && (g.status === 'pending' || g.status === 'proposed'))
+      .sort((a, b) => b.priority - a.priority);
+
+    if (pending.length === 0) return;
+
+    const top = pending[0];
+    this.logger.info(`[${this.name}] 🚀 Dispatching highest-priority goal: "${top.title}" (priority ${top.priority})`);
+
+    // Mark as active so it doesn't get dispatched again next cycle
+    top.status = 'active';
+    top.startedAt = top.startedAt || Date.now();
+    this._dirty = true;
+
+    // Resolve live targets — check broker for each assignee, fall back to EngineeringSwarmArbiter
+    const candidates = top.assignedTo?.length > 0 ? top.assignedTo : ['EngineeringSwarmArbiter'];
+    const liveTargets = candidates.filter(t => {
+      try {
+        const r = messageBroker.findArbiter?.(t, { suggest: false });
+        return r?.found === true;
+      } catch { return false; }
+    });
+    const targets = liveTargets.length > 0 ? liveTargets : ['EngineeringSwarmArbiter'];
+
+    if (liveTargets.length < candidates.length) {
+      const dead = candidates.filter(t => !liveTargets.includes(t));
+      this.logger.warn(`[${this.name}] Dead assignee(s) for "${top.title}": [${dead.join(', ')}] → routing to ${targets.join(', ')}`);
+    }
+
+    for (const target of targets) {
+      messageBroker.sendMessage({
+        from: this.name,
+        to:   target,
+        type: 'goal_assigned',
+        payload: {
+          goalId:      top.id,
+          goal: {
+            title:       top.title,
+            description: top.description,
+            category:    top.category,
+            priority:    top.priority,
+            metrics:     top.metrics
+          }
+        }
+      }).catch(() => {});
+    }
+
+    // Broadcast so DriveArbiter and other listeners know work started
+    messageBroker.sendMessage({
+      from: this.name, to: 'broadcast',
+      type: 'goal_started',
+      payload: { title: top.title, goalId: top.id, priority: top.priority }
+    }).catch(() => {});
+  }
+
+  // Auto-cancel goals that have been active for stalledThresholdDays with 0 progress
+  async _pruneStaleGoals() {
+    const now   = Date.now();
+    const limit = this.stalledThresholdDays * 24 * 60 * 60 * 1000;
+    const pruned = [];
+
+    for (const goalId of this.activeGoals) {
+      const goal = this.goals.get(goalId);
+      if (!goal) continue;
+
+      const age      = now - (goal.startedAt || goal.createdAt || now);
+      const progress = goal.metrics?.progress ?? 0;
+
+      if (age > limit && progress === 0) {
+        pruned.push(goal);
+      }
+    }
+
+    for (const goal of pruned) {
+      this.logger.warn(`[${this.name}] 🗑️  Auto-pruning stale goal: "${goal.title}" (0% progress, ${Math.floor((now - goal.createdAt) / 86400000)}d old)`);
+      await this.cancelGoal(goal.id, `Auto-pruned: 0% progress after ${this.stalledThresholdDays} days`);
+    }
+
+    if (pruned.length > 0) {
+      this.logger.info(`[${this.name}] Pruned ${pruned.length} stale goal(s) — slots freed for new work`);
+    }
+
+    return pruned.length;
   }
 
   startMonitoringLoop() {
@@ -1329,32 +1405,35 @@ class GoalPlannerArbiter extends BaseArbiter {
 
   async reviewStalledGoals() {
     const stalled = [];
-    
+
     for (const goalId of this.activeGoals) {
       const goal = this.goals.get(goalId);
       if (this.isGoalStalled(goal)) {
         stalled.push(goal);
       }
     }
-    
-    if (stalled.length > 0) {
-      this.logger.warn(`[${this.name}] ⚠️  Found ${stalled.length} stalled goals`);
-      
-      for (const goal of stalled) {
-        this.logger.warn(`[${this.name}]    - ${goal.title} (${goal.metrics.progress}% progress)`);
-        
-        // Placeholder for proactive question: ask user about stalled goal
-        await this.proposeQuestion({
-          question: `Goal "${goal.title}" (${goal.id.slice(0, 8)}) seems stalled. What should I do?`,
-          options: ['Investigate why it\'s stalled', 'Cancel this goal', 'Re-prioritize for later'],
-          goalId: goal.id,
-          type: 'choice',
-          context: {
-            goalTitle: goal.title,
-            goalId: goal.id,
-            stalledDays: Math.floor((Date.now() - goal.startedAt) / 86400000)
-          }
-        });
+
+    if (stalled.length === 0) return;
+
+    this.logger.warn(`[${this.name}] ⚠️  Found ${stalled.length} stalled goal(s)`);
+
+    for (const goal of stalled) {
+      const stalledDays = Math.floor((Date.now() - goal.startedAt) / 86400000);
+      const progress    = goal.metrics?.progress ?? 0;
+
+      this.logger.warn(`[${this.name}]    - "${goal.title}" (${progress}% progress, ${stalledDays}d stalled)`);
+
+      // Goals stalled > 2x the threshold with <10% progress get auto-cancelled
+      // Goals stalled > threshold but with some progress get deprioritized instead
+      if (stalledDays > this.stalledThresholdDays * 2 && progress < 10) {
+        this.logger.warn(`[${this.name}]    → Auto-cancelling: stalled ${stalledDays}d with <10% progress`);
+        await this.cancelGoal(goal.id, `Auto-cancelled: stalled ${stalledDays} days with ${progress}% progress`);
+      } else {
+        // Deprioritize — drop priority so higher-value goals jump ahead
+        const oldPriority = goal.priority;
+        goal.priority     = Math.max(0, goal.priority - 20);
+        this._dirty       = true;
+        this.logger.info(`[${this.name}]    → Deprioritized: ${oldPriority} → ${goal.priority}`);
       }
     }
   }
@@ -1460,7 +1539,16 @@ class GoalPlannerArbiter extends BaseArbiter {
         return `- ${box} **${g.title}** *(priority: ${g.priority})${pct}*${desc}`;
       };
 
-      let md = `# SOMA's Plan\n\n*Last updated: ${ts}*\n\n`;
+      // Prepend Barry's priority notes if PRIORITIES.md exists
+      const prioritiesPath = path.join(process.cwd(), 'SOMA', 'PRIORITIES.md');
+      let prioritiesBlock = '';
+      try {
+        if (fs.existsSync(prioritiesPath)) {
+          prioritiesBlock = fs.readFileSync(prioritiesPath, 'utf8').trim() + '\n\n---\n\n';
+        }
+      } catch (_) {}
+
+      let md = prioritiesBlock + `# SOMA's Plan\n\n*Last updated: ${ts}*\n\n`;
 
       if (proposed.length) {
         md += `## ⏳ Awaiting Approval\n${proposed.map(g => fmtGoal(g)).join('\n')}\n\n`;

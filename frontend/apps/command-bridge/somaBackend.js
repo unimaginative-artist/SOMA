@@ -234,15 +234,32 @@ class SomaBackend {
       case 'trace':
         this.emit('trace', payload);
         break;
-      // Add a case for `plan_updated` messages from the backend
-      case 'plan:updated': // This event name matches what backend emits
-        this.emit('plan_updated', payload); // Emit as 'plan_updated' for existing frontend listeners
+      case 'plan_updated': // backend broadcasts with underscore
+      case 'plan:updated': // legacy colon variant — keep both
+        this.emit('plan_updated', payload);
         break;
       case 'gmn_peer_changed':
         this.emit('gmn_peer_changed', payload);
         break;
+      // KnowledgeApp real-time events — forwarded from server via MessageBroker
+      case 'cognitive:debate':
+        this.emit('cognitive:debate', payload);
+        break;
+      case 'learning:brain_activity':
+        this.emit('learning:brain_activity', payload);
+        break;
+      case 'learning:node_created':
+        this.emit('learning:node_created', payload);
+        break;
+      case 'price_tick':
+        this.emit('price_tick', payload);
+        break;
+      case 'alert_triggered':
+        this.emit('alert_triggered', payload);
+        break;
       default:
-        console.log('[SomaBackend] Unknown message type:', type);
+        // suppress noisy unknown-type logs in production
+        break;
     }
   }
 
