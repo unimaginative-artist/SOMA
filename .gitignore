@@ -262,3 +262,4 @@ ehthumbs.db
 
 # GMN node private identity — must never be committed (per-machine secret)
 config/gmn-identity.json
+config/gmn-peerbook.json

@@ -7,6 +7,7 @@ import gmnRegistry from '../services/GMNSiteRegistry.js';
 import gmnIdentity from '../services/GMNIdentity.js';
 import bannedNodes from '../services/GMNBannedNodes.js';
 import gmnPinStore from '../services/GMNPinStore.js';
+import gmnPeerBook from '../services/GMNPeerBook.js';
 import { buildSiteAnnounce, buildReplicaAnnounce } from '../services/GMNAnnounce.js';
 import messageBroker from '../../core/MessageBroker.js';
 
@@ -197,6 +198,37 @@ export default function createGmnRoutes(_system = {}) {
         const unpinned = gmnPinStore.unpin(domain);
         registry.removeReplica(domain, NODE_ID);
         res.json({ success: true, unpinned });
+    });
+
+    // ── Batch 5: the mesh — connected peers, known addresses, bootstrap ──────────
+    router.get('/peers', (_req, res) => {
+        const mesh = globalThis.__gmnMesh;
+        const connected = mesh
+            ? Array.from(mesh.peers.entries()).map(([nodeId, p]) => ({ nodeId, address: p.address, status: p.status, connectedAt: p.connectedAt }))
+            : [];
+        res.json({ success: true, nodeId: NODE_ID, publicAddress: mesh?.publicAddress || null, connected, known: gmnPeerBook.list() });
+    });
+
+    router.get('/network', (_req, res) => {
+        const mesh = globalThis.__gmnMesh;
+        res.json({
+            success: true,
+            nodeId: NODE_ID,
+            publicAddress: mesh?.publicAddress || null,
+            bootstrap: mesh?.bootstrapAddresses || [],
+            maxPeers: mesh?.maxPeers || null,
+            connectedCount: mesh?.peers?.size || 0,
+            knownCount: gmnPeerBook.size(),
+        });
+    });
+
+    // Point this node at a known peer; it discovers the rest of the mesh via PEX.
+    router.post('/bootstrap', (req, res) => {
+        const address = String(req.body?.address || '').trim();
+        if (!/^[^\s/]+:\d{2,5}$/.test(address)) return res.status(400).json({ success: false, error: 'address must be host:port' });
+        gmnPeerBook.remember(address, { source: 'manual' });
+        try { globalThis.__gmnMesh?.connectToPeer?.(address); } catch { /* dial is best-effort */ }
+        res.json({ success: true, address, known: gmnPeerBook.size() });
     });
 
     router.post('/sites/reindex-all', (_req, res) => {

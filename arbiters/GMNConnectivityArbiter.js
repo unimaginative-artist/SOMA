@@ -23,8 +23,10 @@ import gmnRegistry from '../server/services/GMNSiteRegistry.js';
 import { buildSiteAnnounce, verifySiteAnnounce, buildReplicaAnnounce, verifyReplicaAnnounce } from '../server/services/GMNAnnounce.js';
 import GMNSiteService from '../server/services/GMNSiteService.js';
 import gmnPinStore from '../server/services/GMNPinStore.js';
+import gmnPeerBook from '../server/services/GMNPeerBook.js';
 import gmnIdentity from '../server/services/GMNIdentity.js';
 import bannedNodes from '../server/services/GMNBannedNodes.js';
+import { readFileSync } from 'node:fs';
 
 export class GMNConnectivityArbiter extends BaseArbiterV4 {
     constructor(opts = {}) {
@@ -62,6 +64,16 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
         // count so a site survives its origin going offline.
         this.replicationEnabled = process.env.GMN_REPLICATION !== 'false';
         this.targetReplicas = Number(process.env.GMN_TARGET_REPLICAS || 3);
+
+        // Batch 5: rendezvous / peer-exchange — a self-assembling mesh beyond the LAN.
+        this.peerBook = gmnPeerBook;
+        this.maxPeers = Number(process.env.GMN_MAX_PEERS || 16);
+        this.peerBook.maxPeers = this.maxPeers;
+        const net = this._loadNetworkConfig();
+        this.publicAddress = net.publicAddress || null;   // our reachable host:port, if any
+        this.bootstrapAddresses = net.bootstrap || [];
+        for (const addr of this.bootstrapAddresses) this.peerBook.remember(addr, { source: 'bootstrap' });
+        this._meshTimer = null;
     }
 
     async onInitialize() {
@@ -89,6 +101,12 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
 
         // Batch 3: expose this transport so HTTP routes can request peer sites.
         globalThis.__gmnMesh = this;
+
+        // Batch 5: dial bootstrap seeds, then keep the mesh assembled (dial + PEX).
+        for (const addr of this.bootstrapAddresses) { try { this.connectToPeer(addr); } catch {} }
+        setTimeout(() => this._maintainMesh(), 8000);
+        this._meshTimer = setInterval(() => this._maintainMesh(), 60000);
+        this._meshTimer.unref?.();
 
         this.auditLogger.info('GMN Connectivity Arbiter Ready');
     }
@@ -383,8 +401,9 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
                         this._notifyPeerChanged();
                     });
 
-                    // Sync our local site catalog to the newly-verified peer.
+                    // Sync our local site catalog + exchange peers with the newcomer.
                     this._sendLocalAnnounces(socket);
+                    this._sendPeerExchange(socket);
                 } else {
                     this.log('error', `🚨 Verification FAILED for node ${nodeId}. Closing connection.`);
                     socket.close();
@@ -429,6 +448,11 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
 
         if (msg.type === 'gmn_replica_announce') {
             this._onReplicaAnnounce(msg, fromNodeId);
+            return;
+        }
+
+        if (msg.type === 'gmn_peer_exchange') {
+            this._onPeerExchange(msg);
             return;
         }
     }
@@ -537,6 +561,57 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
         gmnRegistry.recordReplica(replica.domain, replica.contentHash, replica.replicaNodeId);
         this._sendReplicaToPeers(replica, id, hops + 1, fromNodeId);
         this._trimSeen();
+    }
+
+    // ── Batch 5: rendezvous / peer exchange ────────────────────────────────────
+
+    _loadNetworkConfig() {
+        const out = { publicAddress: process.env.GMN_PUBLIC_ADDRESS || null, bootstrap: [] };
+        if (process.env.GMN_BOOTSTRAP) out.bootstrap = process.env.GMN_BOOTSTRAP.split(',').map(s => s.trim()).filter(Boolean);
+        try {
+            const cfg = JSON.parse(readFileSync(path.resolve(process.cwd(), 'config', 'gmn-network.json'), 'utf8'));
+            if (!out.publicAddress && cfg.publicAddress) out.publicAddress = String(cfg.publicAddress);
+            if (out.bootstrap.length === 0 && Array.isArray(cfg.bootstrap)) out.bootstrap = cfg.bootstrap.map(String);
+        } catch { /* no network config — LAN/manual only */ }
+        return out;
+    }
+
+    _selfAddresses() {
+        return new Set([this.publicAddress, `localhost:${this.port}`, `127.0.0.1:${this.port}`].filter(Boolean));
+    }
+
+    /** Dial known-but-unconnected peers (up to the cap), then gossip our peerbook. */
+    _maintainMesh() {
+        const connectedNodeIds = new Set(this.peers.keys());
+        const connectedAddresses = new Set(Array.from(this.peers.values()).map(p => p.address).filter(Boolean));
+        const selfAddresses = this._selfAddresses();
+        for (const addr of this.peerBook.dialTargets({ connectedNodeIds, connectedAddresses, selfAddresses })) {
+            try { this.connectToPeer(addr); } catch {}
+        }
+        for (const [, peer] of this.peers.entries()) {
+            if (peer.socket?.readyState === WebSocket.OPEN) this._sendPeerExchange(peer.socket);
+        }
+    }
+
+    /** Hand a peer our reachable address + the addresses we know (PEX). */
+    _sendPeerExchange(socket) {
+        const peers = [];
+        if (this.publicAddress) peers.push({ nodeId: gmnIdentity.getNodeId(), address: this.publicAddress });
+        for (const entry of this.peerBook.list()) {
+            if (entry.address && entry.address !== this.publicAddress) peers.push({ nodeId: entry.nodeId || null, address: entry.address });
+        }
+        if (!peers.length) return;
+        try { socket.send(JSON.stringify({ type: 'gmn_peer_exchange', peers: peers.slice(0, 64) })); } catch {}
+    }
+
+    /** Learn dialable addresses from a peer; dialing happens on the next maintenance tick. */
+    _onPeerExchange(msg) {
+        const list = Array.isArray(msg?.peers) ? msg.peers : [];
+        const self = this._selfAddresses();
+        for (const p of list.slice(0, 64)) {
+            if (!p?.address || self.has(p.address)) continue;
+            this.peerBook.remember(p.address, { nodeId: p.nodeId || null, source: 'pex' });
+        }
     }
 
     /** A peer answered our fetch. Verify the content hash before accepting it. */
@@ -671,6 +746,9 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
 
         // Send our local site catalog so the peer's registry syncs immediately.
         this._sendLocalAnnounces(socket);
+        // We dialed this address — bind the nodeId to it, and exchange peers.
+        this.peerBook.remember(address, { nodeId });
+        this._sendPeerExchange(socket);
     }
 
     /**
@@ -745,6 +823,7 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
     }
 
     async onShutdown() {
+        if (this._meshTimer) clearInterval(this._meshTimer);
         if (this.server) this.server.close();
         if (this.udpBeacon) this.udpBeacon.close();
         for (const peer of this.peers.values()) {
