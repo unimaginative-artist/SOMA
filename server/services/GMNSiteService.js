@@ -27,6 +27,15 @@ function hash(value = '') {
     return crypto.createHash('sha256').update(String(value)).digest('hex');
 }
 
+// Deterministic JSON with sorted keys — so the same logical object always serializes
+// byte-for-byte identically, on any node. The backbone of stable content addressing.
+function stableStringify(value) {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
+    const keys = Object.keys(value).sort();
+    return '{' + keys.map(k => JSON.stringify(k) + ':' + stableStringify(value[k])).join(',') + '}';
+}
+
 const PORTAL_BRIDGE_BODY = `(function(){document.addEventListener('click',function(e){var a=e.target.closest('a[href]');if(!a)return;var h=a.getAttribute('href');if(!h)return;var g=/(?:^gmn:\\/\\/|\\b[a-z0-9][a-z0-9-]*\\.gmn(?:\\/|$))/.test(h);if(g){e.preventDefault();window.top.postMessage({type:'gmn-navigate',href:h},'*');}else if(/^https?:\\/\\//.test(h)){e.preventDefault();window.top.postMessage({type:'portal-navigate',href:h},'*');}},true);})();`;
 
 function injectPortalBridge(html, nonce) {
@@ -211,6 +220,53 @@ export class GMNSiteService {
             content: Buffer.from(bridgedHtml, 'utf8'),
             text: textFromHtml(bridgedHtml),
             contentHash: hash(bridgedHtml)
+        };
+    }
+
+    /**
+     * Content-address a whole site as a verifiable bundle.
+     *
+     * The hash is a Merkle-style root over (a) every content file's sha256 and
+     * (b) a NORMALIZED metadata core — deliberately excluding volatile fields like
+     * `updatedAt` and the raw manifest files, so two nodes holding byte-identical
+     * site content compute the SAME contentHash regardless of timestamps. That hash
+     * is the site's true network address and the basis for replication + verification.
+     */
+    bundle(site) {
+        const cleanSite = siteFromName(site);
+        if (!cleanSite) throw new Error('Invalid GMN site name');
+        const manifest = this.readManifest(cleanSite);
+        if (!manifest) throw new Error('GMN site not found');
+
+        const PROTECTED = new Set(['/manifest.gmn.json', '/construct.manifest.json']);
+        const files = this.listFiles(cleanSite) // already excludes versions/
+            .filter(file => !PROTECTED.has(file.path))
+            .map(file => {
+                const { target } = this.resolvePath(cleanSite, file.path);
+                const buffer = fs.readFileSync(target);
+                return { path: file.path, size: buffer.length, sha256: crypto.createHash('sha256').update(buffer).digest('hex') };
+            })
+            .sort((a, b) => a.path.localeCompare(b.path));
+
+        // Only the meaningful, stable metadata participates in the content address.
+        const meta = {
+            site: cleanSite,
+            entry: manifest.entry || '/index.html',
+            title: manifest.title || cleanSite,
+            description: manifest.description || '',
+            security: manifest.security || safeSecurityDefaults(),
+        };
+
+        const bundleManifest = { v: 1, meta, files };
+        const root = crypto.createHash('sha256').update(stableStringify(bundleManifest)).digest('hex');
+        return {
+            site: cleanSite,
+            // Tag the algorithm version so the scheme can evolve without ambiguity.
+            contentHash: `b1:${root}`,
+            files,
+            meta,
+            bytes: files.reduce((total, file) => total + file.size, 0),
+            fileCount: files.length,
         };
     }
 

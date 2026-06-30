@@ -2,6 +2,8 @@ import express from 'express';
 import path from 'path';
 import GMNSiteService from '../services/GMNSiteService.js';
 import DendriteSearchEngine from '../services/DendriteSearchEngine.js';
+import GMNSiteRegistry from '../services/GMNSiteRegistry.js';
+import gmnIdentity from '../services/GMNIdentity.js';
 
 const portalIndexPath = path.resolve(process.cwd(), 'data', 'aperture', 'portal-index.json');
 
@@ -35,11 +37,34 @@ export default function createGmnRoutes(_system = {}) {
     const router = express.Router();
     const gmn = new GMNSiteService();
     const dendriteSearch = new DendriteSearchEngine({ legacyJsonPath: portalIndexPath });
+    const registry = new GMNSiteRegistry();
+    const NODE_ID = gmnIdentity.getNodeId();
+
+    // Update this node's content-addressed registry row for a local site.
+    const registerDomain = (rendered) => {
+        if (!rendered?.manifest?.site) return;
+        try {
+            const b = gmn.bundle(rendered.manifest.site);
+            registry.upsert({
+                domain: rendered.canonical,
+                site: rendered.manifest.site,
+                originNodeId: NODE_ID,
+                contentHash: b.contentHash,
+                title: rendered.manifest.title || rendered.manifest.site,
+                summary: String(rendered.text || rendered.manifest.description || '').slice(0, 200),
+                bytes: b.bytes,
+                fileCount: b.fileCount,
+                replicas: [NODE_ID],
+                source: 'local',
+            });
+        } catch { /* registry update is best-effort */ }
+    };
 
     const indexDomain = (domain) => {
         const rendered = gmn.render(domain);
         if (rendered?.mime?.startsWith('text/html')) {
             dendriteSearch.indexPage(pageForDendrite(rendered));
+            registerDomain(rendered);
         }
         return rendered;
     };
@@ -47,6 +72,8 @@ export default function createGmnRoutes(_system = {}) {
     for (const site of gmn.listSites()) {
         try { indexDomain(site.canonical); } catch {}
     }
+    // Reconcile the registry with sites actually on disk (authoritative local rows).
+    try { registry.reconcileLocal(gmn, NODE_ID); } catch {}
 
     const reindexAllSites = () => {
         let indexed = 0;
@@ -69,6 +96,31 @@ export default function createGmnRoutes(_system = {}) {
 
     router.get('/templates', (_req, res) => {
         res.json({ success: true, templates: GMN_TEMPLATES, constructType: 'portal:construct:gmn-template' });
+    });
+
+    // This node's stable network identity.
+    router.get('/node', (_req, res) => {
+        res.json({ success: true, ...gmnIdentity.describe() });
+    });
+
+    // The content-addressed registry of every GMN site this node knows about.
+    router.get('/registry', (_req, res) => {
+        res.json({ success: true, nodeId: NODE_ID, stats: registry.stats(), entries: registry.list() });
+    });
+
+    router.get('/registry/:domain', (req, res) => {
+        const entry = registry.get(req.params.domain.endsWith('.gmn') ? req.params.domain : `${req.params.domain}.gmn`);
+        if (!entry) return res.status(404).json({ success: false, error: 'Not in registry' });
+        res.json({ success: true, entry });
+    });
+
+    // The verifiable content address (bundle manifest) of a local site.
+    router.get('/sites/:site/bundle', (req, res) => {
+        try {
+            res.json({ success: true, nodeId: NODE_ID, ...gmn.bundle(req.params.site) });
+        } catch (error) {
+            res.status(400).json({ success: false, error: error.message });
+        }
     });
 
     router.post('/sites/reindex-all', (_req, res) => {
