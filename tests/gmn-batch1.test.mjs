@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import GMNSiteService from '../server/services/GMNSiteService.js';
-import GMNSiteRegistry from '../server/services/GMNSiteRegistry.js';
+import { GMNSiteRegistry } from '../server/services/GMNSiteRegistry.js';
 import { GMNIdentity } from '../server/services/GMNIdentity.js';
 
 const tmp = (label) => fs.mkdtempSync(path.join(os.tmpdir(), `gmn-${label}-`));

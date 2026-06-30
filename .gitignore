@@ -191,6 +191,22 @@ SOMA/.linkedin-session.json
 SOMA/.x-session.json
 server/.soma/
 
+# ── Studio Runtime Security State (local evidence/secrets — NEVER commit) ─────
+SOMA/studio-auth-secret.txt
+SOMA/studio-sessions.json
+SOMA/studio-risk-events.json
+SOMA/studio-pairing.json
+SOMA/studio-security.json
+SOMA/studio-settings.json
+SOMA/studio-users.json
+SOMA/studio-feed.json
+SOMA/studio-comments.json
+SOMA/studio-follows.json
+SOMA/studio-notifications.json
+SOMA/studio-signals.json
+SOMA/axis/axis-state.json
+SOMA/.tmp/studio-uploads/
+
 # ── Oversized Files (exceeds GitHub 100MB limit) ──────────────────────────────
 soul_fragments.json
 graphify-out/
@@ -202,6 +218,9 @@ test_cross_session.json
 test_vectors.json
 test_personality.json
 espn_sample.json
+.soma_train_venv/
+scratch/lora-smoke-output/
+scratch/lora-smoke-export/
 
 # ── Archives ──────────────────────────────────────────────────────────────────
 *.zip
@@ -240,3 +259,6 @@ ehthumbs.db
 .idea/
 *.swp
 *.swo
+
+# GMN node private identity — must never be committed (per-machine secret)
+config/gmn-identity.json

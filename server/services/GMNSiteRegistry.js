@@ -81,6 +81,7 @@ export class GMNSiteRegistry {
             contentHash: input.contentHash ?? prev.contentHash ?? null,
             title: input.title ?? prev.title ?? domain,
             summary: input.summary ?? prev.summary ?? '',
+            reports: input.reports ?? prev.reports ?? 0,
             bytes: input.bytes ?? prev.bytes ?? 0,
             fileCount: input.fileCount ?? prev.fileCount ?? 0,
             replicas,
@@ -119,6 +120,21 @@ export class GMNSiteRegistry {
     }
 
     /**
+     * Record that `nodeId` holds a replica — but only of the CURRENT content
+     * (a replica of a stale revision is not a valid source).
+     */
+    recordReplica(domain, contentHash, nodeId) {
+        const entry = this.get(domain);
+        if (!entry || !nodeId) return { recorded: false, reason: 'unknown_domain' };
+        if (contentHash && entry.contentHash !== contentHash) return { recorded: false, reason: 'hash_mismatch' };
+        if (entry.replicas.includes(nodeId)) return { recorded: false, reason: 'already_replica' };
+        entry.replicas.push(nodeId);
+        entry.lastSeen = nowIso();
+        this._persist();
+        return { recorded: true, replicas: entry.replicas.length };
+    }
+
+    /**
      * Make the registry agree with the sites actually on disk for THIS node:
      * every local site becomes an authoritative `source: 'local'` row whose
      * origin + first replica is this node. Safe to run on every boot.
@@ -151,6 +167,60 @@ export class GMNSiteRegistry {
         return count;
     }
 
+    /**
+     * Apply a VERIFIED remote site-announce (caller must verify the signature first).
+     * Conflict rules:
+     *  - A domain we host locally is authoritative — a remote claim never overwrites it.
+     *  - Otherwise accept only a strictly newer revision (`rev`); a same-rev announce
+     *    just refreshes liveness and records the announcer as a replica.
+     */
+    applyRemoteAnnounce(announce = {}) {
+        const domain = String(announce.domain || '').toLowerCase();
+        if (!DOMAIN_RE.test(domain)) return { applied: false, reason: 'bad_domain' };
+        const prev = this.entries.get(domain);
+        if (prev && prev.source === 'local') return { applied: false, reason: 'local_authoritative' };
+        const incomingRev = Number(announce.rev || 1);
+        if (prev && Number(prev.rev || 0) > incomingRev) return { applied: false, reason: 'stale_rev' };
+        if (prev && Number(prev.rev || 0) === incomingRev && prev.contentHash === announce.contentHash) {
+            prev.lastSeen = nowIso();
+            if (announce.originNodeId && !prev.replicas.includes(announce.originNodeId)) prev.replicas.push(announce.originNodeId);
+            this._persist();
+            return { applied: false, reason: 'already_current' };
+        }
+        const entry = {
+            domain,
+            site: domain.replace(/\.gmn$/, ''),
+            originNodeId: announce.originNodeId || null,
+            contentHash: announce.contentHash || null,
+            title: announce.title || domain,
+            summary: String(announce.summary || '').slice(0, 200),
+            reports: Number(announce.reports || 0),
+            bytes: Number(announce.bytes || 0),
+            fileCount: Number(announce.fileCount || 0),
+            replicas: Array.from(new Set([...(prev?.replicas || []), announce.originNodeId].filter(Boolean))),
+            source: 'remote',
+            rev: incomingRev,
+            firstSeen: prev?.firstSeen || nowIso(),
+            lastSeen: nowIso(),
+            updatedAt: nowIso(),
+        };
+        this.entries.set(domain, entry);
+        this._persist();
+        return { applied: true, entry };
+    }
+
+    reportSite(domain) {
+        const entry = this.get(domain);
+        if (!entry) return { entry: null, thresholdCrossed: false };
+        
+        entry.reports = (entry.reports || 0) + 1;
+        this._persist();
+        
+        // Rule 0 Threshold: 5 reports triggers investigation
+        const thresholdCrossed = entry.reports === 5;
+        return { entry, thresholdCrossed };
+    }
+
     stats() {
         const all = this.list();
         return {
@@ -161,4 +231,6 @@ export class GMNSiteRegistry {
     }
 }
 
-export default GMNSiteRegistry;
+// Shared singleton — the routes (local mutations) and the connectivity arbiter
+// (remote announces) must read/write the SAME registry instance.
+export default new GMNSiteRegistry();

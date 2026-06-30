@@ -12,29 +12,19 @@
  */
 
 import crypto from 'node:crypto';
+import gmnIdentity from '../server/services/GMNIdentity.js';
 
 export class GMNHandshakeEngine {
     constructor(nodeId) {
         this.nodeId = nodeId;
-        this.keyPair = this._generateIdentityKeys();
-    }
-
-    /**
-     * Generate 512-bit equivalent identity keys
-     * Uses Ed25519 for signing and X25519 for key exchange
-     */
-    _generateIdentityKeys() {
-        // Generate Ed25519 key pair for node identity
-        const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519', {
-            privateKeyEncoding: { format: 'der', type: 'pkcs8' },
-            publicKeyEncoding: { format: 'der', type: 'spki' }
-        });
-
-        return { publicKey, privateKey };
+        // Batch 2: use the node's STABLE persistent identity instead of an ephemeral
+        // per-boot keypair, so the mesh identity survives restarts and matches the
+        // identity used for the registry and signed site-announces.
+        this.identity = gmnIdentity;
     }
 
     getPublicKey() {
-        return this.keyPair.publicKey.toString('hex');
+        return this.identity.getPublicKeyHex();
     }
 
     /**
@@ -48,31 +38,14 @@ export class GMNHandshakeEngine {
      * STAGE 2: Sign a challenge from a peer
      */
     signChallenge(challenge) {
-        const signature = crypto.sign(null, Buffer.from(challenge, 'hex'), this.keyPair.privateKey);
-        return signature.toString('hex');
+        return this.identity.sign(Buffer.from(challenge, 'hex'));
     }
 
     /**
      * STAGE 3: Verify a peer's signature
      */
     verifyPeerSignature(challenge, signature, peerPublicKeyHex) {
-        try {
-            const peerPublicKey = crypto.createPublicKey({
-                key: Buffer.from(peerPublicKeyHex, 'hex'),
-                format: 'der',
-                type: 'spki'
-            });
-
-            return crypto.verify(
-                null,
-                Buffer.from(challenge, 'hex'),
-                peerPublicKey,
-                Buffer.from(signature, 'hex')
-            );
-        } catch (e) {
-            console.error('[GMNHandshake] Signature verification failed:', e.message);
-            return false;
-        }
+        return this.identity.verify(peerPublicKeyHex, Buffer.from(challenge, 'hex'), signature);
     }
 
     /**
@@ -81,7 +54,7 @@ export class GMNHandshakeEngine {
      */
     deriveSessionKey(peerPublicKeyHex) {
         // Simplified for this layer but high-entropy
-        const combined = this.keyPair.publicKey.toString('hex') + peerPublicKeyHex;
+        const combined = this.identity.getPublicKeyHex() + peerPublicKeyHex;
         return crypto.createHash('sha512').update(combined).digest();
     }
 

@@ -36,6 +36,13 @@ function stableStringify(value) {
     return '{' + keys.map(k => JSON.stringify(k) + ':' + stableStringify(value[k])).join(',') + '}';
 }
 
+// The one place the bundle root hash is defined — used by both bundle() (local) and
+// verifyBundle() (consumer), so a fetched bundle hashes IDENTICALLY to its origin.
+function bundleRoot(meta, fileHashes) {
+    const files = [...fileHashes].sort((a, b) => a.path.localeCompare(b.path));
+    return 'b1:' + crypto.createHash('sha256').update(stableStringify({ v: 1, meta, files })).digest('hex');
+}
+
 const PORTAL_BRIDGE_BODY = `(function(){document.addEventListener('click',function(e){var a=e.target.closest('a[href]');if(!a)return;var h=a.getAttribute('href');if(!h)return;var g=/(?:^gmn:\\/\\/|\\b[a-z0-9][a-z0-9-]*\\.gmn(?:\\/|$))/.test(h);if(g){e.preventDefault();window.top.postMessage({type:'gmn-navigate',href:h},'*');}else if(/^https?:\\/\\//.test(h)){e.preventDefault();window.top.postMessage({type:'portal-navigate',href:h},'*');}},true);})();`;
 
 function injectPortalBridge(html, nonce) {
@@ -132,7 +139,8 @@ export class GMNSiteService {
     constructor(options = {}) {
         this.root = options.root || DEFAULT_ROOT;
         ensureDir(this.root);
-        this.seedDefaultSite();
+        // Cache/remote-render instances pass seed:false so they don't seed barry.gmn.
+        if (options.seed !== false) this.seedDefaultSite();
     }
 
     validateDomain(domain) {
@@ -257,17 +265,90 @@ export class GMNSiteService {
             security: manifest.security || safeSecurityDefaults(),
         };
 
-        const bundleManifest = { v: 1, meta, files };
-        const root = crypto.createHash('sha256').update(stableStringify(bundleManifest)).digest('hex');
         return {
             site: cleanSite,
-            // Tag the algorithm version so the scheme can evolve without ambiguity.
-            contentHash: `b1:${root}`,
+            contentHash: bundleRoot(meta, files),
             files,
             meta,
             bytes: files.reduce((total, file) => total + file.size, 0),
             fileCount: files.length,
         };
+    }
+
+    /**
+     * Export a site as a transportable bundle (file CONTENTS included, base64).
+     * The receiver recomputes the hash from these bytes — so the content address is
+     * verified end-to-end, never trusted from the wire.
+     */
+    exportBundle(site) {
+        const cleanSite = siteFromName(site);
+        if (!cleanSite) throw new Error('Invalid GMN site name');
+        const manifest = this.readManifest(cleanSite);
+        if (!manifest) throw new Error('GMN site not found');
+        const PROTECTED = new Set(['/manifest.gmn.json', '/construct.manifest.json']);
+        const files = [];
+        const fileHashes = [];
+        for (const file of this.listFiles(cleanSite).filter(f => !PROTECTED.has(f.path))) {
+            const { target } = this.resolvePath(cleanSite, file.path);
+            const buffer = fs.readFileSync(target);
+            files.push({ path: file.path, data: buffer.toString('base64') });
+            fileHashes.push({ path: file.path, size: buffer.length, sha256: crypto.createHash('sha256').update(buffer).digest('hex') });
+        }
+        files.sort((a, b) => a.path.localeCompare(b.path));
+        const meta = {
+            site: cleanSite,
+            entry: manifest.entry || '/index.html',
+            title: manifest.title || cleanSite,
+            description: manifest.description || '',
+            security: manifest.security || safeSecurityDefaults(),
+        };
+        return { kind: 'gmn_bundle', v: 1, site: cleanSite, domain: `${cleanSite}.gmn`, contentHash: bundleRoot(meta, fileHashes), meta, files };
+    }
+
+    /** Recompute a bundle's content address from its bytes and confirm it matches. */
+    verifyBundle(bundle) {
+        if (!bundle || !bundle.meta || !Array.isArray(bundle.files) || !bundle.contentHash) {
+            return { ok: false, reason: 'malformed' };
+        }
+        const fileHashes = bundle.files.map(file => {
+            const buffer = Buffer.from(file.data || '', 'base64');
+            return { path: file.path, size: buffer.length, sha256: crypto.createHash('sha256').update(buffer).digest('hex') };
+        });
+        const computed = bundleRoot(bundle.meta, fileHashes);
+        if (computed !== bundle.contentHash) return { ok: false, reason: 'hash_mismatch', computed };
+        return { ok: true };
+    }
+
+    /**
+     * Write a VERIFIED remote bundle into this service's root (used by the cache
+     * instance). The content still renders through the normal sandbox on read, so a
+     * malicious origin can't inject scripts — the consumer's sandbox is the trust line.
+     */
+    installBundle(bundle) {
+        const verdict = this.verifyBundle(bundle);
+        if (!verdict.ok) throw new Error(`Bundle verification failed: ${verdict.reason}`);
+        const cleanSite = siteFromName(bundle.site || bundle.meta.site);
+        if (!cleanSite) throw new Error('Invalid bundle site');
+        const siteRoot = this.siteDir(cleanSite);
+        ensureDir(siteRoot);
+        for (const file of bundle.files) {
+            const safe = safeRelativePath(file.path);
+            if (!safe) continue;
+            const { target } = this.resolvePath(cleanSite, safe);
+            ensureDir(path.dirname(target));
+            fs.writeFileSync(target, Buffer.from(file.data || '', 'base64'));
+        }
+        const updatedAt = new Date().toISOString();
+        const manifest = {
+            version: 1, site: cleanSite, canonical: `${cleanSite}.gmn`, aliases: [`portal.${cleanSite}.gmn`],
+            type: 'gmn:site', constructType: 'portal:construct:gmn-site',
+            title: bundle.meta.title || cleanSite, description: bundle.meta.description || '',
+            entry: bundle.meta.entry || '/index.html', security: bundle.meta.security || safeSecurityDefaults(),
+            source: 'remote', contentHash: bundle.contentHash, updatedAt,
+        };
+        fs.writeFileSync(this.manifestPath(cleanSite), JSON.stringify(manifest, null, 2), 'utf8');
+        fs.writeFileSync(this.constructPath(cleanSite), JSON.stringify({ version: 1, kind: 'portal:construct', subtype: 'gmn:site', site: cleanSite, entry: manifest.entry, updatedAt }, null, 2), 'utf8');
+        return this.resolve(`${cleanSite}.gmn`);
     }
 
     repairSecurity(site) {

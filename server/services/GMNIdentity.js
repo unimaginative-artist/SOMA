@@ -21,6 +21,21 @@ function deriveNodeId(publicKeyDer) {
     return 'gmn_' + fingerprint.slice(0, 40); // 160-bit fingerprint
 }
 
+/** Derive the canonical nodeId from a peer's DER public key (hex). Used to bind an
+ *  announce's claimed originNodeId to the key that signed it — anti-spoofing. */
+export function deriveNodeIdFromPublicKeyHex(publicKeyHex) {
+    try { return deriveNodeId(Buffer.from(String(publicKeyHex), 'hex')); }
+    catch { return null; }
+}
+
+/** Deterministic JSON (sorted keys) — shared canonical form for signed payloads. */
+export function gmnStableStringify(value) {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) return '[' + value.map(gmnStableStringify).join(',') + ']';
+    const keys = Object.keys(value).sort();
+    return '{' + keys.map(k => JSON.stringify(k) + ':' + gmnStableStringify(value[k])).join(',') + '}';
+}
+
 export class GMNIdentity {
     constructor(file = IDENTITY_FILE) {
         this.file = file;

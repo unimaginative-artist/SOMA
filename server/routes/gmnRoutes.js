@@ -1,9 +1,14 @@
 import express from 'express';
+import fs from 'node:fs';
 import path from 'path';
 import GMNSiteService from '../services/GMNSiteService.js';
 import DendriteSearchEngine from '../services/DendriteSearchEngine.js';
-import GMNSiteRegistry from '../services/GMNSiteRegistry.js';
+import gmnRegistry from '../services/GMNSiteRegistry.js';
 import gmnIdentity from '../services/GMNIdentity.js';
+import bannedNodes from '../services/GMNBannedNodes.js';
+import gmnPinStore from '../services/GMNPinStore.js';
+import { buildSiteAnnounce, buildReplicaAnnounce } from '../services/GMNAnnounce.js';
+import messageBroker from '../../core/MessageBroker.js';
 
 const portalIndexPath = path.resolve(process.cwd(), 'data', 'aperture', 'portal-index.json');
 
@@ -36,16 +41,19 @@ function pageForDendrite(rendered) {
 export default function createGmnRoutes(_system = {}) {
     const router = express.Router();
     const gmn = new GMNSiteService();
+    // Peers' sites are held as verified pins (GMNPinStore) and rendered through our
+    // own sandbox — we never serve a peer's HTML directly.
     const dendriteSearch = new DendriteSearchEngine({ legacyJsonPath: portalIndexPath });
-    const registry = new GMNSiteRegistry();
+    const registry = gmnRegistry;
     const NODE_ID = gmnIdentity.getNodeId();
 
-    // Update this node's content-addressed registry row for a local site.
+    // Update this node's content-addressed registry row for a local site, then
+    // announce it to the mesh so peers' registries learn it exists.
     const registerDomain = (rendered) => {
         if (!rendered?.manifest?.site) return;
         try {
             const b = gmn.bundle(rendered.manifest.site);
-            registry.upsert({
+            const entry = registry.upsert({
                 domain: rendered.canonical,
                 site: rendered.manifest.site,
                 originNodeId: NODE_ID,
@@ -57,6 +65,9 @@ export default function createGmnRoutes(_system = {}) {
                 replicas: [NODE_ID],
                 source: 'local',
             });
+            // The gossip layer dedups by (domain,rev,contentHash), so unchanged
+            // re-announces (e.g. periodic reindex) cost nothing on the wire.
+            try { messageBroker.publish('gmn.site.announce', buildSiteAnnounce(entry)); } catch { /* mesh optional */ }
         } catch { /* registry update is best-effort */ }
     };
 
@@ -74,6 +85,36 @@ export default function createGmnRoutes(_system = {}) {
     }
     // Reconcile the registry with sites actually on disk (authoritative local rows).
     try { registry.reconcileLocal(gmn, NODE_ID); } catch {}
+
+    // Render a domain locally if we host it; otherwise fetch a VERIFIED bundle from the
+    // mesh, cache it, and render through our own sandbox. Serves a stale cached copy if
+    // the mesh is unreachable (availability) — Batch 4 will formalize pinning/refresh.
+    const renderLocalOrRemote = async (domain, requestedPath) => {
+        const local = gmn.render(domain, requestedPath);
+        if (local) return local;
+        const canonical = String(domain).toLowerCase().endsWith('.gmn')
+            ? String(domain).toLowerCase() : `${String(domain).toLowerCase()}.gmn`;
+        const entry = registry.get(canonical);
+        if (!entry || entry.source === 'local') return null;
+        if (entry.originNodeId && bannedNodes.isBanned(entry.originNodeId)) return null;
+        // Already hold the current revision as a pin? Serve it.
+        if (gmnPinStore.has(canonical, entry.contentHash)) {
+            const fresh = gmnPinStore.render(canonical, requestedPath);
+            if (fresh) return fresh;
+        }
+
+        const mesh = globalThis.__gmnMesh;
+        if (!mesh?.requestSite) return gmnPinStore.render(canonical, requestedPath) || null;
+        const bundle = await mesh.requestSite(canonical);
+        if (!bundle) return gmnPinStore.render(canonical, requestedPath) || null; // stale-but-available
+        const verdict = gmnPinStore.verifyBundle(bundle);
+        if (!verdict.ok || (entry.contentHash && bundle.contentHash !== entry.contentHash)) return null;
+        // Browsing a peer's site pins it — popular sites naturally gain replicas.
+        gmnPinStore.pin(bundle);
+        registry.recordReplica(canonical, bundle.contentHash, NODE_ID);
+        try { messageBroker.publish('gmn.replica.announce', buildReplicaAnnounce(canonical, bundle.contentHash)); } catch {}
+        return gmnPinStore.render(canonical, requestedPath);
+    };
 
     const reindexAllSites = () => {
         let indexed = 0;
@@ -123,6 +164,41 @@ export default function createGmnRoutes(_system = {}) {
         }
     });
 
+    const canonicalDomain = (d) => String(d || '').toLowerCase().endsWith('.gmn') ? String(d).toLowerCase() : `${String(d).toLowerCase()}.gmn`;
+
+    // Replicas this node holds (sites it keeps alive for the network).
+    router.get('/pins', (_req, res) => {
+        res.json({ success: true, nodeId: NODE_ID, stats: gmnPinStore.stats(), pins: gmnPinStore.list() });
+    });
+
+    // Manually pin a remote site: fetch a verified bundle from the mesh and hold it.
+    router.post('/pins/:domain', async (req, res) => {
+        try {
+            const domain = canonicalDomain(req.params.domain);
+            const entry = registry.get(domain);
+            if (!entry) return res.status(404).json({ success: false, error: 'Unknown site' });
+            if (entry.source === 'local') return res.json({ success: true, alreadyLocal: true });
+            const mesh = globalThis.__gmnMesh;
+            const bundle = await mesh?.requestSite?.(domain);
+            if (!bundle) return res.status(502).json({ success: false, error: 'Could not fetch from mesh (no online holder?)' });
+            const verdict = gmnPinStore.verifyBundle(bundle);
+            if (!verdict.ok || bundle.contentHash !== entry.contentHash) return res.status(409).json({ success: false, error: 'Bundle verification failed' });
+            const pin = gmnPinStore.pin(bundle);
+            registry.recordReplica(domain, bundle.contentHash, NODE_ID);
+            try { messageBroker.publish('gmn.replica.announce', buildReplicaAnnounce(domain, bundle.contentHash)); } catch {}
+            res.json({ success: true, pin });
+        } catch (error) {
+            res.status(400).json({ success: false, error: error.message });
+        }
+    });
+
+    router.delete('/pins/:domain', (req, res) => {
+        const domain = canonicalDomain(req.params.domain);
+        const unpinned = gmnPinStore.unpin(domain);
+        registry.removeReplica(domain, NODE_ID);
+        res.json({ success: true, unpinned });
+    });
+
     router.post('/sites/reindex-all', (_req, res) => {
         const indexed = reindexAllSites();
         res.json({ success: true, indexed, intervalMs: 15 * 60 * 1000 });
@@ -145,6 +221,45 @@ export default function createGmnRoutes(_system = {}) {
         }
     });
 
+    router.post('/sites/publish-artifact', (req, res) => {
+        try {
+            const { site } = req.body || {};
+            if (!site) return res.status(400).json({ success: false, error: 'Site name required' });
+            
+            const artifactPath = path.resolve(process.cwd(), 'data', 'pulse', 'exports', `${site}.gmn-artifact`);
+            
+            if (!fs.existsSync(artifactPath)) {
+                return res.status(400).json({ success: false, error: 'No signed artifact found from Pulse. Build and Export it in Pulse first.' });
+            }
+
+            const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
+            
+            // Verify Cryptographic Signature using the Node's Ed25519 identity
+            const isValid = gmnIdentity.verify(artifact.publicKey, artifact.html, artifact.signature);
+            
+            if (!isValid) {
+                return res.status(403).json({ success: false, error: 'Cryptographic signature invalid! The artifact was modified outside of the Pulse enclave.' });
+            }
+
+            // Rule 0 Check: Is this node banned?
+            if (bannedNodes.isBanned(artifact.publicKey)) {
+                return res.status(403).json({ success: false, error: 'Rule 0 Violation: Your Node Identity has been permanently banned from publishing to Gray Matter Networks.' });
+            }
+
+            // Passed Military-Grade Verification - safe to publish to the network
+            const resolved = gmn.publish({ 
+                site, 
+                html: artifact.html, 
+                title: site, 
+                description: 'Pulse verified artifact' 
+            });
+            indexDomain(resolved.canonical);
+            res.json({ success: true, ...resolved });
+        } catch (error) {
+            res.status(400).json({ success: false, error: error.message });
+        }
+    });
+
     router.get(/^\/site\/([^/]+)(?:\/(.*))?$/, (req, res) => {
         try {
             const domain = req.params[0];
@@ -154,9 +269,41 @@ export default function createGmnRoutes(_system = {}) {
             res.setHeader('X-GMN-Domain', file.canonical);
             res.setHeader('X-GMN-Source', file.source);
             res.type(file.mime);
-            res.send(file.content);
+            
+            if (file.mime && file.mime.startsWith('text/html')) {
+                const ui = `<div id="gmn-report-btn" style="position:fixed;bottom:20px;right:20px;z-index:999999;background:#ef4444;color:white;padding:8px 16px;border-radius:20px;font-family:sans-serif;font-size:12px;font-weight:bold;cursor:pointer;box-shadow:0 4px 6px -1px rgb(0 0 0/0.1),0 2px 4px -2px rgb(0 0 0/0.1);display:flex;align-items:center;gap:6px;transition:all 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'" onclick="fetch('/api/gmn/sites/${domain}/report',{method:'POST'}).then(r=>r.json()).then(d=>{if(d.success){this.innerHTML='✓ Reported';this.style.background='#10b981';this.style.pointerEvents='none';}else{alert(d.error)}})"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>Report Site (Rule 0)</div></body>`;
+                let contentStr = file.content.toString('utf8');
+                contentStr = contentStr.replace(/<\/body>/i, ui);
+                res.send(contentStr);
+            } else {
+                res.send(file.content);
+            }
         } catch (error) {
             res.status(400).send(error.message);
+        }
+    });
+
+    router.post('/sites/:domain/report', (req, res) => {
+        try {
+            const domain = req.params.domain;
+            const { entry, thresholdCrossed } = registry.reportSite(domain);
+            
+            if (!entry) {
+                return res.status(404).json({ success: false, error: 'Site not found in registry' });
+            }
+
+            if (thresholdCrossed) {
+                // Rule 0 Triggered: Site hit 5 reports. Drop a goal on the QuadBrain Autonomous Ledger!
+                messageBroker.publish('soma.goal.create', {
+                    title: `[Rule 0 Governance] Investigate GMN Site: ${domain}`,
+                    intent: `The GMN site '${domain}' has received 5 community reports for potentially violating Rule 0. Fetch the source code, analyze it for fraud or predatory behavior. If guilty, permanently ban the creator's Cryptographic Node ID to execute AI justice.`,
+                    priority: 'high'
+                });
+            }
+
+            res.json({ success: true, reports: entry.reports, thresholdCrossed });
+        } catch (error) {
+            res.status(400).json({ success: false, error: error.message });
         }
     });
 
@@ -323,11 +470,11 @@ export default function createGmnRoutes(_system = {}) {
         }
     });
 
-    router.get(/^\/render\/([^/]+)(?:\/(.*))?$/, (req, res) => {
+    router.get(/^\/render\/([^/]+)(?:\/(.*))?$/, async (req, res) => {
         try {
             const domain = req.params[0];
             const requestedPath = req.params[1] ? `/${req.params[1]}` : '/index.html';
-            const rendered = gmn.render(domain, requestedPath);
+            const rendered = await renderLocalOrRemote(domain, requestedPath);
             if (!rendered) return res.status(404).json({ success: false, error: 'GMN site not found' });
             if (!rendered.mime.startsWith('text/html')) return res.status(415).json({ success: false, error: 'GMN render only supports HTML entries' });
             dendriteSearch.indexPage(pageForDendrite(rendered));

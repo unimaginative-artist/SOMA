@@ -19,6 +19,12 @@ import dgram from 'node:dgram';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import messageBroker from '../core/MessageBroker.js';
+import gmnRegistry from '../server/services/GMNSiteRegistry.js';
+import { buildSiteAnnounce, verifySiteAnnounce, buildReplicaAnnounce, verifyReplicaAnnounce } from '../server/services/GMNAnnounce.js';
+import GMNSiteService from '../server/services/GMNSiteService.js';
+import gmnPinStore from '../server/services/GMNPinStore.js';
+import gmnIdentity from '../server/services/GMNIdentity.js';
+import bannedNodes from '../server/services/GMNBannedNodes.js';
 
 export class GMNConnectivityArbiter extends BaseArbiterV4 {
     constructor(opts = {}) {
@@ -47,6 +53,15 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
         this.server = null;
         this.reconnectTimer = null;
         this.peersFile = path.resolve(process.cwd(), 'config', 'gmn-peers.json');
+
+        // Batch 3: serve local site bundles to peers, and track in-flight fetches.
+        this.siteService = new GMNSiteService();
+        this._pendingFetches = new Map(); // reqId -> { resolve, timer, domain, expectedHash }
+
+        // Batch 4: replication — auto-pin announced sites toward a target replica
+        // count so a site survives its origin going offline.
+        this.replicationEnabled = process.env.GMN_REPLICATION !== 'false';
+        this.targetReplicas = Number(process.env.GMN_TARGET_REPLICAS || 3);
     }
 
     async onInitialize() {
@@ -62,8 +77,18 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
         messageBroker.subscribe('gmn.publication', (env) => this._gossipWisdom(env));
         messageBroker.subscribe('gmn.gossip', (env) => this._processGossip(env));
 
+        // Batch 2: site-announce gossip — a local publish/change fans a signed
+        // announce across the mesh so peers learn the site exists.
+        messageBroker.subscribe('gmn.site.announce', (env) => this._broadcastAnnounce(env?.payload || env));
+
+        // Batch 4: a manual pin (from the HTTP layer) fans a replica announce.
+        messageBroker.subscribe('gmn.replica.announce', (env) => this._broadcastReplica(env?.payload || env));
+
         // Reconnect to saved peers (cross-internet manual connections)
         setTimeout(() => this._reconnectSavedPeers(), 5000);
+
+        // Batch 3: expose this transport so HTTP routes can request peer sites.
+        globalThis.__gmnMesh = this;
 
         this.auditLogger.info('GMN Connectivity Arbiter Ready');
     }
@@ -269,10 +294,15 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
         
         try {
             const socket = new WebSocket(`ws://${address}`);
-            
+
             socket.on('open', () => {
                 this._sendHandshakeInit(socket);
             });
+
+            // Connecting side of the mutual handshake: the peer replies to our
+            // handshake_init with a handshake_response (their signature over our
+            // challenge + their own challenge). We verify, counter-sign, and finalize.
+            socket.on('message', (data) => this._handleOutgoingHandshake(socket, data, address));
 
             socket.on('error', (err) => {
                 this.log('error', `Failed to connect to ${address}: ${err.message}`);
@@ -352,6 +382,9 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
                         this.peers.delete(nodeId);
                         this._notifyPeerChanged();
                     });
+
+                    // Sync our local site catalog to the newly-verified peer.
+                    this._sendLocalAnnounces(socket);
                 } else {
                     this.log('error', `🚨 Verification FAILED for node ${nodeId}. Closing connection.`);
                     socket.close();
@@ -376,7 +409,268 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
 
         if (msg.type === 'gmn_gossip') {
             this._processGossip(msg).catch(() => {});
+            return;
         }
+
+        if (msg.type === 'gmn_site_announce') {
+            this._onSiteAnnounce(msg, fromNodeId);
+            return;
+        }
+
+        if (msg.type === 'gmn_site_fetch') {
+            this._serveSiteFetch(msg, fromNodeId);
+            return;
+        }
+
+        if (msg.type === 'gmn_site_fetch_reply') {
+            this._onSiteFetchReply(msg);
+            return;
+        }
+
+        if (msg.type === 'gmn_replica_announce') {
+            this._onReplicaAnnounce(msg, fromNodeId);
+            return;
+        }
+    }
+
+    // ── Batch 3: cross-node site fetch ─────────────────────────────────────────
+
+    /** Ask the mesh for a site we don't host; resolves to a VERIFIED bundle or null. */
+    requestSite(domain, { timeoutMs = 8000 } = {}) {
+        return new Promise((resolve) => {
+            const dom = String(domain || '').toLowerCase();
+            const entry = gmnRegistry.get(dom);
+            const reqId = crypto.randomUUID();
+            const wire = JSON.stringify({ type: 'gmn_site_fetch', reqId, domain: dom });
+
+            let sent = 0;
+            for (const [, peer] of this.peers.entries()) {
+                if (peer.socket?.readyState === WebSocket.OPEN) {
+                    try { peer.socket.send(wire); sent++; } catch {}
+                }
+            }
+            if (sent === 0) return resolve(null);
+
+            const timer = setTimeout(() => { this._pendingFetches.delete(reqId); resolve(null); }, timeoutMs);
+            this._pendingFetches.set(reqId, { resolve, timer, domain: dom, expectedHash: entry?.contentHash || null });
+        });
+    }
+
+    /** A peer asked us for a site. Serve it only if WE host it and they aren't banned. */
+    _serveSiteFetch(msg, fromNodeId) {
+        const { reqId, domain } = msg || {};
+        const peer = this.peers.get(fromNodeId);
+        const reply = (payload) => {
+            if (peer?.socket?.readyState === WebSocket.OPEN) {
+                try { peer.socket.send(JSON.stringify({ type: 'gmn_site_fetch_reply', reqId, ...payload })); } catch {}
+            }
+        };
+        if (bannedNodes.isBanned(fromNodeId)) return reply({ ok: false, reason: 'banned' });
+        const dom = String(domain || '').toLowerCase();
+        const site = dom.replace(/\.gmn$/, '');
+        const entry = gmnRegistry.get(dom);
+        try {
+            // We can serve a site we ORIGINATE or one we hold as a verified pin.
+            if (entry && entry.source === 'local') {
+                return reply({ ok: true, bundle: this.siteService.exportBundle(entry.site || site) });
+            }
+            if (gmnPinStore.has(dom)) {
+                return reply({ ok: true, bundle: gmnPinStore.exportBundle(site) });
+            }
+            return reply({ ok: false, reason: 'not_hosted' });
+        } catch (e) {
+            reply({ ok: false, reason: e.message });
+        }
+    }
+
+    // ── Batch 4: replication / pinning ─────────────────────────────────────────
+
+    /** Decide whether to pin an announced site to help keep it alive, then do it. */
+    async _maybePin(announce) {
+        if (!this.replicationEnabled || !announce?.domain) return;
+        const domain = announce.domain;
+        const myId = gmnIdentity.getNodeId();
+        if (announce.originNodeId === myId) return;                  // our own site
+        if (gmnPinStore.has(domain, announce.contentHash)) return;  // already current
+        const entry = gmnRegistry.get(domain);
+        if ((entry?.replicas?.length || 0) >= this.targetReplicas) return; // enough copies
+        if (gmnPinStore.stats().pins >= gmnPinStore.maxPins) return;        // at capacity
+
+        try {
+            const bundle = await this.requestSite(domain);
+            if (!bundle) return;
+            if (announce.contentHash && bundle.contentHash !== announce.contentHash) return;
+            gmnPinStore.pin(bundle);
+            gmnRegistry.recordReplica(domain, bundle.contentHash, myId);
+            this._broadcastReplica(buildReplicaAnnounce(domain, bundle.contentHash));
+            this.log('info', `📌 Pinned replica of ${domain} — keeping it alive`);
+        } catch (e) {
+            this.log('warn', `Auto-pin ${domain} failed: ${e.message}`);
+        }
+    }
+
+    _broadcastReplica(replica) {
+        if (!replica?.domain) return;
+        const id = crypto.createHash('sha256').update(`replica|${replica.domain}|${replica.replicaNodeId}|${replica.contentHash}`).digest('hex');
+        if (this.seenMessages.has(id)) return;
+        this.seenMessages.add(id);
+        this._sendReplicaToPeers(replica, id, 0, null);
+        this._trimSeen();
+    }
+
+    _sendReplicaToPeers(replica, id, hops, exceptNodeId) {
+        const wire = JSON.stringify({ type: 'gmn_replica_announce', id, replica, hops });
+        for (const [peerId, peer] of this.peers.entries()) {
+            if (peerId === exceptNodeId) continue;
+            if (peer.socket?.readyState === WebSocket.OPEN) { try { peer.socket.send(wire); } catch {} }
+        }
+    }
+
+    _onReplicaAnnounce(msg, fromNodeId) {
+        const { replica, id, hops = 0 } = msg || {};
+        if (!replica || !id) return;
+        if (this.seenMessages.has(id)) return;
+        this.seenMessages.add(id);
+        if (hops > 6) return;
+        const verdict = verifyReplicaAnnounce(replica);
+        if (!verdict.ok) { this._trimSeen(); return; }
+        gmnRegistry.recordReplica(replica.domain, replica.contentHash, replica.replicaNodeId);
+        this._sendReplicaToPeers(replica, id, hops + 1, fromNodeId);
+        this._trimSeen();
+    }
+
+    /** A peer answered our fetch. Verify the content hash before accepting it. */
+    _onSiteFetchReply(msg) {
+        const { reqId, ok, bundle } = msg || {};
+        const pending = this._pendingFetches.get(reqId);
+        if (!pending) return;
+        if (!ok || !bundle) return; // wait for another peer or the timeout
+        const verdict = this.siteService.verifyBundle(bundle);
+        if (!verdict.ok) { this.log('warn', `Fetched ${pending.domain} failed verify: ${verdict.reason}`); return; }
+        if (pending.expectedHash && bundle.contentHash !== pending.expectedHash) {
+            this.log('warn', `Fetched ${pending.domain} hash != announced hash — ignoring`);
+            return;
+        }
+        clearTimeout(pending.timer);
+        this._pendingFetches.delete(reqId);
+        pending.resolve(bundle);
+    }
+
+    // ── Batch 2: site-announce gossip ──────────────────────────────────────────
+
+    _announceId(announce) {
+        const k = `${announce.domain}|${announce.originNodeId}|${announce.rev}|${announce.contentHash}`;
+        return crypto.createHash('sha256').update(k).digest('hex');
+    }
+
+    /** Outbound: a local publish/change → fan a signed announce to all peers. */
+    _broadcastAnnounce(announce) {
+        if (!announce?.domain || !announce?.contentHash) return;
+        const id = this._announceId(announce);
+        if (this.seenMessages.has(id)) return; // idempotent on (domain,rev,hash)
+        this.seenMessages.add(id);
+        this._sendAnnounceToPeers(announce, id, 0, null);
+        this._trimSeen();
+    }
+
+    _sendAnnounceToPeers(announce, id, hops, exceptNodeId) {
+        const wire = JSON.stringify({ type: 'gmn_site_announce', id, announce, hops });
+        for (const [peerId, peer] of this.peers.entries()) {
+            if (peerId === exceptNodeId) continue;
+            if (peer.socket?.readyState === WebSocket.OPEN) {
+                try { peer.socket.send(wire); } catch {}
+            }
+        }
+    }
+
+    /** Inbound: verify a peer's announce, record it, and re-propagate. */
+    _onSiteAnnounce(msg, fromNodeId) {
+        const { announce, id, hops = 0 } = msg || {};
+        if (!announce || !id) return;
+        if (this.seenMessages.has(id)) return; // loop prevention
+        this.seenMessages.add(id);
+        if (hops > 6) return; // TTL
+
+        const verdict = verifySiteAnnounce(announce);
+        if (!verdict.ok) {
+            this.log('warn', `🚫 Rejected site announce (${verdict.reason}) from ${fromNodeId}`);
+            this._trimSeen();
+            return;
+        }
+
+        const result = gmnRegistry.applyRemoteAnnounce(announce);
+        if (result.applied) {
+            this.log('info', `🌐 Learned GMN site ${announce.domain} (rev ${announce.rev}) from ${announce.originNodeId}`);
+            try { messageBroker.publish('gmn.registry.changed', { domain: announce.domain, source: 'remote' }); } catch {}
+        }
+
+        // Consider holding a replica so the site survives its origin going offline.
+        this._maybePin(announce).catch(() => {});
+
+        // Re-propagate outward (not back to the sender).
+        this._sendAnnounceToPeers(announce, id, hops + 1, fromNodeId);
+        this._trimSeen();
+    }
+
+    /** Catch-up: hand a freshly-connected peer all of our local site announces. */
+    _sendLocalAnnounces(socket) {
+        try {
+            for (const entry of gmnRegistry.list()) {
+                if (entry.source !== 'local' || !entry.contentHash) continue;
+                const announce = buildSiteAnnounce(entry);
+                const id = this._announceId(announce);
+                this.seenMessages.add(id);
+                if (socket?.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({ type: 'gmn_site_announce', id, announce, hops: 0 }));
+                }
+            }
+        } catch (e) {
+            this.log('warn', `Catch-up announce failed: ${e.message}`);
+        }
+    }
+
+    _trimSeen() {
+        if (this.seenMessages.size > 2000) {
+            const it = this.seenMessages.values();
+            for (let i = 0; i < 500; i++) this.seenMessages.delete(it.next().value);
+        }
+    }
+
+    /** Connecting side of the mutual handshake (counterpart to _processHandshake). */
+    _handleOutgoingHandshake(socket, data, address) {
+        let msg;
+        try { msg = JSON.parse(data); } catch { return; }
+        if (msg.type !== 'handshake_response') return;
+
+        // The peer signed OUR challenge. Verify it before trusting them.
+        const verified = this.handshake.verifyPeerSignature(socket.challengeSent, msg.signature, msg.publicKey);
+        if (!verified) {
+            this.log('error', `🚨 Outbound handshake verify FAILED for ${address}. Closing.`);
+            return socket.close();
+        }
+
+        // Counter-sign their challenge so they can verify us too.
+        socket.send(JSON.stringify({
+            type: 'handshake_response',
+            nodeId: this.name,
+            address: this.nodeAddress,
+            publicKey: this.handshake.getPublicKey(),
+            signature: this.handshake.signChallenge(msg.challenge),
+        }));
+
+        const nodeId = msg.nodeId;
+        this.log('success', `✅ Verified outbound peer ${nodeId} (${address})`);
+        this.trustedSynapses.add(nodeId);
+        this.peers.set(nodeId, { socket, address, status: 'online', publicKey: msg.publicKey, connectedAt: Date.now() });
+        this._notifyPeerChanged();
+
+        // Swap to the general peer message handler for everything after the handshake.
+        socket.removeAllListeners('message');
+        socket.on('message', (raw) => { try { this._handlePeerMessage(JSON.parse(raw), nodeId); } catch {} });
+        socket.on('close', () => { this.peers.delete(nodeId); this._notifyPeerChanged(); });
+
+        // Send our local site catalog so the peer's registry syncs immediately.
+        this._sendLocalAnnounces(socket);
     }
 
     /**
