@@ -11,6 +11,38 @@ already built but currently isolated.
 
 ---
 
+## Who runs it — the participation model
+
+A decentralized network doesn't need *everyone* to run a node; it needs *enough*. Like
+the web (few run servers) or BitTorrent (a file lives on its seeders), GMN stays alive on
+its hosts while everyone else rides it. People pick a rung:
+
+1. **Full node (Command Bridge)** — power users and hosts. Run the software, host their
+   own `.gmn` sites, hold replicas, act as bootstrap/gateway nodes. The backbone.
+2. **Gateway client (Studio mobile / web)** — *normal people.* Install just the app; it
+   talks to a **gateway** (a real Command Bridge on the network — their own, a community
+   one, or a public one) and rides it to browse GMN + use Studio. A phone can't run a peer
+   server and doesn't need to: `/api/gmn/render/:domain` on any node already resolves any
+   site from the whole mesh (local → replica → mesh-fetch → verify → sandbox), so the app
+   just asks a node to fetch on its behalf. **This is Batch 6.**
+3. **Hosted node** — a sovereign presence without running software: a service runs a node
+   on your behalf (your identity, your sites). Semi-decentralized middle ground.
+
+**Publishing** needs a host: a normal user publishes through a gateway/hosted node that
+holds their site; replication (Batch 4) keeps it alive if that node blinks. Full
+sovereignty (un-takedownable, self-hosted) = run your own node.
+
+**The honest tradeoff:** gateways pull *some* centralization back in. Three things keep it
+honest — content-addressing means a gateway can't tamper (verified or rejected); anyone
+can be a gateway (no single owner of the door); and you can always leave a gateway and run
+your own node (the sovereign path is always open — the part the corporate web never gives).
+
+**Shipping path:** run a few public gateway + bootstrap nodes (a Command Bridge with a
+public address *is* one); Studio mobile ships as a gateway client; power users self-host;
+later a lightweight "GMN Lite" daemon lets regular folks host cheaply without the full CB.
+
+---
+
 ## 1. What already exists (and works)
 
 ### A. The node / mesh transport — `arbiters/GMNConnectivityArbiter.js`
