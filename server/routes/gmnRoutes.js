@@ -8,6 +8,7 @@ import gmnIdentity from '../services/GMNIdentity.js';
 import bannedNodes from '../services/GMNBannedNodes.js';
 import gmnPinStore from '../services/GMNPinStore.js';
 import gmnPeerBook from '../services/GMNPeerBook.js';
+import gmnMessaging from '../services/GMNMessaging.js';
 import { buildSiteAnnounce, buildReplicaAnnounce } from '../services/GMNAnnounce.js';
 import messageBroker from '../../core/MessageBroker.js';
 
@@ -220,6 +221,38 @@ export default function createGmnRoutes(_system = {}) {
             connectedCount: mesh?.peers?.size || 0,
             knownCount: gmnPeerBook.size(),
         });
+    });
+
+    // ── Batch 7: ephemeral E2E direct messages (the secure/Pathways mode of Axis) ──
+    router.get('/dm', (_req, res) => {
+        res.json({ success: true, nodeId: NODE_ID, threads: gmnMessaging.listThreads() });
+    });
+
+    router.get('/dm/:nodeId', (req, res) => {
+        res.json({ success: true, peerNodeId: req.params.nodeId, messages: gmnMessaging.getMessages(req.params.nodeId) });
+    });
+
+    // Send a sealed message to a peer node. `encPub` (their X25519 key) is required the
+    // first time; afterwards we remember it. The mesh routes it toward them.
+    router.post('/dm/:nodeId', (req, res) => {
+        try {
+            const toNodeId = req.params.nodeId;
+            const { text, encPub, ttl = 0, viewOnce = false, burnOnReadMs = 0 } = req.body || {};
+            if (!text) return res.status(400).json({ success: false, error: 'text required' });
+            const recipientEncPub = encPub || gmnMessaging.threads.get(toNodeId)?.peerEncPub;
+            if (!recipientEncPub) return res.status(400).json({ success: false, error: 'recipient encPub unknown — pass encPub once' });
+            const { message, wire } = gmnMessaging.send(toNodeId, recipientEncPub, text, { ttl, viewOnce, burnOnReadMs });
+            const routed = globalThis.__gmnMesh?.routeDM?.(wire) || false;
+            res.json({ success: true, message, routed });
+        } catch (error) {
+            res.status(400).json({ success: false, error: error.message });
+        }
+    });
+
+    router.post('/dm/:nodeId/open', (req, res) => {
+        const r = gmnMessaging.markOpened(req.params.nodeId, req.body?.msgId);
+        if (!r) return res.status(404).json({ success: false, error: 'message not found' });
+        res.json({ success: true, ...r });
     });
 
     // Point this node at a known peer; it discovers the rest of the mesh via PEX.

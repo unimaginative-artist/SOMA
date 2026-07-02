@@ -45,50 +45,75 @@ export class GMNIdentity {
     _load() {
         if (this._state) return this._state;
 
-        // Try to load an existing persisted identity.
-        try {
-            const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-            if (raw?.privateKey && raw?.publicKey && raw?.nodeId) {
-                const publicKeyDer = Buffer.from(raw.publicKey, 'hex');
-                const privateKeyDer = Buffer.from(raw.privateKey, 'hex');
-                this._state = this._materialize(raw.nodeId, publicKeyDer, privateKeyDer, raw.createdAt);
-                return this._state;
-            }
-        } catch { /* not yet created — generate below */ }
+        let data = null;
+        try { data = JSON.parse(fs.readFileSync(this.file, 'utf8')); } catch { /* first run */ }
+        let changed = false;
 
-        // First run: generate a fresh identity and persist it.
-        const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519', {
-            publicKeyEncoding: { format: 'der', type: 'spki' },
-            privateKeyEncoding: { format: 'der', type: 'pkcs8' },
-        });
-        const nodeId = deriveNodeId(publicKey);
-        const createdAt = new Date().toISOString();
-        try {
-            fs.mkdirSync(path.dirname(this.file), { recursive: true });
-            const tmp = `${this.file}.${process.pid}.tmp`;
-            fs.writeFileSync(tmp, JSON.stringify({
-                alg: 'ed25519', nodeId,
-                publicKey: publicKey.toString('hex'),
-                privateKey: privateKey.toString('hex'),
-                createdAt,
-            }, null, 2), { mode: 0o600 });
-            fs.renameSync(tmp, this.file);
-        } catch (e) {
-            // If we can't persist, we still run with an in-memory identity for this boot.
-            console.warn(`[GMNIdentity] Could not persist identity: ${e.message}`);
+        // Ed25519 signing identity (the nodeId is derived from this — never regenerate
+        // it if it exists, or the node's identity would change).
+        if (!data?.privateKey || !data?.publicKey || !data?.nodeId) {
+            const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519', {
+                publicKeyEncoding: { format: 'der', type: 'spki' },
+                privateKeyEncoding: { format: 'der', type: 'pkcs8' },
+            });
+            data = {
+                alg: 'ed25519', nodeId: deriveNodeId(publicKey),
+                publicKey: publicKey.toString('hex'), privateKey: privateKey.toString('hex'),
+                createdAt: new Date().toISOString(),
+            };
+            changed = true;
         }
-        this._state = this._materialize(nodeId, publicKey, privateKey, createdAt);
+
+        // X25519 encryption identity (Batch 7) — added in place for existing nodes so
+        // messages can be sealed to them. Keeps the nodeId; just gains an encryption key.
+        if (!data.encPublicKey || !data.encPrivateKey) {
+            const { publicKey, privateKey } = crypto.generateKeyPairSync('x25519', {
+                publicKeyEncoding: { format: 'der', type: 'spki' },
+                privateKeyEncoding: { format: 'der', type: 'pkcs8' },
+            });
+            data.encAlg = 'x25519';
+            data.encPublicKey = publicKey.toString('hex');
+            data.encPrivateKey = privateKey.toString('hex');
+            changed = true;
+        }
+
+        if (changed) {
+            try {
+                fs.mkdirSync(path.dirname(this.file), { recursive: true });
+                const tmp = `${this.file}.${process.pid}.tmp`;
+                fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
+                fs.renameSync(tmp, this.file);
+            } catch (e) {
+                console.warn(`[GMNIdentity] Could not persist identity: ${e.message}`);
+            }
+        }
+
+        this._state = this._materialize(data);
         return this._state;
     }
 
-    _materialize(nodeId, publicKeyDer, privateKeyDer, createdAt) {
-        const publicKey = crypto.createPublicKey({ key: publicKeyDer, format: 'der', type: 'spki' });
-        const privateKey = crypto.createPrivateKey({ key: privateKeyDer, format: 'der', type: 'pkcs8' });
-        return { nodeId, publicKeyDer, privateKeyDer, publicKey, privateKey, createdAt };
+    _materialize(data) {
+        const publicKeyDer = Buffer.from(data.publicKey, 'hex');
+        const privateKeyDer = Buffer.from(data.privateKey, 'hex');
+        const encPublicKeyDer = Buffer.from(data.encPublicKey, 'hex');
+        const encPrivateKeyDer = Buffer.from(data.encPrivateKey, 'hex');
+        return {
+            nodeId: data.nodeId,
+            createdAt: data.createdAt,
+            publicKeyDer, privateKeyDer,
+            publicKey: crypto.createPublicKey({ key: publicKeyDer, format: 'der', type: 'spki' }),
+            privateKey: crypto.createPrivateKey({ key: privateKeyDer, format: 'der', type: 'pkcs8' }),
+            encPublicKeyDer, encPrivateKeyDer,
+            encPublicKey: crypto.createPublicKey({ key: encPublicKeyDer, format: 'der', type: 'spki' }),
+            encPrivateKey: crypto.createPrivateKey({ key: encPrivateKeyDer, format: 'der', type: 'pkcs8' }),
+        };
     }
 
     getNodeId() { return this._load().nodeId; }
     getPublicKeyHex() { return this._load().publicKeyDer.toString('hex'); }
+    getEncPublicKeyHex() { return this._load().encPublicKeyDer.toString('hex'); }
+    /** X25519 KeyObjects for ECDH (sealing/opening messages). */
+    getEncKeys() { const s = this._load(); return { publicKey: s.encPublicKey, privateKey: s.encPrivateKey }; }
     getCreatedAt() { return this._load().createdAt; }
 
     /** DER buffers, for compatibility with code that wants raw key material. */
@@ -118,7 +143,13 @@ export class GMNIdentity {
     /** Public, shareable descriptor of this node. */
     describe() {
         const s = this._load();
-        return { nodeId: s.nodeId, publicKey: s.publicKeyDer.toString('hex'), alg: 'ed25519', createdAt: s.createdAt };
+        return {
+            nodeId: s.nodeId,
+            publicKey: s.publicKeyDer.toString('hex'),
+            encPublicKey: s.encPublicKeyDer.toString('hex'),
+            alg: 'ed25519', encAlg: 'x25519',
+            createdAt: s.createdAt,
+        };
     }
 }
 

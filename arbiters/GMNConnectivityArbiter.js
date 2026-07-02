@@ -24,6 +24,7 @@ import { buildSiteAnnounce, verifySiteAnnounce, buildReplicaAnnounce, verifyRepl
 import GMNSiteService from '../server/services/GMNSiteService.js';
 import gmnPinStore from '../server/services/GMNPinStore.js';
 import gmnPeerBook from '../server/services/GMNPeerBook.js';
+import gmnMessaging from '../server/services/GMNMessaging.js';
 import gmnIdentity from '../server/services/GMNIdentity.js';
 import bannedNodes from '../server/services/GMNBannedNodes.js';
 import { readFileSync } from 'node:fs';
@@ -455,6 +456,75 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
             this._onPeerExchange(msg);
             return;
         }
+
+        if (msg.type === 'gmn_dm') {
+            this._onDirectMessage(msg, fromNodeId);
+            return;
+        }
+
+        if (msg.type === 'gmn_dm_receipt') {
+            this._onDmReceipt(msg, fromNodeId);
+            return;
+        }
+    }
+
+    // ── Batch 7b: ephemeral E2E direct messages over the mesh ──────────────────
+    // Messages flood toward the addressed node (cleartext `to` for routing; the body
+    // is sealed so only the recipient reads it). Each node dedups + relays; the
+    // recipient stores it and sends a signed delivery receipt back.
+
+    _floodPacket(wire, hops, exceptNodeId) {
+        const packet = JSON.stringify({ ...wire, hops });
+        for (const [peerId, peer] of this.peers.entries()) {
+            if (peerId === exceptNodeId) continue;
+            if (peer.socket?.readyState === WebSocket.OPEN) { try { peer.socket.send(packet); } catch {} }
+        }
+    }
+
+    /** Send a sealed DM onto the mesh (called by the HTTP layer). */
+    routeDM(wire) {
+        if (!wire?.to || !wire?.msgId) return false;
+        this.seenMessages.add('dm|' + wire.msgId); // we originate it
+        this._floodPacket(wire, 0, null);
+        this._trimSeen();
+        return true;
+    }
+
+    _onDirectMessage(msg, fromNodeId) {
+        const key = 'dm|' + msg.msgId;
+        if (this.seenMessages.has(key)) return;
+        this.seenMessages.add(key); this._trimSeen();
+
+        if (msg.to === gmnIdentity.getNodeId()) {
+            const r = gmnMessaging.receive(msg);
+            if (r?.ok && !r.duplicate) {
+                try { messageBroker.publish('gmn.dm.received', { from: r.from, msgId: msg.msgId }); } catch {}
+                this._sendReceipt(r.from, msg.msgId, 'delivered');
+            }
+            return;
+        }
+        if ((msg.hops || 0) > 6) return; // TTL
+        this._floodPacket(msg, (msg.hops || 0) + 1, fromNodeId); // relay onward
+    }
+
+    _sendReceipt(toNodeId, msgId, kind) {
+        const wire = { type: 'gmn_dm_receipt', to: toNodeId, from: gmnIdentity.getNodeId(), msgId, kind, ts: Date.now() };
+        this.seenMessages.add('rcpt|' + msgId + '|' + kind);
+        this._floodPacket(wire, 0, null);
+    }
+
+    _onDmReceipt(msg, fromNodeId) {
+        const key = 'rcpt|' + msg.msgId + '|' + msg.kind;
+        if (this.seenMessages.has(key)) return;
+        this.seenMessages.add(key); this._trimSeen();
+
+        if (msg.to === gmnIdentity.getNodeId()) {
+            if (msg.kind === 'delivered') gmnMessaging.markDelivered(msg.from, msg.msgId);
+            try { messageBroker.publish('gmn.dm.receipt', { from: msg.from, msgId: msg.msgId, kind: msg.kind }); } catch {}
+            return;
+        }
+        if ((msg.hops || 0) > 6) return;
+        this._floodPacket(msg, (msg.hops || 0) + 1, fromNodeId);
     }
 
     // ── Batch 3: cross-node site fetch ─────────────────────────────────────────
