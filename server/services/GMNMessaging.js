@@ -60,14 +60,18 @@ export class GMNMessaging {
     /** Remember a peer's encryption key (so we can seal to them). */
     recordPeer(peerNodeId, peerEncPub) { if (peerNodeId && peerEncPub) { this._thread(peerNodeId, peerEncPub); this._persist(); } }
 
-    /** Compose + seal a message. Returns { message, wire } — hand `wire` to the mesh. */
-    send(toNodeId, toEncPub, text, { ttl = 0, viewOnce = false, burnOnReadMs = 0 } = {}) {
+    /**
+     * Compose + seal a message. Returns { message, wire } — hand `wire` to the mesh.
+     * `convo` lets one node host many logically-separate secure threads (e.g. the
+     * Studio direct/chatId a message belongs to) so contacts sharing a node don't merge.
+     */
+    send(toNodeId, toEncPub, text, { ttl = 0, viewOnce = false, burnOnReadMs = 0, convo = null } = {}) {
         const body = String(text || '');
         if (!body) throw new Error('empty message');
         const t = now();
         const id = rid();
         const msg = {
-            id, dir: 'out', from: this.myId, to: toNodeId, text: body,
+            id, dir: 'out', from: this.myId, to: toNodeId, convo: convo || null, text: body,
             ttl: Number(ttl) || 0, viewOnce: !!viewOnce, burnOnReadMs: Number(burnOnReadMs) || 0,
             createdAt: t, deliveredAt: null, openedAt: null,
             expiresAt: (!burnOnReadMs && Number(ttl) > 0) ? t + Number(ttl) * 1000 : null,
@@ -77,7 +81,7 @@ export class GMNMessaging {
         thread.messages.push(msg);
         this._persist();
 
-        const payload = JSON.stringify({ id, text: body, ttl: msg.ttl, viewOnce: msg.viewOnce, burnOnReadMs: msg.burnOnReadMs, createdAt: t });
+        const payload = JSON.stringify({ id, text: body, ttl: msg.ttl, viewOnce: msg.viewOnce, burnOnReadMs: msg.burnOnReadMs, convo: msg.convo, createdAt: t });
         const envelope = seal(payload, toEncPub, this.identity);
         return { message: msg, wire: { type: 'gmn_dm', to: toNodeId, msgId: id, envelope } };
     }
@@ -92,7 +96,7 @@ export class GMNMessaging {
         const thread = this._thread(r.from, r.senderEncPub);
         if (thread.messages.some(m => m.id === p.id)) return { ok: true, duplicate: true, from: r.from };
         const msg = {
-            id: p.id, dir: 'in', from: r.from, to: this.myId, text: String(p.text || ''),
+            id: p.id, dir: 'in', from: r.from, to: this.myId, convo: p.convo || null, text: String(p.text || ''),
             ttl: Number(p.ttl) || 0, viewOnce: !!p.viewOnce, burnOnReadMs: Number(p.burnOnReadMs) || 0,
             createdAt: p.createdAt || t, deliveredAt: t, openedAt: null,
             expiresAt: (!p.burnOnReadMs && Number(p.ttl) > 0) ? t + Number(p.ttl) * 1000 : null,
@@ -166,12 +170,13 @@ export class GMNMessaging {
         }).sort((a, b) => (b.last?.at || 0) - (a.last?.at || 0));
     }
 
-    getMessages(peerNodeId) {
+    getMessages(peerNodeId, { convo = null } = {}) {
         this.sweep();
         const t = this.threads.get(peerNodeId);
         if (!t) return [];
-        return t.messages.map(m => ({
-            id: m.id, dir: m.dir, from: m.from, text: (m.viewOnce && !m.openedAt && m.dir === 'in') ? '' : m.text,
+        const rows = convo != null ? t.messages.filter(m => (m.convo || null) === convo) : t.messages;
+        return rows.map(m => ({
+            id: m.id, dir: m.dir, from: m.from, convo: m.convo || null, text: (m.viewOnce && !m.openedAt && m.dir === 'in') ? '' : m.text,
             viewOnce: !!m.viewOnce, locked: !!(m.viewOnce && !m.openedAt && m.dir === 'in'),
             ttl: m.ttl, burnOnReadMs: m.burnOnReadMs, createdAt: m.createdAt, openedAt: m.openedAt || null,
             expiresAt: m.expiresAt || null, deliveredAt: m.deliveredAt || null, status: m.status,

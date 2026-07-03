@@ -25,7 +25,7 @@ import GMNSiteService from '../server/services/GMNSiteService.js';
 import gmnPinStore from '../server/services/GMNPinStore.js';
 import gmnPeerBook from '../server/services/GMNPeerBook.js';
 import gmnMessaging from '../server/services/GMNMessaging.js';
-import gmnIdentity from '../server/services/GMNIdentity.js';
+import gmnIdentity, { deriveNodeIdFromPublicKeyHex } from '../server/services/GMNIdentity.js';
 import bannedNodes from '../server/services/GMNBannedNodes.js';
 import { readFileSync } from 'node:fs';
 
@@ -343,6 +343,7 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
             nodeId: this.name,
             address: this.nodeAddress,
             publicKey: this.handshake.getPublicKey(),
+            encPub: gmnIdentity.getEncPublicKeyHex(),
             challenge: challenge,
             port: this.port
         }));
@@ -368,6 +369,7 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
             nodeId: this.name,
             address: this.nodeAddress,
             publicKey: this.handshake.getPublicKey(),
+            encPub: gmnIdentity.getEncPublicKeyHex(),
             signature: signature,
             challenge: ourChallenge
         }));
@@ -385,7 +387,9 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
                 if (verified) {
                     this.log('success', `✅ Node ${nodeId} VERIFIED via 512-bit Arbiter Handshake`);
                     this.trustedSynapses.add(nodeId);
-                    this.peers.set(nodeId, { socket, address, status: 'online', publicKey: nextMsg.publicKey, connectedAt: Date.now() });
+                    const peerEncPub = msg.encPub || nextMsg.encPub || null;
+                    this.peers.set(nodeId, { socket, address, status: 'online', publicKey: nextMsg.publicKey, encPub: peerEncPub, connectedAt: Date.now() });
+                    this._recordMessagingContact(nextMsg.publicKey, peerEncPub);
                     this._notifyPeerChanged();
 
                     // Cleanup this listener
@@ -525,6 +529,30 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
         }
         if ((msg.hops || 0) > 6) return;
         this._floodPacket(msg, (msg.hops || 0) + 1, fromNodeId);
+    }
+
+    /**
+     * Batch 7c: turn a verified peer into a messageable contact.
+     * The handshake carries the peer's SIGNING key (nodeId source) + encryption key;
+     * we store {gmnNodeId, encPub} so Axis can seal directs to them.
+     */
+    _recordMessagingContact(signPubHex, encPubHex) {
+        if (!signPubHex || !encPubHex) return; // pre-7c peer — no encryption key yet
+        try {
+            const gmnNodeId = deriveNodeIdFromPublicKeyHex(signPubHex);
+            if (gmnNodeId) gmnMessaging.recordPeer(gmnNodeId, encPubHex);
+        } catch { /* non-fatal — contact just won't be addressable */ }
+    }
+
+    /** The gmn nodeIds of currently-connected peers (derived from their signing keys). */
+    connectedGmnIds() {
+        const ids = new Set();
+        for (const [, peer] of this.peers.entries()) {
+            if (peer?.publicKey) {
+                try { const id = deriveNodeIdFromPublicKeyHex(peer.publicKey); if (id) ids.add(id); } catch {}
+            }
+        }
+        return ids;
     }
 
     // ── Batch 3: cross-node site fetch ─────────────────────────────────────────
@@ -800,13 +828,15 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
             nodeId: this.name,
             address: this.nodeAddress,
             publicKey: this.handshake.getPublicKey(),
+            encPub: gmnIdentity.getEncPublicKeyHex(),
             signature: this.handshake.signChallenge(msg.challenge),
         }));
 
         const nodeId = msg.nodeId;
         this.log('success', `✅ Verified outbound peer ${nodeId} (${address})`);
         this.trustedSynapses.add(nodeId);
-        this.peers.set(nodeId, { socket, address, status: 'online', publicKey: msg.publicKey, connectedAt: Date.now() });
+        this.peers.set(nodeId, { socket, address, status: 'online', publicKey: msg.publicKey, encPub: msg.encPub || null, connectedAt: Date.now() });
+        this._recordMessagingContact(msg.publicKey, msg.encPub);
         this._notifyPeerChanged();
 
         // Swap to the general peer message handler for everything after the handshake.

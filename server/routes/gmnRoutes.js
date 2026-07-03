@@ -228,8 +228,48 @@ export default function createGmnRoutes(_system = {}) {
         res.json({ success: true, nodeId: NODE_ID, threads: gmnMessaging.listThreads() });
     });
 
+    // Contacts: everyone Axis can seal a direct to — known peers with an encryption key,
+    // flagged with live-connection status. This is the addressing layer the UI resolves against.
+    router.get('/contacts', (_req, res) => {
+        try {
+            const connected = globalThis.__gmnMesh?.connectedGmnIds?.() || new Set();
+            const contacts = gmnMessaging.listThreads()
+                .filter(t => t.peerEncPub) // addressable = we hold their X25519 key
+                .map(t => ({
+                    nodeId: t.peerNodeId,
+                    encPub: t.peerEncPub,
+                    connected: connected.has(t.peerNodeId),
+                    unread: t.unread,
+                    last: t.last,
+                }));
+            res.json({
+                success: true,
+                self: { nodeId: NODE_ID, encPub: gmnIdentity.getEncPublicKeyHex() },
+                contacts,
+            });
+        } catch (error) {
+            res.status(500).json({ success: false, error: error.message });
+        }
+    });
+
     router.get('/dm/:nodeId', (req, res) => {
-        res.json({ success: true, peerNodeId: req.params.nodeId, messages: gmnMessaging.getMessages(req.params.nodeId) });
+        const convo = req.query.convo != null ? String(req.query.convo) : null;
+        res.json({ success: true, peerNodeId: req.params.nodeId, convo, messages: gmnMessaging.getMessages(req.params.nodeId, { convo }) });
+    });
+
+    // Resolve a Studio friend/userId → the gmn node identity that hosts them, so the
+    // unified directs UI can seal a "Pathway" (secure) message to them. Until true
+    // cross-node federation, everyone resolves to THIS node (real crypto, one machine);
+    // an optional config/gmn-user-nodes.json maps userIds to remote nodes as they federate.
+    router.get('/resolve/:userId', (req, res) => {
+        const userId = String(req.params.userId || '');
+        let map = {};
+        try { map = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'config', 'gmn-user-nodes.json'), 'utf8')) || {}; } catch { /* none yet */ }
+        const remote = map[userId];
+        if (remote && remote.nodeId && remote.encPub) {
+            return res.json({ success: true, userId, nodeId: remote.nodeId, encPub: remote.encPub, local: false });
+        }
+        res.json({ success: true, userId, nodeId: NODE_ID, encPub: gmnIdentity.getEncPublicKeyHex(), local: true });
     });
 
     // Send a sealed message to a peer node. `encPub` (their X25519 key) is required the
@@ -237,11 +277,11 @@ export default function createGmnRoutes(_system = {}) {
     router.post('/dm/:nodeId', (req, res) => {
         try {
             const toNodeId = req.params.nodeId;
-            const { text, encPub, ttl = 0, viewOnce = false, burnOnReadMs = 0 } = req.body || {};
+            const { text, encPub, ttl = 0, viewOnce = false, burnOnReadMs = 0, convo = null } = req.body || {};
             if (!text) return res.status(400).json({ success: false, error: 'text required' });
             const recipientEncPub = encPub || gmnMessaging.threads.get(toNodeId)?.peerEncPub;
             if (!recipientEncPub) return res.status(400).json({ success: false, error: 'recipient encPub unknown — pass encPub once' });
-            const { message, wire } = gmnMessaging.send(toNodeId, recipientEncPub, text, { ttl, viewOnce, burnOnReadMs });
+            const { message, wire } = gmnMessaging.send(toNodeId, recipientEncPub, text, { ttl, viewOnce, burnOnReadMs, convo });
             const routed = globalThis.__gmnMesh?.routeDM?.(wire) || false;
             res.json({ success: true, message, routed });
         } catch (error) {
