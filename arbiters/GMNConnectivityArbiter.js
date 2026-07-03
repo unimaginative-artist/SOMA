@@ -524,6 +524,8 @@ export class GMNConnectivityArbiter extends BaseArbiterV4 {
 
         if (msg.to === gmnIdentity.getNodeId()) {
             if (msg.kind === 'delivered') gmnMessaging.markDelivered(msg.from, msg.msgId);
+            else if (msg.kind === 'read') gmnMessaging.markRead(msg.from, msg.msgId);
+            else if (msg.kind === 'screenshot') gmnMessaging.markScreenshot(msg.from, msg.msgId);
             try { messageBroker.publish('gmn.dm.receipt', { from: msg.from, msgId: msg.msgId, kind: msg.kind }); } catch {}
             return;
         }

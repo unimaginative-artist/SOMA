@@ -277,11 +277,11 @@ export default function createGmnRoutes(_system = {}) {
     router.post('/dm/:nodeId', (req, res) => {
         try {
             const toNodeId = req.params.nodeId;
-            const { text, encPub, ttl = 0, viewOnce = false, burnOnReadMs = 0, convo = null } = req.body || {};
-            if (!text) return res.status(400).json({ success: false, error: 'text required' });
+            const { text, encPub, ttl = 0, viewOnce = false, burnOnReadMs = 0, convo = null, media = null, mediaType = null } = req.body || {};
+            if (!text && !media) return res.status(400).json({ success: false, error: 'text or media required' });
             const recipientEncPub = encPub || gmnMessaging.threads.get(toNodeId)?.peerEncPub;
             if (!recipientEncPub) return res.status(400).json({ success: false, error: 'recipient encPub unknown — pass encPub once' });
-            const { message, wire } = gmnMessaging.send(toNodeId, recipientEncPub, text, { ttl, viewOnce, burnOnReadMs, convo });
+            const { message, wire } = gmnMessaging.send(toNodeId, recipientEncPub, text, { ttl, viewOnce, burnOnReadMs, convo, media, mediaType });
             const routed = globalThis.__gmnMesh?.routeDM?.(wire) || false;
             res.json({ success: true, message, routed });
         } catch (error) {
@@ -290,9 +290,22 @@ export default function createGmnRoutes(_system = {}) {
     });
 
     router.post('/dm/:nodeId/open', (req, res) => {
-        const r = gmnMessaging.markOpened(req.params.nodeId, req.body?.msgId);
+        const peerNodeId = req.params.nodeId;
+        const msgId = req.body?.msgId;
+        const r = gmnMessaging.markOpened(peerNodeId, msgId);
         if (!r) return res.status(404).json({ success: false, error: 'message not found' });
+        // Tell the sender we read it (read receipt travels back over the mesh).
+        try { globalThis.__gmnMesh?._sendReceipt?.(r.sender || peerNodeId, msgId, 'read'); } catch {}
         res.json({ success: true, ...r });
+    });
+
+    // Recipient reports a screenshot of a sealed message → notify the sender.
+    router.post('/dm/:nodeId/screenshot', (req, res) => {
+        const peerNodeId = req.params.nodeId;
+        const msgId = req.body?.msgId;
+        if (!msgId) return res.status(400).json({ success: false, error: 'msgId required' });
+        try { globalThis.__gmnMesh?._sendReceipt?.(peerNodeId, msgId, 'screenshot'); } catch {}
+        res.json({ success: true });
     });
 
     // Point this node at a known peer; it discovers the rest of the mesh via PEX.

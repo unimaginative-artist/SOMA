@@ -65,13 +65,15 @@ export class GMNMessaging {
      * `convo` lets one node host many logically-separate secure threads (e.g. the
      * Studio direct/chatId a message belongs to) so contacts sharing a node don't merge.
      */
-    send(toNodeId, toEncPub, text, { ttl = 0, viewOnce = false, burnOnReadMs = 0, convo = null } = {}) {
+    send(toNodeId, toEncPub, text, { ttl = 0, viewOnce = false, burnOnReadMs = 0, convo = null, media = null, mediaType = null } = {}) {
         const body = String(text || '');
-        if (!body) throw new Error('empty message');
+        const mediaData = media ? String(media) : null;   // e.g. a data: URL — sealed like the text
+        if (!body && !mediaData) throw new Error('empty message');
         const t = now();
         const id = rid();
         const msg = {
             id, dir: 'out', from: this.myId, to: toNodeId, convo: convo || null, text: body,
+            media: mediaData, mediaType: mediaData ? (mediaType || 'image') : null,
             ttl: Number(ttl) || 0, viewOnce: !!viewOnce, burnOnReadMs: Number(burnOnReadMs) || 0,
             createdAt: t, deliveredAt: null, openedAt: null,
             expiresAt: (!burnOnReadMs && Number(ttl) > 0) ? t + Number(ttl) * 1000 : null,
@@ -81,7 +83,7 @@ export class GMNMessaging {
         thread.messages.push(msg);
         this._persist();
 
-        const payload = JSON.stringify({ id, text: body, ttl: msg.ttl, viewOnce: msg.viewOnce, burnOnReadMs: msg.burnOnReadMs, convo: msg.convo, createdAt: t });
+        const payload = JSON.stringify({ id, text: body, media: mediaData, mediaType: msg.mediaType, ttl: msg.ttl, viewOnce: msg.viewOnce, burnOnReadMs: msg.burnOnReadMs, convo: msg.convo, createdAt: t });
         const envelope = seal(payload, toEncPub, this.identity);
         return { message: msg, wire: { type: 'gmn_dm', to: toNodeId, msgId: id, envelope } };
     }
@@ -97,6 +99,7 @@ export class GMNMessaging {
         if (thread.messages.some(m => m.id === p.id)) return { ok: true, duplicate: true, from: r.from };
         const msg = {
             id: p.id, dir: 'in', from: r.from, to: this.myId, convo: p.convo || null, text: String(p.text || ''),
+            media: p.media ? String(p.media) : null, mediaType: p.media ? (p.mediaType || 'image') : null,
             ttl: Number(p.ttl) || 0, viewOnce: !!p.viewOnce, burnOnReadMs: Number(p.burnOnReadMs) || 0,
             createdAt: p.createdAt || t, deliveredAt: t, openedAt: null,
             expiresAt: (!p.burnOnReadMs && Number(p.ttl) > 0) ? t + Number(p.ttl) * 1000 : null,
@@ -119,7 +122,14 @@ export class GMNMessaging {
             m.status = 'read';
             this._persist();
         }
-        return { openedAt: m.openedAt, expiresAt: m.expiresAt };
+        return { openedAt: m.openedAt, expiresAt: m.expiresAt, sender: m.from };
+    }
+
+    /** Sender side: a 'read' receipt came back — mark our outgoing message read. */
+    markRead(peerNodeId, msgId) {
+        const m = this.threads.get(peerNodeId)?.messages.find(x => x.id === msgId);
+        if (m && !m.readAt) { m.readAt = now(); m.status = 'read'; this._persist(); }
+        return m || null;
     }
 
     react(peerNodeId, msgId, emoji) {
@@ -175,13 +185,18 @@ export class GMNMessaging {
         const t = this.threads.get(peerNodeId);
         if (!t) return [];
         const rows = convo != null ? t.messages.filter(m => (m.convo || null) === convo) : t.messages;
-        return rows.map(m => ({
-            id: m.id, dir: m.dir, from: m.from, convo: m.convo || null, text: (m.viewOnce && !m.openedAt && m.dir === 'in') ? '' : m.text,
-            viewOnce: !!m.viewOnce, locked: !!(m.viewOnce && !m.openedAt && m.dir === 'in'),
-            ttl: m.ttl, burnOnReadMs: m.burnOnReadMs, createdAt: m.createdAt, openedAt: m.openedAt || null,
-            expiresAt: m.expiresAt || null, deliveredAt: m.deliveredAt || null, status: m.status,
-            reactions: m.reactions || {}, screenshot: !!m.screenshot,
-        }));
+        return rows.map(m => {
+            const hidden = m.viewOnce && !m.openedAt && m.dir === 'in';   // incoming view-once withheld until opened
+            return {
+                id: m.id, dir: m.dir, from: m.from, convo: m.convo || null,
+                text: hidden ? '' : m.text,
+                media: hidden ? null : (m.media || null), mediaType: m.mediaType || null,
+                viewOnce: !!m.viewOnce, locked: !!hidden,
+                ttl: m.ttl, burnOnReadMs: m.burnOnReadMs, createdAt: m.createdAt, openedAt: m.openedAt || null,
+                expiresAt: m.expiresAt || null, deliveredAt: m.deliveredAt || null, readAt: m.readAt || null, status: m.status,
+                reactions: m.reactions || {}, screenshot: !!m.screenshot,
+            };
+        });
     }
 }
 
