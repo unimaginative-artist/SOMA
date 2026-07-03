@@ -83,6 +83,12 @@ export interface ChatMessage {
   locked?: boolean;      // incoming view-once body withheld until opened
   expiresAt?: number | null;
   ts?: number;           // createdAt ms, for time-merge with normal messages
+  media?: string | null; // sealed data: URL (withheld while locked)
+  mediaType?: string | null;
+  deliveredAt?: number | null;
+  readAt?: number | null;
+  screenshot?: boolean;
+  status?: string;
 }
 
 export interface ChatSession {

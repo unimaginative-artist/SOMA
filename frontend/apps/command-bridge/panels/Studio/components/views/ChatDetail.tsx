@@ -16,12 +16,25 @@ interface Props {
 
 /* A sealed "Pathway" message, inline in the same thread — rendered in the
    violet/rose secure style with a burn bar and tap-to-reveal for view-once. */
+const SecureReceipt: React.FC<{ msg: ChatMessage }> = ({ msg }) => {
+  const label = msg.readAt ? 'Read' : msg.deliveredAt ? 'Delivered' : 'Sent';
+  return (
+    <div className="mt-1 flex items-center justify-end gap-1.5">
+      {msg.screenshot && (
+        <span className="flex items-center gap-1 font-mono text-[8.5px] text-amber-400"><ImageIcon size={9} />screenshot</span>
+      )}
+      <span className={`font-mono text-[8.5px] tracking-[0.06em] ${msg.readAt ? 'text-fuchsia-400' : 'text-white/40'}`}>{label}</span>
+    </div>
+  );
+};
+
 const SecureBubble: React.FC<{ msg: ChatMessage; senderName: string; onReveal: (m: ChatMessage) => void }> = ({ msg, senderName, onReveal }) => {
   const isMe = msg.sender === 'user';
   const locked = !!msg.locked && !isMe;
+  const hasMedia = !!msg.media && !locked;
   const burnTtl = msg.ttl || (msg.viewOnce ? 12 : 0);
   return (
-    <div className={`flex ${isMe ? 'justify-end' : 'justify-start'} items-end`}>
+    <div className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
       <div className="relative max-w-[72%]">
         <div className={`mb-1 flex items-center gap-1.5 ${isMe ? 'justify-end' : 'justify-start'}`}>
           <ShieldCheck size={11} className="text-fuchsia-400" />
@@ -31,13 +44,20 @@ const SecureBubble: React.FC<{ msg: ChatMessage; senderName: string; onReveal: (
         </div>
         <div
           onClick={locked ? () => onReveal(msg) : undefined}
-          className={`relative overflow-hidden px-3.5 py-2.5 text-[15px] leading-snug ${locked ? 'cursor-pointer' : ''} ${
+          className={`relative overflow-hidden text-[15px] leading-snug ${locked ? 'cursor-pointer' : ''} ${hasMedia ? 'p-1' : 'px-3.5 py-2.5'} ${
             isMe
               ? 'rounded-[18px_18px_5px_18px] bg-gradient-to-br from-fuchsia-500 to-rose-500 text-white'
               : 'rounded-[18px_18px_18px_5px] border border-fuchsia-400/35 bg-fuchsia-500/[0.08] text-fuchsia-50'
           }`}
         >
-          {locked ? <span className="font-semibold text-fuchsia-200">📷 Tap to open · view once</span> : msg.text}
+          {locked ? (
+            <span className="inline-block px-3 py-2 font-semibold text-fuchsia-200">📷 Tap to open · view once</span>
+          ) : (
+            <>
+              {hasMedia && <img src={msg.media as string} alt="sealed" className="block max-h-[280px] max-w-[240px] rounded-[14px] object-cover" />}
+              {msg.text && <div className={hasMedia ? 'px-2.5 pb-1 pt-1.5' : ''}>{msg.text}</div>}
+            </>
+          )}
           {msg.expiresAt && burnTtl ? (
             <span
               className="absolute bottom-0 left-0 h-[2px] rounded-full"
@@ -51,6 +71,7 @@ const SecureBubble: React.FC<{ msg: ChatMessage; senderName: string; onReveal: (
             />
           ) : null}
         </div>
+        {isMe && <SecureReceipt msg={msg} />}
       </div>
     </div>
   );
@@ -124,6 +145,26 @@ const ChatDetail: React.FC<Props> = ({ chat, onBack, currentUserAvatar }) => {
   const revealSecure = (m: ChatMessage) => {
       if (!m.msgId) return;
       openSecureMessage(chat, m.msgId).then(() => pullRef.current && pullRef.current());
+  };
+
+  const fileRef = useRef<HTMLInputElement>(null);
+  const sendMedia = (file?: File | null) => {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+          const media = String(reader.result || '');
+          if (!media) return;
+          const now = Date.now();
+          setMessages(prev => [...prev, {
+              id: 'sec-' + now, text: '', sender: 'user',
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              ts: now, secure: true, ttl, viewOnce, media, mediaType: 'image',
+              expiresAt: (!viewOnce && ttl > 0) ? now + ttl * 1000 : null,
+          }]);
+          sendSecureMessage(chat, '', { ttl, viewOnce, media, mediaType: 'image' })
+              .then(() => pullRef.current && pullRef.current());
+      };
+      reader.readAsDataURL(file);
   };
 
   useEffect(() => {
@@ -341,8 +382,15 @@ const ChatDetail: React.FC<Props> = ({ chat, onBack, currentUserAvatar }) => {
                         viewOnce ? 'border-fuchsia-400 bg-fuchsia-400/10 text-fuchsia-400' : 'border-white/10 text-white/35'
                     }`}
                 ><ShieldCheck size={11} />View once</button>
+                <button
+                    type="button"
+                    onClick={() => fileRef.current?.click()}
+                    className="flex shrink-0 items-center gap-1 rounded-md border border-white/10 px-2.5 py-1 font-mono text-[9.5px] font-bold uppercase tracking-[0.05em] text-fuchsia-400 transition hover:border-fuchsia-400/50"
+                ><ImageIcon size={11} />Photo</button>
             </div>
         )}
+        <input ref={fileRef} type="file" accept="image/*" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; sendMedia(f); }} />
 
         {/* Input Area */}
         <form onSubmit={handleSubmit} className="fixed bottom-0 left-0 right-0 z-[240] flex items-center gap-3 bg-black p-3 pb-8 pointer-events-auto">

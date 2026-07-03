@@ -53,6 +53,12 @@ export async function loadSecureMessages(chat: ChatSession): Promise<ChatMessage
     viewOnce: !!m.viewOnce,
     locked: !!m.locked,
     expiresAt: m.expiresAt || null,
+    media: m.media || null,
+    mediaType: m.mediaType || null,
+    deliveredAt: m.deliveredAt || null,
+    readAt: m.readAt || null,
+    screenshot: !!m.screenshot,
+    status: m.status || 'sent',
   }));
 }
 
@@ -60,7 +66,7 @@ export async function loadSecureMessages(chat: ChatSession): Promise<ChatMessage
 export async function sendSecureMessage(
   chat: ChatSession,
   text: string,
-  opts: { ttl?: number; viewOnce?: boolean } = {},
+  opts: { ttl?: number; viewOnce?: boolean; media?: string | null; mediaType?: string | null } = {},
 ): Promise<boolean> {
   const convo = String(chat.id);
   const node = await resolveNode(convo);
@@ -75,7 +81,21 @@ export async function sendSecureMessage(
       ttl: opts.ttl || 0,
       viewOnce: !!opts.viewOnce,
       burnOnReadMs: opts.viewOnce ? 12000 : 0,
+      media: opts.media || null,
+      mediaType: opts.mediaType || null,
     }),
+  });
+  return !!(r && r.success);
+}
+
+/** Report a screenshot of a sealed message → the sender is notified. */
+export async function screenshotSecureMessage(chat: ChatSession, msgId: string): Promise<boolean> {
+  const node = await resolveNode(String(chat.id));
+  if (!node) return false;
+  const r = await j(`/api/gmn/dm/${encodeURIComponent(node.nodeId)}/screenshot`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ msgId }),
   });
   return !!(r && r.success);
 }
