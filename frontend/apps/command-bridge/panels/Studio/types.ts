@@ -15,7 +15,7 @@ export type WidgetType =
   | 'ECOSYSTEM'
   | 'SOCIAL_ACTIVITY';
 
-export type AppView = 'home' | 'chats' | 'profile' | 'community' | 'community-hub' | 'portfolio' | 'ecosystem' | 'profile-editor' | 'studio-space';
+export type AppView = 'home' | 'chats' | 'pathways' | 'profile' | 'community' | 'community-hub' | 'portfolio' | 'ecosystem' | 'stage' | 'profile-editor' | 'studio-space';
 
 export interface UserProfile {
   name: string;
@@ -74,6 +74,15 @@ export interface ChatMessage {
   sender: 'user' | 'other';
   timestamp: string;
   avatar?: string;
+  // Secure "Pathway" mode (GMN 7c): a direct message that went end-to-end sealed
+  // + ephemeral. Lives in the same thread, just rendered in the sealed style.
+  secure?: boolean;
+  msgId?: string;        // the GMN engine message id (for open/burn)
+  ttl?: number;          // seconds; 0 = keep
+  viewOnce?: boolean;
+  locked?: boolean;      // incoming view-once body withheld until opened
+  expiresAt?: number | null;
+  ts?: number;           // createdAt ms, for time-merge with normal messages
 }
 
 export interface ChatSession {

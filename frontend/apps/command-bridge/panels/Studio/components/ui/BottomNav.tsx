@@ -75,7 +75,7 @@ const BottomNav: React.FC<Props> = ({ currentView, onNavigate, theme, isEditMode
         >
             <MessageSquare size={22} fill={currentView === 'chats' ? "currentColor" : "none"} strokeWidth={currentView === 'chats' ? 2 : 1.5} />
         </button>
-        <button 
+        <button
             onClick={() => onNavigate('community')}
             className={`p-2 rounded-xl transition-all duration-300 ${currentView === 'community' ? activeClass : baseClass}`}
         >
