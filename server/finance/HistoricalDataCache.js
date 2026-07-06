@@ -9,6 +9,11 @@ function safeKey(symbol, timeframe) {
     return `${String(symbol).replace(/[^A-Za-z0-9_-]/g, '_')}_${String(timeframe).replace(/[^A-Za-z0-9_-]/g, '_')}`;
 }
 
+// Keep cache filenames on the canonical timeframe names marketDataService uses.
+// '1Day' files written before Jun 2026 actually contained intraday bars (the
+// '1Day'→1m fallback bug) — normalizing here also sidesteps those poisoned files.
+const TF_ALIASES = { '1Day': '1D', '1day': '1D', '1Hour': '1H', '1hour': '1H' };
+
 class HistoricalDataCache {
     constructor() {
         this.index = {};
@@ -40,6 +45,7 @@ class HistoricalDataCache {
     }
 
     async getBars(symbol, timeframe = '5Min', limit = 500, { refresh = false } = {}) {
+        timeframe = TF_ALIASES[timeframe] || timeframe;
         if (!this.initialized) this.initialize();
         const filePath = this._path(symbol, timeframe);
         if (!refresh && fs.existsSync(filePath)) {

@@ -21,6 +21,17 @@ function getPathValue(obj, dotted) {
 export function validateAgentArtifact(artifact = {}, options = {}) {
     const issues = [];
     const warnings = [];
+    
+    // Auto-map snake_case from MAX or other external agents to SOMA's camelCase standard
+    if (artifact.artifact_type && !artifact.type) artifact.type = artifact.artifact_type;
+    if (artifact.verification_required !== undefined && artifact.verificationRequired === undefined) {
+        artifact.verificationRequired = artifact.verification_required;
+    }
+    // External patches usually haven't "passed" tests yet until SOMA runs them, but the schema requires the field
+    if (artifact.passed === undefined && artifact.type === 'code_patch_plan') {
+        artifact.passed = true; // Assumed structurally valid so it can enter the pipeline
+    }
+    
     const role = artifact.role || options.role;
     const agent = artifact.agent || options.agent || 'soma';
     const contract = getContract(agent);

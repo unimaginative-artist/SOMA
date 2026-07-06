@@ -204,11 +204,17 @@ class TradeLogger {
                 expectedPrice: trade.expectedPrice || null,
                 slippagePct: trade.slippagePct || null,
                 strategy: trade.strategy || 'manual',
+                attribution: trade.attribution || null,
                 regime: trade.regime || null,
                 mode: trade.mode || (evidenceType === 'paper_trade' ? 'paper' : 'broker'),
                 broker: trade.broker || null,
                 status: 'open'
-            }, { source: 'TradeLogger', symbol: trade.symbol, strategyId: trade.strategy || 'manual' });
+            }, {
+                source: 'TradeLogger',
+                symbol: trade.symbol,
+                strategyId: trade.attribution?.strategyId || trade.strategy || 'manual',
+                parentEvidenceIds: trade.attribution?.candidateId ? [trade.attribution.candidateId] : []
+            });
         } catch {
             // Evidence logging is auxiliary; trade persistence remains authoritative.
         }
@@ -286,6 +292,9 @@ class TradeLogger {
 
         const today = new Date().toISOString().split('T')[0];
         const stats = this.getStats();
+        // daily_trades means trades closed TODAY — it was storing the all-time
+        // count, which made the snapshot table's per-day columns meaningless.
+        const todayTrades = this.getClosedTrades(1).length;
 
         this._stmts.insertSnapshot.run({
             date: snapshot.date || today,
@@ -293,7 +302,7 @@ class TradeLogger {
             cash: snapshot.cash || 0,
             positions_count: snapshot.positionsCount || 0,
             daily_pnl: snapshot.dailyPnl || 0,
-            daily_trades: stats.totalTrades || 0,
+            daily_trades: todayTrades,
             cumulative_pnl: stats.totalPnl || 0,
             max_drawdown_pct: snapshot.maxDrawdownPct || 0,
             win_rate: stats.winRate || 0
@@ -303,7 +312,7 @@ class TradeLogger {
     /**
      * Get all closed trades (for performance calculation)
      */
-    getClosedTrades(days = null) {
+    getClosedTrades(days = null, { since = null } = {}) {
         if (!this.db) return [];
 
         let query = `SELECT * FROM trades WHERE status = 'closed'`;
@@ -312,6 +321,13 @@ class TradeLogger {
         if (days) {
             query += ` AND exit_time >= datetime('now', ?)`;
             params.push(`-${days} days`);
+        }
+
+        // Era cutoff: exclude trades earned under known-bad conditions (e.g. the
+        // pre-2026-07-03 poisoned regime data) from stats used for promotion.
+        if (since) {
+            query += ` AND exit_time >= ?`;
+            params.push(since);
         }
 
         query += ` ORDER BY exit_time ASC`;
@@ -329,10 +345,10 @@ class TradeLogger {
     /**
      * Get aggregate stats
      */
-    getStats(days = null) {
+    getStats(days = null, { since = null } = {}) {
         if (!this.db) return this._emptyStats();
 
-        const trades = this.getClosedTrades(days);
+        const trades = this.getClosedTrades(days, { since });
         if (trades.length === 0) return this._emptyStats();
 
         const wins = trades.filter(t => t.pnl > 0);

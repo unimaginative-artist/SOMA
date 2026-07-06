@@ -736,9 +736,14 @@ export default function createAxisRoutes(system) {
     router.post('/communities', (req, res) => {
         try {
             const u = getUser(req);
-            const { name, description, icon, coverImage, isPublic, category, tags, rules, links, moderationTone } = req.body || {};
+            const { name, description, icon, coverImage, isPublic, category, tags, rules, links, moderationTone,
+                color, handle, theme, joinPolicy, somaAssist, somaFeatures, channels, structure } = req.body || {};
             if (!name?.trim()) return res.status(400).json({ ok: false, error: 'name required' });
-            const community = axisStore.createCommunity({ name: name.trim(), description, icon, coverImage, creatorId: u.userId, creatorName: u.userName, isPublic: isPublic !== false, category, tags, rules, links, moderationTone });
+            const community = axisStore.createCommunity({
+                name: name.trim(), description, icon, coverImage, creatorId: u.userId, creatorName: u.userName,
+                isPublic: isPublic !== false, category, tags, rules, links, moderationTone,
+                color, handle, theme, joinPolicy, somaAssist, somaFeatures, channels, structure,
+            });
             bcast('axis.community_created', community);
             res.json({ ok: true, community });
         } catch (e) {
@@ -794,7 +799,7 @@ export default function createAxisRoutes(system) {
     router.post('/communities/:id/join', (req, res) => {
         try {
             const u = getUser(req);
-            axisStore.joinCommunity(req.params.id, { userId: u.userId, userName: u.userName });
+            const joinResult = axisStore.joinCommunity(req.params.id, { userId: u.userId, userName: u.userName });
             const community = axisStore.getCommunity(req.params.id);
             let workspace = axisStore.getWorkspaces().find(ws => ws.community_id === req.params.id || (ws.type === 'community' && ws.name === community.name));
             if (!workspace) {
@@ -805,7 +810,7 @@ export default function createAxisRoutes(system) {
                 }
                 bcast('axis.workspace_created', workspace);
             }
-            res.json({ ok: true, community: { ...community, my_role: axisStore.getCommunityRole(req.params.id, u.userId) }, workspace });
+            res.json({ ok: true, status: (joinResult && joinResult.status) || 'active', community: { ...community, my_role: axisStore.getCommunityRole(req.params.id, u.userId) }, workspace });
         } catch (e) {
             res.status(400).json({ ok: false, error: e.message });
         }
@@ -816,6 +821,29 @@ export default function createAxisRoutes(system) {
             const u = getUser(req);
             axisStore.leaveCommunity(req.params.id, u.userId);
             res.json({ ok: true });
+        } catch (e) {
+            res.status(400).json({ ok: false, error: e.message });
+        }
+    });
+
+    // Join requests (for 'request' join policy) — owner/mod approves
+    router.get('/communities/:id/requests', (req, res) => {
+        try {
+            const u = getUser(req);
+            if (!axisStore.canModerateCommunity(req.params.id, u.userId)) return res.status(403).json({ ok: false, error: 'owner or moderator required' });
+            res.json({ ok: true, requests: axisStore.getCommunityJoinRequests(req.params.id) });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    router.post('/communities/:id/requests/:userId/approve', (req, res) => {
+        try {
+            const u = getUser(req);
+            if (!axisStore.canModerateCommunity(req.params.id, u.userId)) return res.status(403).json({ ok: false, error: 'owner or moderator required' });
+            const role = axisStore.approveCommunityMember(req.params.id, req.params.userId);
+            bcast('axis.community_member_approved', { communityId: req.params.id, userId: req.params.userId });
+            res.json({ ok: true, role });
         } catch (e) {
             res.status(400).json({ ok: false, error: e.message });
         }

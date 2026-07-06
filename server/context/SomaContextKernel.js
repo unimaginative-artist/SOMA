@@ -47,15 +47,16 @@ export async function buildSomaContext(query = '', {
     force = false,
     mnemonic = null,
     includeUser = true,
+    publicOnly = false,
     limit = 12
 } = {}) {
     if (!force && !isSomaSelfQuery(query)) return '';
 
     const [identity, artifacts, distilled, userMd] = await Promise.all([
         ensurePublicIdentityLedger(),
-        listArtifacts({ query, limit, includeCode: true }),
-        readDistilledReflections(6),
-        includeUser ? readText(USER_MD, 900) : Promise.resolve('')
+        publicOnly ? Promise.resolve([]) : listArtifacts({ query, limit, includeCode: true }),
+        publicOnly ? Promise.resolve([]) : readDistilledReflections(6),
+        includeUser && !publicOnly ? readText(USER_MD, 900) : Promise.resolve('')
     ]);
 
     let learningLessons = [];
@@ -66,7 +67,7 @@ export async function buildSomaContext(query = '', {
     }
 
     let memoryHits = [];
-    if (mnemonic?.recall) {
+    if (!publicOnly && mnemonic?.recall) {
         try {
             memoryHits = await Promise.race([
                 mnemonic.recall(query, { limit: 8, minSimilarity: 0.25 }),
@@ -76,7 +77,7 @@ export async function buildSomaContext(query = '', {
     }
 
     const lines = [
-        '[SOMA CONTEXT KERNEL]',
+        publicOnly ? '[SOMA PUBLIC BACKGROUND]' : '[SOMA CONTEXT KERNEL]',
         'Use this as grounded self-context. Claims about SOMA must come from artifacts, memory, identity ledger, or explicit user context. If evidence is missing, say you need to check the ledger/filesystem.',
         `Public identity: ${clean(identity.voice?.publicPosition || identity.voice?.identity || 'SOMA')}`,
         `Claim policy: unsupported claims=${identity.claimPolicy?.unsupportedClaims || 'downgrade_or_refuse'}`,
@@ -91,22 +92,22 @@ export async function buildSomaContext(query = '', {
         lines.push(...artifacts.map(formatArtifact));
     }
 
-    if (Array.isArray(memoryHits) && memoryHits.length) {
+    if (!publicOnly && Array.isArray(memoryHits) && memoryHits.length) {
         lines.push('[MEMORY RETRIEVAL]');
         lines.push(...memoryHits.slice(0, 8).map(hit => `- ${clean(hit.content || hit.text || hit.summary || '', 240)}`));
     }
 
-    if (distilled.length) {
+    if (!publicOnly && distilled.length) {
         lines.push('[REFLECTION DISTILLER]');
         lines.push(...distilled.map(item => `- ${item.lane}: ${clean(item.coreSignal, 180)} | lesson=${clean(item.lesson, 160)} | training=${item.trainingValue}`));
     }
 
-    if (learningLessons.length) {
+    if (!publicOnly && learningLessons.length) {
         lines.push('[LEARNING SPINE]');
         lines.push(...learningLessons.map(formatLesson));
     }
 
-    lines.push('[/SOMA CONTEXT KERNEL]');
+    lines.push(publicOnly ? '[/SOMA PUBLIC BACKGROUND]' : '[/SOMA CONTEXT KERNEL]');
     return lines.join('\n').slice(0, 9000);
 }
 

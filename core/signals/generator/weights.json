@@ -2,15 +2,18 @@
   "version": "1.0.0",
   "last_updated": "2026-06-19T21:40:00.000Z",
   "signal_weights": {
-    "momentum": 1.0,
-    "mean_reversion": 1.0,
-    "ict_killzone": 1.0,
-    "grid_engine": 1.0,
-    "sentiment_analysis": 1.0
+    "momentum": 1,
+    "mean_reversion": 1,
+    "ict_killzone": 1,
+    "grid_engine": 1,
+    "sentiment_analysis": 1
   },
   "confidence_thresholds": {
     "minimum_entry": 0.65,
-    "minimum_exit": 0.40
+    "minimum_exit": 0.45
+  },
+  "capital_constraints": {
+    "minimum_notional_usd": 50
   },
   "audit_notes": "Awaiting SOMA's cluster audit. SOMA is authorized to prune and modify these weights to repair strategy architecture."
 }

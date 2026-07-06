@@ -25,6 +25,12 @@ set BONSAI_IMAGE_BACKEND=bonsai-ternary-gemlite
 set BONSAI_IMAGE_STEPS=4
 set SOMA_BLUESKY_AUTO_IMAGES=true
 
+rem ── DeepSeek spend caps (CostLedger). SOMA is local-first; DeepSeek is only for
+rem   social posting + chatting. $1/day is the safety net if her local limiters get
+rem   accidentally removed; $15/month is the hard ceiling.
+set SOMA_DAILY_BUDGET_USD=1
+set SOMA_MONTHLY_BUDGET_USD=15
+
 rem ── Local Ollama models (installed on this machine) ──────────────────────────
 rem   OLLAMA_MODEL      : default / heartbeat / proactive messages
 rem   OLLAMA_MODEL_LOGOS     : code, logic, engineering (heaviest, best quality)

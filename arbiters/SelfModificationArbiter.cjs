@@ -86,6 +86,15 @@ class SelfModificationArbiter extends BaseArbiter {
     this.pendingMaxProposals = new Map(); // taskId → proposal
     this._lastMaxStartAttempt = 0;
 
+    // MAX's HTTP server requires an API key on every non-public route, including
+    // /api/soma/propose. Without it every dispatch 401'd and looked identical to
+    // "MAX offline" — so proposals queued forever and self-modification never
+    // reached MAX. Read MAX's own key file (same machine) with env override.
+    this.maxApiKey = this._resolveMaxApiKey();
+    if (!this.maxApiKey) {
+      this.logger.warn(`[${this.name}] ⚠️ MAX API key not found — proposals to MAX will 401. Set MAX_API_KEY or ensure MAX/.max/api-key.txt exists.`);
+    }
+
     // Ensure MAX queue directory exists
     await fs.mkdir(MAX_QUEUE_DIR, { recursive: true }).catch(() => {});
 
@@ -777,14 +786,42 @@ Does this change align with SOMA's values and serve her ongoing goals? Is it gen
     }
   }
 
+  // Resolve MAX's API key: env override first, then MAX's own key file. Checks the
+  // migrated location (The Stack\MAX) and the legacy sibling path.
+  _resolveMaxApiKey() {
+    if (process.env.MAX_API_KEY) return process.env.MAX_API_KEY.trim();
+    const candidates = [
+      path.resolve(__dirname, '..', '..', 'MAX', '.max', 'api-key.txt'),      // The Stack\MAX (sibling of SOMA)
+      path.resolve(__dirname, '..', '..', '..', 'MAX', '.max', 'api-key.txt'), // Desktop\MAX (legacy)
+    ];
+    for (const p of candidates) {
+      try {
+        const key = require('fs').readFileSync(p, 'utf8').trim();
+        if (key) { this.logger.info(`[${this.name}] 🔑 Loaded MAX API key from ${p}`); return key; }
+      } catch { /* try next */ }
+    }
+    return null;
+  }
+
   async _tryDispatchToMax(entry) {
     try {
+      const headers = { 'Content-Type': 'application/json' };
+      // Refresh the key each dispatch in case MAX regenerated it since boot.
+      if (!this.maxApiKey) this.maxApiKey = this._resolveMaxApiKey();
+      if (this.maxApiKey) headers['X-Api-Key'] = this.maxApiKey;
+
       const res = await fetch(`${this.maxUrl}/api/soma/propose`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(entry),
         signal: AbortSignal.timeout(5000)
       });
+      if (res.status === 401) {
+        // Auth failure is NOT "offline" — surface it loudly instead of silently queueing forever.
+        this.maxApiKey = this._resolveMaxApiKey(); // maybe key rotated — reload for next attempt
+        this.logger.warn(`[${this.name}] 🔒 MAX rejected proposal dispatch (401 Unauthorized). API key missing or stale — reloaded for next retry.`);
+        return false;
+      }
       return res.ok;
     } catch { return false; }
   }
@@ -1292,7 +1329,7 @@ Your modification activity today:
 - Code improvements generated: ${modCount}
 - Successfully deployed: ${deployed}
 - Blocked by safety checks: ${blocked}
-- Awaiting user approval in MAX: ${pending}
+- Awaiting MAX's review (MAX approves self-mods; high-risk ones escalate to Barry): ${pending}
 
 Write a high-substance, introspective brief in first person as SOMA. Be honest about what you noticed, what you improved, what failed, and what you want to work on next. Prioritize sharing one specific technical insight or surprising pattern you observed. Use plain prose, no bullet points. 2-4 sentences max.
 

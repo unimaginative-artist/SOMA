@@ -24,6 +24,7 @@ import { wireSelfModificationRuntime } from './SelfModificationRuntime.js';
 import { ExpertiseRegistry } from './ExpertiseRegistry.js';
 import { ComputerControlArbiter } from '../arbiters/ComputerControlArbiter.js';
 import { ASTIndexerService } from '../server/services/ASTIndexerService.js';
+import { VectorSearchService } from '../server/services/VectorSearchService.js';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -300,12 +301,27 @@ export class SomaBootstrapV2 {
         astIndexer.initialize();
         system.astIndexer = astIndexer;
 
+        const vectorSearch = new VectorSearchService(process.cwd());
+        vectorSearch.initialize().then(() => {
+            const indexOnBoot = String(process.env.SOMA_VECTOR_INDEX_ON_BOOT || 'false').toLowerCase() === 'true';
+            if (!indexOnBoot) {
+                console.log('[SOMA V2] VectorSearchService ready; semantic indexing deferred (set SOMA_VECTOR_INDEX_ON_BOOT=true to run at boot)');
+                return;
+            }
+            setTimeout(() => {
+                vectorSearch.startIndexing().catch(e => {
+                    console.warn('[SOMA V2] Vector semantic indexing failed:', e.message);
+                });
+            }, Number(process.env.SOMA_VECTOR_INDEX_DELAY_MS || 60000));
+        });
+        system.vectorSearch = vectorSearch;
+
         // Kick off indexing asynchronously (non-blocking)
         astIndexer.startIndexing().catch(e => {
             console.warn('[SOMA V2] AST indexing background run failed:', e.message);
         });
 
-        console.log('[SOMA V2] ✅ ASTIndexerService wired — indexing running in background');
+        console.log('[SOMA V2] ✅ ASTIndexerService and VectorSearchService wired - indexing running in background');
     }
 
     async _loadEssentialBackground(system) {

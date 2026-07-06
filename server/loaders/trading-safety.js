@@ -20,6 +20,7 @@ import retrainingPipeline from '../../server/finance/RetrainingPipeline.js';
 import driftDetector from '../../server/finance/DriftDetector.js';
 import abTestFramework from '../../server/finance/ABTestFramework.js';
 import marketRegimeDetector from '../../server/finance/MarketRegimeDetector.js';
+import simToLiveDaemon from '../../server/finance/SimToLiveDaemon.js';
 
 export async function loadTradingSafety(system) {
     console.log('\n[Loader] Trading Safety Systems...');
@@ -98,8 +99,13 @@ export async function loadTradingSafety(system) {
         driftDetector.start();
 
         // Start the market regime detector (tracks 5 regimes per symbol for regime-conditioned UCB1)
-        const REGIME_WATCHLIST = ['SPY', 'QQQ', 'AAPL', 'BTC/USD', 'ETH/USD'];
+        // Dash format matches what AutonomousTrader passes to getRegime(symbol);
+        // slash-format keys silently fell back to the SPY anchor regime.
+        const REGIME_WATCHLIST = ['SPY', 'QQQ', 'AAPL', 'BTC-USD', 'ETH-USD', 'SOL-USD'];
         marketRegimeDetector.start(REGIME_WATCHLIST);
+
+        // Start sim-to-live reconciliation: sim nominates, paper validates, live stays human-gated.
+        simToLiveDaemon.start({ intervalMs: 5 * 60 * 1000, initialDelayMs: 45000 });
 
         // A/B framework initializes on import (no separate start needed)
 
@@ -116,6 +122,7 @@ export async function loadTradingSafety(system) {
             driftDetector,
             abTestFramework,
             regimeDetector: marketRegimeDetector,
+            simToLiveDaemon,
         };
 
         console.log('      Risk Manager initialized (Kelly Criterion, 8 risk checks)');
@@ -128,6 +135,7 @@ export async function loadTradingSafety(system) {
         console.log('      Drift Detector active (15min Sharpe watchdog, defensive mode on 20% drop)');
         console.log('      A/B Test Framework active (parallel parameter testing, z-test promotion)');
         console.log('      Market Regime Detector active (TRENDING/RANGING/VOLATILE/CRASH — 5 regimes per symbol)');
+        console.log('      Sim-to-Live Daemon active (sim nominees → paper evidence → human-gated live candidates)');
 
         return {
             riskManager,

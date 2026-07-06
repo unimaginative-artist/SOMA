@@ -23,6 +23,7 @@ import { fileURLToPath } from 'url';
 const __dirname      = path.dirname(fileURLToPath(import.meta.url));
 const BENCHMARK_FILE = path.join(__dirname, '..', 'server', '.soma', 'benchmarks.json');
 const MAX_HISTORY    = 100;
+const BENCHMARK_SCHEMA_VERSION = 2;
 
 const DIMENSIONS = [
     'reasoning_accuracy',
@@ -64,8 +65,16 @@ export class CapabilityBenchmark {
             const gp = this.system?.goalPlanner;
             if (gp?.goals) {
                 const all       = [...(gp.goals.values ? gp.goals.values() : Object.values(gp.goals))];
-                const completed = all.filter(g => g.status === 'completed' || g.progress >= 100).length;
-                const attempted = all.filter(g => g.status !== 'pending').length;
+                const completedIds = new Set([
+                    ...(Array.isArray(gp.completedGoals) ? gp.completedGoals.map(goal => goal?.id).filter(Boolean) : []),
+                    ...all.filter(goal => goal.status === 'completed').map(goal => goal.id)
+                ]);
+                const failedIds = new Set([
+                    ...(Array.isArray(gp.failedGoals) ? gp.failedGoals.map(goal => goal?.id).filter(Boolean) : []),
+                    ...all.filter(goal => ['failed', 'broken', 'verification_failed', 'rejected', 'abandoned'].includes(goal.status)).map(goal => goal.id)
+                ]);
+                const completed = completedIds.size;
+                const attempted = completed + failedIds.size;
                 scores.task_completion_rate = attempted > 0 ? completed / attempted : 0.5;
             } else {
                 scores.task_completion_rate = 0.5;
@@ -143,6 +152,7 @@ export class CapabilityBenchmark {
         const composite = DIMENSIONS.reduce((sum, d) => sum + (scores[d] || 0), 0) / DIMENSIONS.length;
 
         const entry = {
+            schemaVersion: BENCHMARK_SCHEMA_VERSION,
             timestamp: new Date().toISOString(),
             scores,
             composite: Math.round(composite * 1000) / 1000,
@@ -159,6 +169,13 @@ export class CapabilityBenchmark {
 
     compare(before, after) {
         if (!before || !after) return { improved: [], regressed: [], unchanged: [], delta: 0 };
+        if (before.schemaVersion !== BENCHMARK_SCHEMA_VERSION || after.schemaVersion !== BENCHMARK_SCHEMA_VERSION) {
+            return {
+                valid: false,
+                reason: 'Benchmark schema changed; collect a fresh baseline before evaluating improvement.',
+                improved: [], regressed: [], unchanged: [], delta: 0
+            };
+        }
 
         const improved   = [];
         const regressed  = [];
@@ -174,13 +191,13 @@ export class CapabilityBenchmark {
         }
 
         const delta = (after.composite || 0) - (before.composite || 0);
-        return { improved, regressed, unchanged, delta };
+        return { valid: true, improved, regressed, unchanged, delta };
     }
 
     // ─── Get velocity — improvement rate over last N snapshots ───────────
 
     getVelocity(n = 10) {
-        const recent = this._history.slice(-n);
+        const recent = this._history.filter(entry => entry.schemaVersion === BENCHMARK_SCHEMA_VERSION).slice(-n);
         if (recent.length < 2) return 0;
         const oldest = recent[0].composite;
         const newest = recent[recent.length - 1].composite;

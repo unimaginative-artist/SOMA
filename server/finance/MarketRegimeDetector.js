@@ -24,7 +24,7 @@
 import marketDataService from './marketDataService.js';
 
 const HEARTBEAT_MS = 5 * 60 * 1000;
-const DEFAULT_SYMBOLS = ['SPY', 'BTC', 'ETH'];
+const DEFAULT_SYMBOLS = ['SPY', 'BTC-USD', 'ETH-USD'];
 
 class MarketRegimeDetector {
     constructor() {
@@ -52,10 +52,18 @@ class MarketRegimeDetector {
         if (this._intervalId) { clearInterval(this._intervalId); this._intervalId = null; }
     }
 
+    /**
+     * Canonical map key — traders pass 'BTC-USD' while watchlists have used
+     * 'BTC/USD'; a mismatched key silently fell back to the SPY anchor regime.
+     */
+    _key(symbol) {
+        return String(symbol || '').toUpperCase().replace(/\//g, '-');
+    }
+
     /** Returns regime for a specific symbol (or the global anchor if not tracked) */
     getRegime(symbol = null) {
         if (symbol) {
-            const r = this._regimeBySymbol.get(symbol.toUpperCase());
+            const r = this._regimeBySymbol.get(this._key(symbol));
             if (r) return r;
         }
         return { regime: this.currentRegime, confidence: this.confidence, symbol: this._primarySymbol };
@@ -64,7 +72,7 @@ class MarketRegimeDetector {
     /** Force an immediate classification (for API calls) */
     async detectRegime(symbol) {
         const result = await this._classifySymbol(symbol);
-        this._regimeBySymbol.set(symbol.toUpperCase(), result);
+        this._regimeBySymbol.set(this._key(symbol), result);
         return result;
     }
 
@@ -87,7 +95,7 @@ class MarketRegimeDetector {
         for (const sym of symbols) {
             try {
                 const result = await this._classifySymbol(sym);
-                this._regimeBySymbol.set(sym.toUpperCase(), result);
+                this._regimeBySymbol.set(this._key(sym), result);
                 if (sym.toUpperCase() === this._primarySymbol.toUpperCase()) {
                     this.currentRegime = result.regime;
                     this.confidence    = result.confidence;
@@ -97,7 +105,7 @@ class MarketRegimeDetector {
     }
 
     async _classifySymbol(symbol) {
-        const bars = await marketDataService.getBars(symbol, '1Day', 60);
+        const bars = await marketDataService.getBars(symbol, '1D', 60);
         if (!bars || bars.length < 30) {
             return { regime: 'RANGING', confidence: 0, symbol, reason: 'insufficient data', updatedAt: new Date().toISOString() };
         }
@@ -105,6 +113,16 @@ class MarketRegimeDetector {
         const closes  = bars.map(b => b.close || b.c || b.price).filter(Boolean);
         if (closes.length < 20) {
             return { regime: 'RANGING', confidence: 0, symbol, reason: 'insufficient closes', updatedAt: new Date().toISOString() };
+        }
+
+        // Sanity: daily bars must actually span days. A mislabeled intraday feed
+        // (the '1Day'→1m bug, Jun 2026) made every symbol read RANGING with high
+        // confidence and froze all BTC_NATIVE engines. Refuse to classify garbage.
+        const spanMs = (bars[bars.length - 1].timestamp || 0) - (bars[0].timestamp || 0);
+        const minExpectedSpanMs = (bars.length - 1) * 6 * 3600 * 1000; // ≥6h per "daily" bar
+        if (spanMs > 0 && spanMs < minExpectedSpanMs) {
+            console.warn(`[RegimeDetector] ${symbol}: bars span ${(spanMs / 3600000).toFixed(1)}h for ${bars.length} "daily" bars — feed is not daily, skipping classification`);
+            return { regime: 'UNKNOWN', confidence: 0, symbol, reason: 'bar timeframe mismatch (feed not daily)', updatedAt: new Date().toISOString() };
         }
 
         const highs  = bars.map(b => b.high  || b.h || b.close || b.c).filter(Boolean);

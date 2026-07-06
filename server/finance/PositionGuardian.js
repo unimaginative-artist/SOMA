@@ -240,16 +240,50 @@ class PositionGuardian extends EventEmitter {
             // Save risk state periodically
             await this.riskManager.saveRiskState();
 
-            // Save daily equity snapshot (once per day)
+            // Save daily equity snapshot (once per day). When SOMA's own paper
+            // engines are running, snapshot THEIR equity — the Alpaca account is
+            // a separate untouched pool whose frozen equity made the snapshot
+            // table useless (equity pinned at 100354.91, daily_pnl 0, Jun 2026).
             if (this.tradeLogger) {
                 const today = new Date().toISOString().split('T')[0];
                 if (today !== this._lastSnapshotDate) {
                     try {
+                        let snapEquity = equity;
+                        let snapCash = cash;
+                        let snapPositions = positions.length;
+                        let snapDailyPnl = dailyPnL;
+
+                        const registry = global.SOMA_AUTONOMOUS_REGISTRY;
+                        if (registry && registry.size) {
+                            let paperEquity = 0;
+                            let paperPositions = 0;
+                            let anyPaper = false;
+                            for (const trader of registry.values()) {
+                                if (trader?.paperMode && trader._paperPortfolio) {
+                                    anyPaper = true;
+                                    paperEquity += Number(trader._paperPortfolio.balance) || 0;
+                                    paperPositions += Object.keys(trader._paperPortfolio.positions || {}).length;
+                                }
+                            }
+                            if (anyPaper) {
+                                snapEquity = Number(paperEquity.toFixed(2));
+                                snapCash = snapEquity;
+                                snapPositions = paperPositions;
+                                const curve = this.tradeLogger.getEquityCurve?.(7) || [];
+                                const prevEquity = curve.length
+                                    ? Number(curve[curve.length - 1]?.equity)
+                                    : NaN;
+                                snapDailyPnl = Number.isFinite(prevEquity)
+                                    ? Number((snapEquity - prevEquity).toFixed(2))
+                                    : 0;
+                            }
+                        }
+
                         this.tradeLogger.saveDailySnapshot({
-                            equity,
-                            cash,
-                            positionsCount: positions.length,
-                            dailyPnl: dailyPnL,
+                            equity: snapEquity,
+                            cash: snapCash,
+                            positionsCount: snapPositions,
+                            dailyPnl: snapDailyPnl,
                             maxDrawdownPct: riskSummary.portfolio?.currentDrawdown
                                 ? riskSummary.portfolio.currentDrawdown * 100 : 0
                         });

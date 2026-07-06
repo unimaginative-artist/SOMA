@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+@keyframes fp_pop { 0% { transform: scale(1); } 35% { transform: scale(1.45) rotate(-8deg); } 100% { transform: scale(1) rotate(0); } }
+@keyframes fp_ring { 0% { transform: scale(.5); opacity: .8; } 100% { transform: scale(2.4); opacity: 0; } }
+@keyframes fp_float { 0% { transform: translate(-50%, 0); opacity: 1; } 100% { transform: translate(-50%, -22px); opacity: 0; } }
+.fp-scroll::-webkit-scrollbar { width: 0; }
+.fp-scroll { scrollbar-width: none; }
+</style>
+</helmet>
+
+<sc-if value="{{ isSuggested }}" hint-placeholder-val="{{ false }}">
+  <div style="background:#101019; border:1px solid #1e1e2e; border-radius:16px; padding:16px;">
+    <div style="display:flex; align-items:center; gap:7px; margin-bottom:12px;">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--a2)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18"></path></svg>
+      <span style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--a2);">Suggested · curated by SOMA</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div style="width:48px; height:48px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:600; font-size:18px; background:{{ avatarBg }}; cursor:pointer;" onClick="{{ onProfile }}">{{ avatarInitials }}</div>
+      <div style="min-width:0; flex:1;">
+        <div style="font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:15px; color:#eef2f7;">{{ name }}</div>
+        <div style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#6b7280;">{{ role }}</div>
+      </div>
+      <button onClick="{{ onVibe }}" style="{{ followBtnStyle }}">{{ followLabel }}</button>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{ isPost }}" hint-placeholder-val="{{ true }}">
+  <div style="background:#14141d; border:1px solid #1e1e2e; border-radius:16px; padding:0; overflow:hidden;">
+    <!-- header -->
+    <div style="display:flex; align-items:flex-start; gap:11px; padding:15px 16px 0;">
+      <div style="width:42px; height:42px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:600; font-size:16px; background:{{ avatarBg }}; cursor:pointer;" onClick="{{ onProfile }}">{{ avatarInitials }}</div>
+      <div style="min-width:0; flex:1;">
+        <div style="display:flex; align-items:center; gap:5px;">
+          <span style="font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:14.5px; color:#eef2f7; white-space:nowrap;">{{ name }}</span>
+          <sc-if value="{{ verified }}" hint-placeholder-val="{{ false }}">
+            <span style="display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:50%; background:linear-gradient(135deg,var(--a1),var(--a2)); flex-shrink:0;">
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#0a0a0f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9 17.5 20 6.5"></path></svg>
+            </span>
+          </sc-if>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#6b7280; white-space:nowrap;">{{ handle }} · {{ age }}</span>
+        </div>
+        <div style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#565d6b; margin-top:1px;">{{ role }}</div>
+      </div>
+      <button style="background:none; border:none; cursor:pointer; padding:4px; color:#565d6b; flex-shrink:0;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h.01M12 12h.01M19 12h.01"></path></svg>
+      </button>
+    </div>
+
+    <!-- body text -->
+    <sc-if value="{{ text }}" hint-placeholder-val="">
+      <p style="font-family:'Space Grotesk',sans-serif; font-size:15px; line-height:1.5; color:#dfe5ec; margin:11px 16px 0; text-wrap:pretty;">{{ text }}</p>
+    </sc-if>
+
+    <!-- image media -->
+    <sc-if value="{{ isImage }}" hint-placeholder-val="{{ false }}">
+      <div style="position:relative; margin:13px 16px 0; border-radius:14px; overflow:hidden; aspect-ratio:4/3; background:{{ mediaBg }};">
+        <div style="position:absolute; inset:0; background:radial-gradient(140% 100% at 50% 0%, transparent 45%, rgba(0,0,0,.4) 100%);"></div>
+        <span style="position:absolute; left:11px; top:11px; font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; color:rgba(255,255,255,.7); background:rgba(0,0,0,.32); padding:3px 7px; border-radius:6px; backdrop-filter:blur(4px);">{{ mediaLabel }}</span>
+      </div>
+    </sc-if>
+
+    <!-- clip media -->
+    <sc-if value="{{ isClip }}" hint-placeholder-val="{{ false }}">
+      <div style="position:relative; margin:13px 16px 0; border-radius:14px; overflow:hidden; aspect-ratio:16/10; background:{{ mediaBg }};">
+        <div style="position:absolute; inset:0; background:radial-gradient(120% 90% at 50% 40%, transparent 30%, rgba(0,0,0,.45) 100%);"></div>
+        <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center;">
+          <div style="width:56px; height:56px; border-radius:50%; background:rgba(10,10,15,.5); backdrop-filter:blur(6px); border:1px solid rgba(255,255,255,.25); display:flex; align-items:center; justify-content:center;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="#fff"><path d="M7 5v14l12-7-12-7Z"></path></svg>
+          </div>
+        </div>
+        <span style="position:absolute; right:10px; bottom:10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#fff; background:rgba(0,0,0,.6); padding:3px 7px; border-radius:6px;">{{ clipDur }}</span>
+        <sc-if value="{{ hasTrust }}" hint-placeholder-val="{{ false }}">
+          <span style="{{ trustBadgeStyle }}">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="{{ trustColor }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ trustIconPath }}"></path></svg>
+            {{ trustLabel }}
+          </span>
+        </sc-if>
+      </div>
+      <sc-if value="{{ caption }}" hint-placeholder-val="">
+        <p style="font-family:'Space Grotesk',sans-serif; font-size:14px; line-height:1.45; color:#cfd6df; margin:11px 16px 0;">{{ caption }}</p>
+      </sc-if>
+    </sc-if>
+
+    <!-- carousel media -->
+    <sc-if value="{{ isCarousel }}" hint-placeholder-val="{{ false }}">
+      <div style="position:relative; margin:13px 16px 0; border-radius:14px; overflow:hidden; aspect-ratio:4/3; background:{{ mediaBg }};">
+        <div style="position:absolute; inset:0; background:radial-gradient(140% 100% at 50% 0%, transparent 45%, rgba(0,0,0,.4) 100%);"></div>
+        <span style="position:absolute; right:11px; top:11px; font-family:'JetBrains Mono',monospace; font-size:10px; color:#fff; background:rgba(0,0,0,.5); padding:3px 8px; border-radius:999px; backdrop-filter:blur(4px);">1/{{ framesCount }}</span>
+        <div style="position:absolute; left:0; right:0; bottom:12px; display:flex; align-items:center; justify-content:center; gap:5px;">
+          <span style="width:6px; height:6px; border-radius:50%; background:#fff;"></span>
+          <span style="width:6px; height:6px; border-radius:50%; background:rgba(255,255,255,.4);"></span>
+          <span style="width:6px; height:6px; border-radius:50%; background:rgba(255,255,255,.4);"></span>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- actions -->
+    <div style="display:flex; align-items:center; gap:4px; padding:13px 14px 14px;">
+      <button onClick="{{ onVibe }}" style="position:relative; display:flex; align-items:center; gap:7px; background:none; border:none; cursor:pointer; padding:6px 10px; border-radius:9px; color:{{ vibeColor }}; font-family:'JetBrains Mono',monospace; font-size:12.5px;" style-hover="background:color-mix(in oklab, var(--a1) 10%, transparent);">
+        <span key="{{ pop }}" style="position:relative; display:flex; animation:{{ vibeAnim }};">
+          <sc-if value="{{ vibeBurst }}" hint-placeholder-val="{{ false }}">
+            <span key="{{ pop }}" style="position:absolute; top:50%; left:50%; width:20px; height:20px; margin:-10px 0 0 -10px; border-radius:50%; border:2px solid var(--a1); animation:fp_ring .5s ease-out forwards; pointer-events:none;"></span>
+          </sc-if>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="{{ vibeFill }}" stroke="{{ vibeColor }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="filter:{{ vibeGlow }};"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"></path></svg>
+        </span>
+        <span key="{{ likes }}" style="display:inline-block; animation:st_countup .3s ease;">{{ likes }}</span>
+      </button>
+      <button onClick="{{ onDislike }}" title="Show less like this" style="display:flex; align-items:center; gap:7px; background:none; border:none; cursor:pointer; padding:6px 8px; border-radius:9px; color:{{ dislikeColor }}; font-family:'JetBrains Mono',monospace; font-size:12.5px;" style-hover="color:#f87171; background:rgba(248,113,113,.08);">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="{{ dislikeFill }}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-3M17 13l-4 8a3 3 0 0 1-3-3v-3H4.5a2 2 0 0 1-2-2.4l1.4-7A2 2 0 0 1 5.8 3H17Z"></path></svg>
+        <span>{{ dislikes }}</span>
+      </button>
+      <button onClick="{{ onToggleChat }}" style="display:flex; align-items:center; gap:7px; background:none; border:none; cursor:pointer; padding:6px 10px; border-radius:9px; color:{{ replyColor }}; font-family:'JetBrains Mono',monospace; font-size:12.5px;" style-hover="color:#9aa4b2; background:rgba(255,255,255,.04);">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8 8 0 0 1-11.5 7.2L4 20l1.3-4.5A8 8 0 1 1 21 11.5Z"></path></svg>
+        <span>{{ replies }}</span>
+      </button>
+      <div style="position:relative;">
+        <button onClick="{{ onToggleRecast }}" style="display:flex; align-items:center; gap:7px; background:none; border:none; cursor:pointer; padding:6px 10px; border-radius:9px; color:{{ recastColor }}; font-family:'JetBrains Mono',monospace; font-size:12.5px;" style-hover="color:#34d399; background:rgba(52,211,153,.08);">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V7a3 3 0 0 1 3-3h9m-2-2 2 2-2 2M20 15v2a3 3 0 0 1-3 3H8m2 2-2-2 2-2"></path></svg>
+        <span>{{ recasts }}</span>
+        </button>
+        <sc-if value="{{ recastMenuOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute; left:0; bottom:38px; z-index:20; width:210px; background:#15151f; border:1px solid #2a2a38; border-radius:14px; padding:6px; box-shadow:0 18px 50px -16px rgba(0,0,0,.9);">
+            <div onClick="{{ onRepost }}" style="display:flex; align-items:center; gap:11px; padding:10px 11px; border-radius:10px; cursor:pointer;" style-hover="background:rgba(255,255,255,.05);">
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="{{ repostIconColor }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
+              <div style="min-width:0;"><div style="font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:13.5px; color:#eef2f7;">{{ repostLabel }}</div><div style="font-family:'JetBrains Mono',monospace; font-size:9.5px; color:#6b7280;">Share to your followers</div></div>
+            </div>
+            <div onClick="{{ onShareExternal }}" style="display:flex; align-items:center; gap:11px; padding:10px 11px; border-radius:10px; cursor:pointer;" style-hover="background:rgba(255,255,255,.05);">
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--a1)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M12 3v13M8 7l4-4 4 4"></path></svg>
+              <div style="min-width:0;"><div style="font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:13.5px; color:#eef2f7;">Share</div><div style="font-family:'JetBrains Mono',monospace; font-size:9.5px; color:#6b7280;">Copy link or send</div></div>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+      <div style="flex:1;"></div>
+      <div style="position:relative;">
+        <button onClick="{{ onToggleReport }}" title="Report this media" style="display:flex; align-items:center; gap:6px; background:none; border:none; cursor:pointer; padding:6px 8px; border-radius:9px; color:{{ reportColor }};" style-hover="color:#f59e0b;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="{{ reportFill }}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"></path><path d="M12 9v4M12 17h.01"></path></svg>
+        </button>
+        <sc-if value="{{ reportMenuOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute; right:0; bottom:38px; z-index:20; width:230px; background:#15151f; border:1px solid #2a2a38; border-radius:14px; padding:6px; box-shadow:0 18px 50px -16px rgba(0,0,0,.9);">
+            <div onClick="{{ onFlagAi }}" style="display:flex; align-items:center; gap:11px; padding:10px 11px; border-radius:10px; cursor:pointer;" style-hover="background:rgba(255,255,255,.05);">
+              <img src="assets/slop-report.png" alt="" style="width:30px; height:30px; object-fit:contain; flex-shrink:0;" />
+              <div style="min-width:0;"><div style="font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:13.5px; color:#eef2f7;">Flag as AI</div><div style="font-family:'JetBrains Mono',monospace; font-size:9.5px; color:#6b7280;">Sent to SOMA review</div></div>
+            </div>
+            <div onClick="{{ onFlagBad }}" style="display:flex; align-items:center; gap:11px; padding:10px 11px; border-radius:10px; cursor:pointer;" style-hover="background:rgba(255,255,255,.05);">
+              <img src="assets/flag-bad.png" alt="" style="width:30px; height:30px; object-fit:contain; flex-shrink:0;" />
+              <div style="min-width:0;"><div style="font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:13.5px; color:#eef2f7;">Inappropriate</div><div style="font-family:'JetBrains Mono',monospace; font-size:9.5px; color:#6b7280;">Report to moderators</div></div>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+      <button onClick="{{ onBookmarkPost }}" style="display:flex; align-items:center; background:none; border:none; cursor:pointer; padding:6px 8px; border-radius:9px; color:{{ bookmarkColor }};" style-hover="color:var(--a2);">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="{{ bookmarkFill }}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12v17l-6-4-6 4V4Z"></path></svg>
+      </button>
+    </div>
+
+    <!-- chat thread -->
+    <sc-if value="{{ chatOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="margin:0 14px 14px; background:#0c0c12; border:1px solid #1a1a26; border-radius:14px; overflow:hidden;">
+        <div class="fp-scroll" style="max-height:280px; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:16px;">
+          <sc-for list="{{ chatMsgs }}" as="c" hint-placeholder-count="3">
+            <div>
+              <div style="display:flex; gap:10px;">
+                <div style="width:32px; height:32px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:600; font-size:11px; background:{{ c.bg }};">{{ c.initials }}</div>
+                <div style="min-width:0; flex:1;">
+                  <div style="display:flex; align-items:baseline; gap:7px;"><span style="font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:12.5px; color:{{ c.nameColor }};">{{ c.name }}</span><span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#565d6b;">{{ c.age }}</span></div>
+                  <p style="font-family:'Space Grotesk',sans-serif; font-size:13.5px; line-height:1.45; color:#cfd6df; margin:2px 0 0; text-wrap:pretty;">{{ c.text }}</p>
+                  <div style="display:flex; align-items:center; gap:16px; margin-top:7px;">
+                    <button onClick="{{ c.onVibe }}" style="display:flex; align-items:center; gap:5px; background:none; border:none; cursor:pointer; padding:0; color:{{ c.vibeColor }}; font-family:'JetBrains Mono',monospace; font-size:11px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="{{ c.vibeFill }}" stroke="{{ c.vibeColor }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"></path></svg>{{ c.vibes }}</button>
+                    <button onClick="{{ c.onDislike }}" style="display:flex; background:none; border:none; cursor:pointer; padding:0; color:{{ c.dislikeColor }};"><svg width="14" height="14" viewBox="0 0 24 24" fill="{{ c.dislikeFill }}" stroke="{{ c.dislikeColor }}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-3M17 13l-4 8a3 3 0 0 1-3-3v-3H4.5a2 2 0 0 1-2-2.4l1.4-7A2 2 0 0 1 5.8 3H17Z"></path></svg></button>
+                    <button onClick="{{ c.onReply }}" style="background:none; border:none; cursor:pointer; padding:0; color:#6b7280; font-family:'JetBrains Mono',monospace; font-size:11px;" style-hover="color:#9aa4b2;">Reply</button>
+                  </div>
+                  <sc-if value="{{ c.hasReply }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex; gap:9px; margin-top:12px;">
+                      <div style="width:26px; height:26px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:600; font-size:10px; background:{{ c.replyBg }};">{{ c.replyInitials }}</div>
+                      <div style="min-width:0; flex:1;">
+                        <div style="display:flex; align-items:baseline; gap:7px;"><span style="font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:12px; color:{{ c.replyColor }};">{{ c.replyName }}</span><span style="font-family:'JetBrains Mono',monospace; font-size:9.5px; color:#565d6b;">{{ c.replyAge }}</span></div>
+                        <p style="font-family:'Space Grotesk',sans-serif; font-size:13px; line-height:1.45; color:#cfd6df; margin:2px 0 0;">{{ c.replyText }}</p>
+                      </div>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ c.replyBoxOpen }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex; align-items:center; gap:8px; margin-top:10px; padding:7px 11px; background:#101019; border:1px solid color-mix(in oklab,var(--a1) 30%,transparent); border-radius:10px;">
+                      <span style="flex:1; color:#565d6b; font-size:12.5px;">Reply to {{ c.name }}…</span>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="var(--a1)" stroke="none"><path d="M5 12 20 5l-5 15-3.5-6.5L5 12Z"></path></svg>
+                    </div>
+                  </sc-if>
+                </div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="flex:none; padding:11px 14px; border-top:1px solid #1a1a26; display:flex; align-items:center; gap:10px;">
+          <div style="width:28px; height:28px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:600; font-size:10px; background:{{ heroBg }};">NS</div>
+          <div style="flex:1; display:flex; align-items:center; gap:8px; padding:9px 13px; background:#101019; border:1px solid #1e1e2e; border-radius:11px;">
+            <span style="flex:1; color:#565d6b; font-size:13px;">Post your reply…</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="var(--a1)" stroke="none"><path d="M5 12 20 5l-5 15-3.5-6.5L5 12Z"></path></svg>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+  </div>
+</sc-if>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:600,&quot;height&quot;:420},&quot;post&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;object&quot;},&quot;author&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;object&quot;}}">
+class Component extends DCLogic {
+  state = { vibed: false, disliked: false, pop: 0, following: false, chatOpen: false, cvibes:{}, cdis:{}, crep:{}, reportMenu: false, reportKind: null, marked: false };
+  hashStr(s){let h=2166136261;for(let i=0;i<(s||'').length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return Math.abs(h);}
+  seedColor(seed,l=0.5,c=0.14){const hue=this.hashStr(seed)%360;return `oklch(${l} ${c} ${hue})`;}
+  meshBg(seed){const h=this.hashStr(seed);const h1=h%360;const h2=(h1+40+(h%60))%360;return `radial-gradient(120% 120% at 18% 12%, oklch(0.6 0.14 ${h1}) 0%, transparent 55%), radial-gradient(120% 120% at 88% 90%, oklch(0.5 0.16 ${h2}) 0%, transparent 52%), linear-gradient(150deg, #14141d 0%, #0c0c12 100%)`;}
+  initials(name){const p=(name||'').trim().split(/\s+/);return ((p[0]&&p[0][0]||'')+(p[1]&&p[1][0]||'')).toUpperCase();}
+  renderVals(){
+    const post = this.props.post || {};
+    const a = this.props.author || {};
+    const who = post.who || 'nova';
+    const trustMap = {
+      camera:{label:'Verified', color:'#40e0d0', path:'M12 3 5 6v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6l-7-3Z', cam:true},
+      ai:{label:'AI', color:'#c77dff', path:'M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18'},
+      slop:{label:'Slop', color:'#8a93a3', path:'M12 3 3 8l9 5 9-5-9-5ZM3 13l9 5 9-5M3 18l9 5 9-5'},
+    };
+    const t = post.trust ? trustMap[post.trust] : null;
+    const vibed = post.vibed != null ? !!post.vibed : this.state.vibed;
+    const disliked = post.disliked != null ? !!post.disliked : this.state.disliked;
+    const following = this.state.following;
+    const marked = post.bookmarked != null ? !!post.bookmarked : this.state.marked;
+    const recasted = post.reposted != null ? !!post.reposted : this.state.recasted;
+    const reportKind = post.reported ? (post.reportKind || 'bad') : this.state.reportKind;
+    const reportMenuOpen = post.reportMenuOpen != null ? !!post.reportMenuOpen : this.state.reportMenu;
+    const recastMenuOpen = post.recastMenuOpen != null ? !!post.recastMenuOpen : !!this.state.recastMenu;
+    const stop = (e) => { if(e&&e.stopPropagation) e.stopPropagation(); };
+    const runPostHandler = (handler, fallback) => (e) => {
+      stop(e);
+      if (typeof handler === 'function') return handler(e);
+      return fallback();
+    };
+    const P = { sol:'Sol Park', mara:'Mara Vasquez', remy:'Remy Okonkwo', theo:'Theo Lindqvist', iris:'Iris Kade' };
+    const cdefs = [
+      { who:'sol', text:'this is incredible work — the detail especially', age:'4m', vibes:34, reply:{who:'iris', text:'right? took me three passes', age:'2m'} },
+      { who:'mara', text:'how did you approach this?', age:'11m', vibes:12 },
+      { who:'remy', text:'saving this 🔥 genuinely inspired', age:'18m', vibes:48 },
+    ];
+    const chatMsgs = cdefs.map((c,i)=>{
+      const vv=!!this.state.cvibes[i], dd=!!this.state.cdis[i], rp=c.reply;
+      return {
+        name:P[c.who]||c.who, initials:this.initials(P[c.who]||c.who), bg:this.seedColor(c.who,0.5,0.14), nameColor:this.seedColor(c.who,0.72,0.16),
+        text:c.text, age:c.age, vibes:String(vv?c.vibes+1:c.vibes),
+        vibeColor:vv?'var(--a1)':'#565d6b', vibeFill:vv?'var(--a1)':'none',
+        onVibe:()=>this.setState(s=>({cvibes:{...s.cvibes,[i]:!s.cvibes[i]}, cdis:{...s.cdis,[i]:false}})),
+        dislikeColor:dd?'#f472b6':'#565d6b', dislikeFill:dd?'#f472b6':'none',
+        onDislike:()=>this.setState(s=>({cdis:{...s.cdis,[i]:!s.cdis[i]}, cvibes:{...s.cvibes,[i]:false}})),
+        replyBoxOpen:!!this.state.crep[i], onReply:()=>this.setState(s=>({crep:{...s.crep,[i]:!s.crep[i]}})),
+        hasReply:!!rp, replyName:rp?(P[rp.who]||rp.who):'', replyInitials:rp?this.initials(P[rp.who]||rp.who):'',
+        replyBg:rp?this.seedColor(rp.who,0.5,0.14):'', replyColor:rp?this.seedColor(rp.who,0.72,0.16):'', replyText:rp?rp.text:'', replyAge:rp?rp.age:'',
+      };
+    });
+    return {
+      isSuggested: post.type === 'suggested',
+      isPost: post.type !== 'suggested',
+      isImage: post.type === 'image',
+      isClip: post.type === 'clip',
+      isCarousel: post.type === 'carousel',
+      name: a.name || who,
+      handle: '@' + (a.handle || who),
+      role: a.role || '',
+      verified: !!a.verified,
+      age: post.age || '',
+      text: post.text || '',
+      caption: post.caption || '',
+      clipDur: post.clipDur || '',
+      avatarBg: this.seedColor(who, 0.5, 0.14),
+      onProfile: () => { if (this.props.onProfile) this.props.onProfile(who); },
+      avatarInitials: this.initials(a.name || who),
+      mediaBg: this.meshBg(who + 'm'),
+      mediaLabel: post.type === 'image' ? ('generative · ' + (a.handle || who)) : '',
+      framesCount: post.frames || 3,
+      hasTrust: !!t,
+      trustLabel: t ? t.label : '',
+      trustColor: t ? t.color : '#8a93a3',
+      trustIconPath: t ? t.path : '',
+      trustBadgeStyle: t ? `position:absolute; left:10px; bottom:10px; display:inline-flex; align-items:center; gap:5px; font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; color:${t.color}; border:1px solid ${t.cam?'color-mix(in oklab, var(--a1) 50%, transparent)':'rgba(255,255,255,.18)'}; border-radius:999px; padding:3px 8px; background:${t.cam?'color-mix(in oklab, var(--a1) 14%, rgba(0,0,0,.4))':'rgba(0,0,0,.45)'}; backdrop-filter:blur(4px); ${t.cam?'box-shadow:0 0 12px -2px color-mix(in oklab, var(--a1) 55%, transparent);':''}` : '',
+      likes: post.likes != null ? String(post.likes) : '',
+      replies: post.replies != null ? String(post.replies) : '',
+      chatOpen: this.state.chatOpen,
+      chatMsgs,
+      reportMenuOpen,
+      reportFlagged: reportKind != null,
+      reportFlagLabel: reportKind === 'ai' ? 'flagged AI' : (reportKind === 'bad' ? 'reported' : ''),
+      reportFlagColor: reportKind === 'ai' ? '#f472b6' : '#f87171',
+      reportIcon: reportKind ? 'assets/slop-report.png' : 'assets/slop-report-gray.png',
+      reportColor: post.reportColor || (reportKind === 'ai' ? '#f472b6' : (reportKind === 'bad' ? '#f87171' : '#6b7280')),
+      reportFill: post.reportFill || (reportKind ? 'currentColor' : 'none'),
+      onToggleReport: runPostHandler(post.onToggleReport, () => this.setState(s=>({ reportMenu: !s.reportMenu }))),
+      onFlagAi: runPostHandler(post.onFlagAi, () => this.setState({ reportKind:'ai', reportMenu:false })),
+      onFlagBad: runPostHandler(post.onFlagBad, () => this.setState({ reportKind:'bad', reportMenu:false })),
+      bookmarkColor: post.bookmarkColor || (marked ? 'var(--a2)' : '#6b7280'),
+      bookmarkFill: post.bookmarkFill || (marked ? 'var(--a2)' : 'none'),
+      onBookmarkPost: runPostHandler(post.onBookmark, () => this.setState(s=>({ marked: !s.marked }))),
+      replyColor: this.state.chatOpen ? 'var(--a1)' : '#6b7280',
+      heroBg: this.seedColor('nova', 0.5, 0.14),
+      onToggleChat: (e) => { if(e&&e.stopPropagation) e.stopPropagation(); this.setState(s=>({ chatOpen: !s.chatOpen })); },
+      recasts: post.recasts != null ? String(post.recasts) : '',
+      recastColor: post.recastColor || (recasted ? '#34d399' : '#6b7280'),
+      recastMenuOpen,
+      repostLabel: post.repostLabel || (recasted ? 'Undo recast' : 'Recast'),
+      repostIconColor: post.repostIconColor || (recasted ? '#34d399' : '#cfd6df'),
+      onToggleRecast: runPostHandler(post.onToggleRecast, () => this.setState(s=>({ recastMenu: !s.recastMenu }))),
+      onRepost: runPostHandler(post.onRepost, () => this.setState(s=>({ recasted: !s.recasted, recastMenu:false }))),
+      onShareExternal: runPostHandler(post.onShareExternal, () => { this.setState({ recastMenu:false }); if(this.props.onShare) this.props.onShare(); }),
+      vibeColor: post.vibeColor || (vibed ? 'var(--a1)' : '#6b7280'),
+      vibeFill: post.vibeFill || (vibed ? 'var(--a1)' : 'none'),
+      vibeGlow: post.vibeGlow || (vibed ? 'drop-shadow(0 0 7px color-mix(in oklab, var(--a1) 70%, transparent))' : 'none'),
+      dislikes: post.dislikes != null ? String(post.dislikes) : '',
+      dislikeColor: post.dislikeColor || (disliked ? '#f87171' : '#6b7280'),
+      dislikeFill: post.dislikeFill || (disliked ? '#f87171' : 'none'),
+      onDislike: runPostHandler(post.onDislike, () => this.setState(s=>({ disliked: !s.disliked, vibed:false }))),
+      vibeAnim: this.state.pop ? 'fp_pop .5s cubic-bezier(.3,1.4,.5,1)' : 'none',
+      vibeBurst: vibed && this.state.pop > 0,
+      pop: this.state.pop,
+      followLabel: following ? 'Following' : 'Follow',
+      followBtnStyle: following
+        ? "flex-shrink:0; font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:13px; padding:8px 16px; border-radius:999px; cursor:pointer; border:1px solid #2a2a38; background:transparent; color:#9aa4b2;"
+        : "flex-shrink:0; font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:13px; padding:8px 18px; border-radius:999px; cursor:pointer; border:none; background:linear-gradient(135deg,var(--a1),var(--a2)); color:#0a0a0f;",
+      onVibe: (e) => {
+        stop(e);
+        if (typeof post.onVibe === 'function') {
+          this.setState(s=>({ pop:s.pop+1 }));
+          return post.onVibe(e);
+        }
+        if(post.type==='suggested'){ this.setState(s=>({following:!s.following})); }
+        else { this.setState(s=>({vibed:!s.vibed, disliked:false, pop:s.pop+1})); }
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -9,6 +9,9 @@ import driftDetector from './DriftDetector.js';
 import abTestFramework from './ABTestFramework.js';
 import calendarGuard from './CalendarGuard.js';
 import correlationGuard from './CorrelationGuard.js';
+import tradingPerformanceGuard from './TradingPerformanceGuard.js';
+import simToLiveDaemon from './SimToLiveDaemon.js';
+import compiledStrategyBacktester from './CompiledStrategyBacktester.js';
 
 const router = express.Router();
 
@@ -176,6 +179,46 @@ router.get('/journal', (req, res) => {
 router.get('/promotion', (req, res) => {
     try {
         res.json({ success: true, promotion: missionControlRuntime.evaluatePromotion() });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+router.get('/performance-guard', (req, res) => {
+    try {
+        const { symbol = null, strategy = null } = req.query || {};
+        const report = tradingPerformanceGuard.report({ limit: 20 });
+        const verdict = strategy || symbol
+            ? tradingPerformanceGuard.evaluate({ symbol, strategyId: strategy })
+            : null;
+        res.json({ success: true, report, verdict });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+router.get('/sim-to-live', (req, res) => {
+    try {
+        res.json({ success: true, status: simToLiveDaemon.getStatus(), report: simToLiveDaemon.readReport() });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+router.post('/sim-to-live/run', async (req, res) => {
+    try {
+        const report = await simToLiveDaemon.runNow();
+        res.json({ success: true, report, status: simToLiveDaemon.getStatus() });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+router.post('/sim-to-live/backtest', async (req, res) => {
+    try {
+        const { limit = 10, timeframe = '5Min' } = req.body || {};
+        const report = await compiledStrategyBacktester.runFromSimToLiveReport(undefined, { limit, timeframe });
+        res.json({ success: true, report });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }

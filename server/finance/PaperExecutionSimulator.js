@@ -31,6 +31,37 @@ class PaperExecutionSimulator {
         return clamp(Math.sqrt(variance), 0.001, 0.18);
     }
 
+    /**
+     * Deterministic per-side cost estimate using the exact same spread/impact/fee
+     * model as simulateFill (no randomness, no rejects). Lets the backtester and
+     * candidate screening charge identical friction to what paper fills pay —
+     * the sim/paper divergence (sim 60% WR vs paper 24%, Jul 2026) came partly
+     * from the backtester filling at raw close prices with zero spread.
+     */
+    estimateCostPct({ referencePrice, qty, bars = [] }) {
+        const price = Number(referencePrice);
+        const quantity = Number(qty);
+        const volatility = this.estimateVolatility(bars);
+        const notional = Number.isFinite(price) && Number.isFinite(quantity) && price > 0 && quantity > 0
+            ? price * quantity : 0;
+        const spreadBps = this.config.baseSpreadBps + volatility * this.config.volatilitySpreadMultiplier * 100;
+        const halfSpreadPct = (spreadBps / 10000) / 2;
+        const impactPct = price > 0
+            ? Math.min(0.01, Math.sqrt(notional) / 100000) * (1 + volatility * 5)
+            : 0;
+        const feePct = this.config.feeBps / 10000;
+        const perSidePct = halfSpreadPct + impactPct + feePct;
+        return {
+            perSidePct,
+            roundTripPct: perSidePct * 2,
+            halfSpreadPct,
+            impactPct,
+            feePct,
+            spreadBps,
+            volatility
+        };
+    }
+
     simulateFill({ symbol, side, qty, referencePrice, bars = [], orderId = null }) {
         const price = Number(referencePrice);
         const quantity = Number(qty);

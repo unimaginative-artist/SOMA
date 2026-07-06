@@ -43,7 +43,6 @@ if (fs.existsSync(envPath)) {
         }
     });
     console.log('[SomaBrain] Loaded environment:');
-    console.log(`  GEMINI_API_KEY: ${process.env.GEMINI_API_KEY ? 'SET (' + process.env.GEMINI_API_KEY.substring(0, 10) + '...)' : 'NOT SET'}`);
     console.log(`  DEEPSEEK_API_KEY: ${process.env.DEEPSEEK_API_KEY ? 'SET (' + process.env.DEEPSEEK_API_KEY.substring(0, 10) + '...)' : 'NOT SET'}`);
     console.log(`  OLLAMA_MODEL: ${process.env.OLLAMA_MODEL || 'NOT SET'}`);
 }
@@ -70,8 +69,7 @@ class SomaBrain {
             adapters: {
                 // Adapters route through conductor
                 gemma: async (q) => this._conductorQuery(q, 'fast'),
-                deepseek: async (q) => this._conductorQuery(q, 'deep'),
-                gemini: async (q) => this._conductorQuery(q, 'creative')
+                deepseek: async (q) => this._conductorQuery(q, 'deep')
             }
         });
         
@@ -169,10 +167,10 @@ class SomaBrain {
 
             this.isReady = true;
             console.log('[SomaBrain] Complete cognitive architecture ready:');
-            console.log('  ✓ AURORA (Gemini) - Creative synthesis');
-            console.log('  ✓ LOGOS (Gemini → Ollama fallback) - Analytical reasoning');
-            console.log('  ✓ PROMETHEUS (Gemini) - Fast pragmatic');
-            console.log('  ✓ THALAMUS (Gemini) - Security gatekeeper');
+            console.log('   AURORA (DeepSeek) - Creative synthesis');
+            console.log('   LOGOS (DeepSeek + Ollama fallback) - Analytical reasoning');
+            console.log('   PROMETHEUS (DeepSeek) - Fast pragmatic');
+            console.log('   THALAMUS (DeepSeek) - Security gatekeeper');
             console.log('  ✓ BrainConductor orchestrating');
             console.log('  ✓ Transmitters routing');
             console.log('  ✓ ReasoningChamber synthesizing');

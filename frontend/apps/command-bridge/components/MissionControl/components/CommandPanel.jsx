@@ -8,6 +8,9 @@ export const CommandPanel = ({
     onSymbolSelect,
     currentPresetId,
     onPresetSelect,
+    strategySelectionMode = 'auto',
+    autoStrategy = null,
+    onAutoSelect,
     assetType,
     setAssetType,
     onAnalyze
@@ -260,8 +263,37 @@ export const CommandPanel = ({
 
                 {/* Right Col: Strategies Grid - Less Cluttered */}
                 <div className="flex-1 p-3 overflow-y-auto custom-scrollbar">
+                    <div className="mb-2">
+                        <h3 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center">
+                            Strategy Authority
+                        </h3>
+                    </div>
+
+                    <button
+                        type="button"
+                        onClick={onAutoSelect}
+                        className={`w-full text-left p-2 rounded border transition-all mb-2 ${
+                            strategySelectionMode === 'auto'
+                                ? 'bg-emerald-500/10 border-emerald-500/40'
+                                : 'bg-white/[0.02] border-white/5 hover:bg-white/[0.04] hover:border-white/10'
+                        }`}
+                    >
+                        <div className="flex justify-between items-start gap-2">
+                            <div className="min-w-0">
+                                <div className={`text-[10px] font-bold uppercase ${strategySelectionMode === 'auto' ? 'text-emerald-300' : 'text-zinc-400'}`}>
+                                    Auto: Sim-to-Live Ladder
+                                </div>
+                                <div className="text-[9px] text-zinc-500 truncate mt-0.5">
+                                    {autoStrategy?.strategyId || 'waiting'} / {autoStrategy?.symbol || currentSymbol}
+                                    {autoStrategy?.neededTrades ? ` · ${autoStrategy.neededTrades} paper trades needed` : ''}
+                                </div>
+                            </div>
+                            {strategySelectionMode === 'auto' && <Check className="w-3 h-3 text-emerald-300 shrink-0" />}
+                        </div>
+                    </button>
+
                     <h3 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center">
-                        Active Protocols <span className="ml-2 px-1.5 py-0.5 bg-white/5 rounded text-zinc-400">{filteredPresets.length}</span>
+                        Manual Overrides <span className="ml-2 px-1.5 py-0.5 bg-white/5 rounded text-zinc-400">{filteredPresets.length}</span>
                     </h3>
                     
                     <div className="grid grid-cols-2 gap-2">
@@ -270,16 +302,16 @@ export const CommandPanel = ({
                                 key={preset.id}
                                 onClick={() => onPresetSelect(preset)}
                                 className={`text-left p-2 rounded border transition-all flex flex-col gap-1 relative group overflow-hidden ${
-                                    currentPresetId === preset.id
+                                    strategySelectionMode === 'manual' && currentPresetId === preset.id
                                     ? 'bg-gradient-to-br from-cyan-900/20 to-black border-cyan-500/50'
                                     : 'bg-white/[0.02] border-white/5 hover:bg-white/[0.04] hover:border-white/10'
                                 }`}
                             >
                                 <div className="flex justify-between items-start">
-                                    <span className={`text-[10px] font-bold uppercase truncate pr-2 ${currentPresetId === preset.id ? 'text-cyan-400' : 'text-zinc-400 group-hover:text-zinc-200'}`}>
+                                    <span className={`text-[10px] font-bold uppercase truncate pr-2 ${strategySelectionMode === 'manual' && currentPresetId === preset.id ? 'text-cyan-400' : 'text-zinc-400 group-hover:text-zinc-200'}`}>
                                         {preset.name}
                                     </span>
-                                    {currentPresetId === preset.id && <Check className="w-3 h-3 text-cyan-400 shrink-0" />}
+                                    {strategySelectionMode === 'manual' && currentPresetId === preset.id && <Check className="w-3 h-3 text-cyan-400 shrink-0" />}
                                 </div>
                                 
                                 <p className="text-[9px] text-zinc-600 leading-tight line-clamp-2 h-[2.2em]">

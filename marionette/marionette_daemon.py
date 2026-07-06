@@ -397,8 +397,11 @@ class Supervisor:
         if not m:
             return {"error": f"unknown service '{name}'"}
         with self._lock:
-            # manual restart bypasses the circuit but still records to the window
+            # Manual restart is an explicit human/operator intervention after a
+            # fix. Give that fix one clean recovery window instead of immediately
+            # re-tripping on stale crash-loop history.
             m.circuit_open_until = 0
+            m.restart_times.clear()
             m.recover(self, reason="manual /reset request")
         return {"status": f"{name} restart triggered"}
 

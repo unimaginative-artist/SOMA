@@ -1,7 +1,7 @@
 {
   "version": 1,
   "mode": "absent",
-  "lastUserActivityAt": 1781919574762,
+  "lastUserActivityAt": 1783128898950,
   "lastPersonSeenAt": 1781139895940,
   "lastPetSeenAt": null,
   "lastProbeAt": 1781038925880,
@@ -22,7 +22,7 @@
     }
   },
   "lastEventKeys": {
-    "camera:raw": 1781940870023,
+    "camera:raw": 1783375117566,
     "person:unknown_person": 1781038924303,
     "probe:unknown": 1781038925880,
     "identity:barry": 1781203090515,
@@ -39,7 +39,7 @@
     "source": "raw-frame",
     "summary": "Camera frame captured but not semantically analyzed.",
     "labels": [],
-    "updatedAt": 1781941118562
+    "updatedAt": 1783375385284
   },
   "lastVisionLabels": [],
   "lastPersonConfidence": 0.75,

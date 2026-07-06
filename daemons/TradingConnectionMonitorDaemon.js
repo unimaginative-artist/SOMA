@@ -24,6 +24,7 @@ export class TradingConnectionMonitorDaemon extends BaseDaemon {
         this.outageThreshold = config.outageThreshold || 3; // 3 ticks = 15 seconds
         this.failedChecks = 0;
         this.isHaltingDueToOutage = false;
+        this._bootRecoveryDone = false;
     }
 
     /**
@@ -35,6 +36,14 @@ export class TradingConnectionMonitorDaemon extends BaseDaemon {
         if (status.ok) {
             this.failedChecks = 0;
             if (this.isHaltingDueToOutage) {
+                await this.handleConnectionRestored(status);
+            } else if (!this._bootRecoveryDone && riskGateway.isHardHalted && riskGateway.haltSource === 'cod_monitor') {
+                // A CoD halt latched across a restart: the previous process died
+                // before its own recovery pass could disarm (happened 2026-07-03 —
+                // in live mode this silently stops all trading forever). Run the
+                // same exposure-verified recovery. Manual halts are never touched.
+                this._bootRecoveryDone = true;
+                this.logger.warn('[CoDMonitor] Boot recovery: CoD halt latched from a previous process — verifying exposure before disarming.');
                 await this.handleConnectionRestored(status);
             }
         } else {
@@ -124,7 +133,7 @@ export class TradingConnectionMonitorDaemon extends BaseDaemon {
         this.logger.error(`[CoDMonitor] 🚨 DISCONNECT DETECTED! Outage threshold exceeded. Running emergency Cancel-on-Disconnect halt.`);
 
         // 1. Lock Risk Gateway immediately to block any new trade submissions
-        riskGateway.setHardHalt(true);
+        riskGateway.setHardHalt(true, 'cod_monitor');
         riskGateway.logAuditEvent('cod_emergency_halt_triggered', {
             consecutiveFailures: this.failedChecks,
             reason: status.reason

@@ -61,7 +61,9 @@ const MissionControlApp = ({ somaBackend, isConnected }) => {
     // Data State
     const [tickers, setTickers] = useState(INITIAL_TICKERS);
     const [activeStrategies, setActiveStrategies] = useState(STRATEGY_PRESETS[1].strategies); // Default to BTC Native
-    const [currentPresetId, setCurrentPresetId] = useState('BTC_NATIVE');
+    const [currentPresetId, setCurrentPresetId] = useState('AUTO_LADDER');
+    const [strategySelectionMode, setStrategySelectionMode] = useState('auto');
+    const [missionRuntime, setMissionRuntime] = useState(null);
     const [trades, setTrades] = useState([]);
     const [chartData, setChartData] = useState([]);
     const [timeframe, setTimeframe] = useState('1Min');
@@ -94,6 +96,41 @@ const MissionControlApp = ({ somaBackend, isConnected }) => {
         setToasts(prev => [...prev, { id, message, type }]);
         setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4500);
     }, []);
+
+    const presetToStrategyId = useCallback((presetId) => {
+        const map = {
+            BALANCED: 'standard_portfolio',
+            BTC_NATIVE: 'swarm_architecture',
+            MICRO_CHALLENGE: 'micro_compounder',
+            MICRO: 'micro_scalper',
+            YOLO: 'full_aggression',
+            CONSERVATIVE: 'yield_harvester'
+        };
+        return map[presetId] || String(presetId || '').toLowerCase();
+    }, []);
+
+    const normalizeTradeSymbol = useCallback((symbol) => {
+        const raw = String(symbol || '').toUpperCase();
+        if (['BTC', 'ETH', 'SOL'].includes(raw)) return `${raw}-USD`;
+        return raw || selectedSymbol;
+    }, [selectedSymbol]);
+
+    const autoStrategyCard = useCallback((strategy) => {
+        if (!strategy) return null;
+        return {
+            id: strategy.strategyId || 'sim_to_live',
+            name: strategy.strategyName || strategy.strategyId || 'Sim-to-Live',
+            allocation: strategy.trades > 0 ? 100 : 35,
+            pnl: Number(strategy.pnl || 0),
+            winRate: Number(strategy.winRate || 0) > 1 ? Number(strategy.winRate || 0) / 100 : Number(strategy.winRate || 0),
+            confidence: Math.round(Number(strategy.score || 0) * 100) || 60,
+            profitFactor: strategy.profitFactor || null,
+            active: true,
+            description: `${strategy.source || 'sim_to_live'} ${strategy.state || 'paper_candidate'} for ${strategy.symbol || selectedSymbol}. ${strategy.neededTrades ? `${strategy.neededTrades} paper trades needed.` : 'Paper evidence controls promotion.'}`,
+            lastExecution: strategy.learnedAt ? new Date(strategy.learnedAt).toLocaleTimeString() : '--',
+            avgReturn: strategy.trades ? Number(strategy.pnl || 0) / Math.max(1, strategy.trades) : null
+        };
+    }, [selectedSymbol]);
 
     const formatDuration = (ms) => {
         const s = Math.floor(ms / 1000);
@@ -202,6 +239,37 @@ const MissionControlApp = ({ somaBackend, isConnected }) => {
             })
             .catch(() => {}); // Backend offline — stay at default state
     }, []);
+
+    // Mission Control runtime owns strategy authority. AUTO uses sim-to-live;
+    // MANUAL persists an explicit override.
+    useEffect(() => {
+        let cancelled = false;
+        const fetchRuntime = async () => {
+            try {
+                const res = await fetch('/api/mission-control/runtime');
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!data.success || cancelled) return;
+                const runtime = data.runtime;
+                setMissionRuntime(runtime);
+                const modeValue = runtime.strategySelectionMode || 'auto';
+                setStrategySelectionMode(modeValue);
+                if (modeValue === 'auto') {
+                    setCurrentPresetId('AUTO_LADDER');
+                    const card = autoStrategyCard(runtime.activeStrategy);
+                    if (card) setActiveStrategies([card]);
+                }
+            } catch {
+                // Runtime status is advisory for UI; backend trading remains authoritative.
+            }
+        };
+        fetchRuntime();
+        const interval = setInterval(fetchRuntime, 10000);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [autoStrategyCard]);
 
     // Poll broker positions & orders when trading is active
     // Also syncs RiskPanel: wallet balance, mark-to-market equity, net exposure, daily drawdown
@@ -748,6 +816,12 @@ const MissionControlApp = ({ somaBackend, isConnected }) => {
     const handleStartTraining = async () => {
         setIsTrainingLoading(true);
         try {
+            const autoStrategy = missionRuntime?.activeStrategy;
+            const tradeSymbol = strategySelectionMode === 'auto' && autoStrategy?.symbol
+                ? normalizeTradeSymbol(autoStrategy.symbol)
+                : selectedSymbol;
+            const presetOverride = strategySelectionMode === 'manual' ? presetToStrategyId(currentPresetId) : null;
+
             // 1. Quick Alpaca check with 3s timeout (don't let it hang)
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 3000);
@@ -770,7 +844,14 @@ const MissionControlApp = ({ somaBackend, isConnected }) => {
             const engageRes = await fetch('/api/autonomous/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ symbol: selectedSymbol, preset: currentPresetId })
+                body: JSON.stringify({
+                    symbol: tradeSymbol,
+                    preset: presetOverride,
+                    config: {
+                        strategySelectionMode,
+                        paperMode: true
+                    }
+                })
             });
             const engageData = await engageRes.json();
 
@@ -785,9 +866,10 @@ const MissionControlApp = ({ somaBackend, isConnected }) => {
             setSessionStartTime(Date.now());
             fetch('/api/lowlatency/start', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ symbols: [selectedSymbol] })
+                body: JSON.stringify({ symbols: [tradeSymbol] })
             }).catch(() => {});
-            console.log('[MissionControl] Paper trading ENGAGED for', selectedSymbol);
+            setSelectedSymbol(tradeSymbol);
+            console.log('[MissionControl] Paper trading ENGAGED for', tradeSymbol);
         } catch (e) {
             console.error('Start training error:', e);
             addToast(`Failed to start paper trading: ${e.message}`, 'error');
@@ -835,9 +917,52 @@ const MissionControlApp = ({ somaBackend, isConnected }) => {
         </button>
     ) : null;
 
-    const handlePresetSelect = (preset) => {
+    const handleAutoStrategySelect = async () => {
+        try {
+            const res = await fetch('/api/mission-control/risk', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ strategySelectionMode: 'auto' })
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'Failed to enable auto strategy selection');
+            setStrategySelectionMode('auto');
+            setMissionRuntime(data.runtime);
+            setCurrentPresetId('AUTO_LADDER');
+            const card = autoStrategyCard(data.runtime?.activeStrategy);
+            if (card) setActiveStrategies([card]);
+            addToast('Strategy selection set to AUTO: sim-to-live ladder controls paper strategy.', 'success');
+        } catch (error) {
+            addToast(`Failed to enable auto strategy selection: ${error.message}`, 'error');
+        }
+    };
+
+    const handlePresetSelect = async (preset) => {
         setCurrentPresetId(preset.id);
         setActiveStrategies(preset.strategies);
+        setStrategySelectionMode('manual');
+        try {
+            const res = await fetch('/api/mission-control/risk', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    strategySelectionMode: 'manual',
+                    manualStrategy: {
+                        strategyId: presetToStrategyId(preset.id),
+                        strategyName: preset.name,
+                        symbol: selectedSymbol,
+                        assetClass: assetType.toLowerCase(),
+                        reason: `Manual override selected in Mission Control: ${preset.name}`
+                    }
+                })
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'Failed to save manual strategy override');
+            setMissionRuntime(data.runtime);
+            addToast(`Manual override active: ${preset.name}`, 'warning');
+        } catch (error) {
+            addToast(`Manual override failed to persist: ${error.message}`, 'error');
+        }
     };
 
     const handleUpdateAllocation = (amount) => {
@@ -852,12 +977,22 @@ const MissionControlApp = ({ somaBackend, isConnected }) => {
         if (!tradingActive) {
             // START autonomous trading on the server
             try {
+                const autoStrategy = missionRuntime?.activeStrategy;
+                const tradeSymbol = strategySelectionMode === 'auto' && autoStrategy?.symbol
+                    ? normalizeTradeSymbol(autoStrategy.symbol)
+                    : selectedSymbol;
+                const presetOverride = strategySelectionMode === 'manual' ? presetToStrategyId(currentPresetId) : null;
+
                 const res = await fetch('/api/autonomous/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        symbol: selectedSymbol,
-                        preset: currentPresetId
+                        symbol: tradeSymbol,
+                        preset: presetOverride,
+                        config: {
+                            strategySelectionMode,
+                            paperMode: true
+                        }
                     })
                 });
                 const data = await res.json();
@@ -868,9 +1003,10 @@ const MissionControlApp = ({ somaBackend, isConnected }) => {
                     setSessionStartTime(Date.now());
                     fetch('/api/lowlatency/start', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ symbols: [selectedSymbol] })
+                        body: JSON.stringify({ symbols: [tradeSymbol] })
                     }).catch(() => {});
-                    console.log('[MissionControl] Autonomous trading ENGAGED for', selectedSymbol);
+                    setSelectedSymbol(tradeSymbol);
+                    console.log('[MissionControl] Autonomous trading ENGAGED for', tradeSymbol);
                 } else {
                     addToast(`Failed to start: ${data.error}`, 'error');
                 }
@@ -1256,6 +1392,9 @@ const MissionControlApp = ({ somaBackend, isConnected }) => {
                                         onSymbolSelect={setSelectedSymbol}
                                         currentPresetId={currentPresetId}
                                         onPresetSelect={handlePresetSelect}
+                                        strategySelectionMode={strategySelectionMode}
+                                        autoStrategy={missionRuntime?.activeStrategy}
+                                        onAutoSelect={handleAutoStrategySelect}
                                         assetType={assetType}
                                         setAssetType={setAssetType}
                                         onAnalyze={() => setIsAnalysisOpen(true)}

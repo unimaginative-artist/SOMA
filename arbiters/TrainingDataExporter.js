@@ -20,6 +20,11 @@ import { EventEmitter } from 'events';
  import { promises as fs } from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
+import {
+  normalizeTrainingProvenance,
+  trainingExampleFingerprint,
+  validateTrainingExample
+} from '../core/TrainingDataPolicy.js';
 const require = createRequire(import.meta.url);
 
 // Import NEMESIS (hybrid review system)
@@ -160,9 +165,13 @@ export class TrainingDataExporter extends EventEmitter {
       console.log(`[${this.name}] 🔗 Merging into training format...`);
       const dataset = await this.mergeIntoTrainingFormat(exports);
 
+      if (dataset.length === 0) throw new Error('No verified training examples passed the export policy');
+
       // 6. Save final dataset
       const outputPath = path.join(this.outputDir, `soma-training-${timestamp}.jsonl`);
       await this.saveDataset(dataset, outputPath);
+
+      const dpoPath = await this.saveDpoDataset(revisionPairs.dpoPairs || [], timestamp);
 
       console.log(`\n[${this.name}] ✅ Export complete!`);
       console.log(`[${this.name}]    Total examples: ${dataset.length}`);
@@ -174,7 +183,8 @@ export class TrainingDataExporter extends EventEmitter {
         success: true,
         datasetPath: outputPath,
         exampleCount: dataset.length,
-        exports
+        exports,
+        dpoPath
       };
     } catch (error) {
       console.error(`[${this.name}] ❌ Export failed:`, error);
@@ -203,6 +213,9 @@ export class TrainingDataExporter extends EventEmitter {
             metadata: {
               session_id: session.id,
               timestamp: messages[i].timestamp,
+              source: 'conversation',
+              actualProvider: messages[i + 1].metadata?.actualProvider || messages[i + 1].metadata?.provider,
+              actualModel: messages[i + 1].metadata?.actualModel || messages[i + 1].metadata?.model,
               ...messages[i + 1].metadata
             }
           };
@@ -211,6 +224,8 @@ export class TrainingDataExporter extends EventEmitter {
           if (this.nemesisReview) {
             const passed = await this._reviewExample(example, 'conversation');
             if (passed) {
+              example.metadata.qualityTier = 'reviewed';
+              example.metadata.nemesisPassed = true;
               examples.push(example);
             }
           } else {
@@ -255,7 +270,7 @@ export class TrainingDataExporter extends EventEmitter {
       return { count: 0, examples: [] };
     }
 
-    const experiences = this.learningPipeline.experienceBuffer.getAllExperiences();
+    const experiences = this._readExperienceBuffer(this.learningPipeline.experienceBuffer);
     const examples = [];
 
     for (const exp of experiences) {
@@ -265,7 +280,13 @@ export class TrainingDataExporter extends EventEmitter {
           response: exp.outcome?.result || exp.outcome,
           metadata: {
             reward: exp.reward,
-            timestamp: exp.timestamp
+            timestamp: exp.timestamp,
+            source: 'experience',
+            qualityTier: exp.metadata?.qualityTier || (exp.metadata?.verified ? 'verified' : 'unverified'),
+            evidenceId: exp.metadata?.evidenceId || exp.metadata?.artifactId || null,
+            actualProvider: exp.metadata?.actualProvider || exp.metadata?.provider,
+            actualModel: exp.metadata?.actualModel || exp.metadata?.model,
+            lobe: exp.metadata?.lobe || exp.metadata?.brain
           }
         };
         
@@ -273,7 +294,8 @@ export class TrainingDataExporter extends EventEmitter {
         if (this.nemesisReview) {
           const passed = await this._reviewExample(example, 'experience');
           if (passed) {
-            examples.push(example);
+              example.metadata.nemesisPassed = true;
+              examples.push(example);
           }
         } else {
           examples.push(example);
@@ -285,6 +307,15 @@ export class TrainingDataExporter extends EventEmitter {
     return { count: examples.length, examples };
   }
 
+  _readExperienceBuffer(buffer) {
+    if (!buffer) return [];
+    if (typeof buffer.getAllExperiences === 'function') return buffer.getAllExperiences() || [];
+    if (typeof buffer.getAll === 'function') return buffer.getAll() || [];
+    if (typeof buffer.toArray === 'function') return buffer.toArray() || [];
+    if (Array.isArray(buffer.experiences)) return [...buffer.experiences];
+    return [];
+  }
+
   /**
    * Export causal chains as high-order reasoning examples
    */
@@ -293,6 +324,7 @@ export class TrainingDataExporter extends EventEmitter {
 
     const graph = this.causality.exportGraph ? this.causality.exportGraph() : { nodes: [], edges: [] };
     const examples = [];
+    const dpoPairs = [];
 
     // Convert causal links into "If X then Y" reasoning examples
     for (const edge of graph.edges || []) {
@@ -355,11 +387,26 @@ export class TrainingDataExporter extends EventEmitter {
         response: pair.good_response,
         metadata: {
           type: 'nemesis_corrected',
+          source: 'nemesis_revision',
+          qualityTier: 'nemesis_corrected',
           is_revision: true,
           score_before: pair.score_before,
           critique: pair.critique
         }
       });
+      if (pair.bad_response) {
+        dpoPairs.push({
+          prompt: pair.query,
+          chosen: pair.good_response,
+          rejected: pair.bad_response,
+          metadata: {
+            source: 'nemesis_revision',
+            qualityTier: 'nemesis_corrected',
+            scoreBefore: pair.score_before,
+            critique: pair.critique || null
+          }
+        });
+      }
 
       // Negative signal: include critique as a chain-of-thought commentary
       // Format: critique explains WHY the bad response failed → model learns the reasoning
@@ -375,7 +422,7 @@ export class TrainingDataExporter extends EventEmitter {
       }
     }
 
-    return { count: examples.length, examples, pairsProcessed: pairs.length };
+    return { count: examples.length, examples, dpoPairs, pairsProcessed: pairs.length };
   }
 
   /**
@@ -438,7 +485,19 @@ export class TrainingDataExporter extends EventEmitter {
     }
 
     // Deduplicate and shuffle
-    const uniqueDataset = this.deduplicateDataset(dataset);
+    const policyAccepted = [];
+    for (const item of dataset) {
+      const user = item.messages?.find(message => message.role === 'user')?.content || item.instruction || item.input;
+      const assistant = item.messages?.find(message => message.role === 'assistant')?.content || item.response || item.output;
+      const policy = validateTrainingExample({ instruction: user, response: assistant, metadata: item.metadata });
+      if (!policy.accepted) {
+        this.qualityStats.failed++;
+        continue;
+      }
+      item.metadata = policy.metadata;
+      policyAccepted.push(item);
+    }
+    const uniqueDataset = this.deduplicateDataset(policyAccepted);
     return this.shuffleDataset(uniqueDataset);
   }
 
@@ -446,6 +505,7 @@ export class TrainingDataExporter extends EventEmitter {
    * Format example based on target format (Gemma, Alpaca, etc.)
    */
   formatExample(instruction, response, systemPrompt, metadata = {}) {
+    const provenance = normalizeTrainingProvenance(metadata, { instruction, response });
     if (this.format === 'gemma') {
       // Gemma chat format
       return {
@@ -454,7 +514,7 @@ export class TrainingDataExporter extends EventEmitter {
           { role: 'user', content: instruction },
           { role: 'assistant', content: response }
         ],
-        metadata
+        metadata: provenance
       };
     } else if (this.format === 'alpaca') {
       // Alpaca format
@@ -462,7 +522,7 @@ export class TrainingDataExporter extends EventEmitter {
         instruction: systemPrompt || '',
         input: instruction,
         output: response,
-        metadata
+        metadata: provenance
       };
     } else if (this.format === 'sharegpt') {
       // ShareGPT format
@@ -472,11 +532,11 @@ export class TrainingDataExporter extends EventEmitter {
           { from: 'gpt', value: response }
         ],
         system: systemPrompt || '',
-        metadata
+        metadata: provenance
       };
     }
 
-    return { instruction, response, system: systemPrompt, metadata };
+    return { instruction, response, system: systemPrompt, metadata: provenance };
   }
 
   /**
@@ -487,10 +547,9 @@ export class TrainingDataExporter extends EventEmitter {
     const unique = [];
 
     for (const item of dataset) {
-      const key = JSON.stringify({
-        instruction: item.messages?.[1]?.content || item.instruction || item.input,
-        response: item.messages?.[2]?.content || item.response || item.output
-      });
+      const instruction = item.messages?.find(message => message.role === 'user')?.content || item.instruction || item.input;
+      const response = item.messages?.find(message => message.role === 'assistant')?.content || item.response || item.output;
+      const key = trainingExampleFingerprint(instruction, response);
 
       if (!seen.has(key)) {
         seen.add(key);
@@ -519,6 +578,32 @@ export class TrainingDataExporter extends EventEmitter {
   async saveDataset(dataset, outputPath) {
     const jsonl = dataset.map(item => JSON.stringify(item)).join('\n');
     await fs.writeFile(outputPath, jsonl, 'utf8');
+    const manifest = {
+      schemaVersion: 1,
+      datasetPath: outputPath,
+      count: dataset.length,
+      createdAt: new Date().toISOString(),
+      sources: {},
+      providers: {},
+      lobes: {}
+    };
+    for (const item of dataset) {
+      const metadata = item.metadata || {};
+      for (const [bucket, key] of [[manifest.sources, metadata.source], [manifest.providers, metadata.provider], [manifest.lobes, metadata.lobe]]) {
+        const value = key || 'unknown';
+        bucket[value] = (bucket[value] || 0) + 1;
+      }
+    }
+    await fs.writeFile(`${outputPath}.manifest.json`, JSON.stringify(manifest, null, 2), 'utf8');
+  }
+
+  async saveDpoDataset(pairs, timestamp = Date.now()) {
+    if (!Array.isArray(pairs) || pairs.length === 0) return null;
+    const dpoDir = path.join(this.outputDir, 'dpo');
+    await fs.mkdir(dpoDir, { recursive: true });
+    const outputPath = path.join(dpoDir, `revision-pairs-${timestamp}.jsonl`);
+    await fs.writeFile(outputPath, pairs.map(pair => JSON.stringify(pair)).join('\n'), 'utf8');
+    return outputPath;
   }
 
   /**

@@ -9,6 +9,7 @@ export async function buildSomaSelfContext(query = '', options = {}) {
     const renamed = context
         .replace('[SOMA CONTEXT KERNEL]', '[SOMA SELF-CONTEXT]')
         .replace('[/SOMA CONTEXT KERNEL]', '[/SOMA SELF-CONTEXT]');
+    if (options.publicOnly) return renamed;
     const selfModel = await readWorkingSelfModel();
     if (!selfModel) return renamed;
     return `${renamed}\n\n${selfModel}`;

@@ -1019,6 +1019,78 @@
   "spaces": [],
   "activities": [
     {
+      "id": "activity-1782753263535-28pnj",
+      "type": "studio_profile_saved",
+      "title": "Studio profile saved",
+      "summary": "Profile, widgets, or Studio settings were updated.",
+      "createdAt": 1782753263535,
+      "source": "studio-profile",
+      "metadata": {}
+    },
+    {
+      "id": "activity-1782310624568-8hmn0",
+      "type": "axis_direct_sent",
+      "title": "Direct sent",
+      "summary": "Direct sent to SOMA.",
+      "createdAt": 1782310624568,
+      "source": "studio",
+      "metadata": {}
+    },
+    {
+      "id": "activity-1782310623825-43yoy",
+      "type": "axis_direct_sent",
+      "title": "Direct sent",
+      "summary": "Direct sent to Maxwell.",
+      "createdAt": 1782310623825,
+      "source": "studio",
+      "metadata": {}
+    },
+    {
+      "id": "activity-1782310618995-cbjcm",
+      "type": "axis_direct_sent",
+      "title": "Direct sent",
+      "summary": "Direct sent to SOMA.",
+      "createdAt": 1782310618995,
+      "source": "studio",
+      "metadata": {}
+    },
+    {
+      "id": "activity-1782310618288-epspe",
+      "type": "axis_direct_sent",
+      "title": "Direct sent",
+      "summary": "Direct sent to Maxwell.",
+      "createdAt": 1782310618288,
+      "source": "studio",
+      "metadata": {}
+    },
+    {
+      "id": "activity-1782158361599-e1rg1",
+      "type": "axis_direct_sent",
+      "title": "Direct sent",
+      "summary": "Direct sent to Verify New.",
+      "createdAt": 1782158361599,
+      "source": "studio",
+      "metadata": {}
+    },
+    {
+      "id": "activity-1782156877465-j2red",
+      "type": "axis_direct_sent",
+      "title": "Direct sent",
+      "summary": "Direct sent to Marcus Chen.",
+      "createdAt": 1782156877465,
+      "source": "studio",
+      "metadata": {}
+    },
+    {
+      "id": "activity-1782000781051-uyesj",
+      "type": "studio_profile_saved",
+      "title": "Studio profile saved",
+      "summary": "Profile, widgets, or Studio settings were updated.",
+      "createdAt": 1782000781051,
+      "source": "studio-profile",
+      "metadata": {}
+    },
+    {
       "id": "activity-1781623147530-0st30",
       "type": "studio_profile_saved",
       "title": "Studio profile saved",
@@ -1256,6 +1328,6 @@
       "metadata": {}
     }
   ],
-  "updatedAt": 1781623147550,
+  "updatedAt": 1782753263574,
   "source": "C:\\Users\\barry\\Desktop\\The Stack\\SOMA\\SOMA\\axis\\axis-state.json"
 }

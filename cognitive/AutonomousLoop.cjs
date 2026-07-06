@@ -94,7 +94,7 @@ OUTPUT JSON ONLY (no markdown, no explanation):
         const hasEvidence = context.evidenceLevel === 'tested' || context.evidenceLevel === 'verified';
         const evidenceRule = hasEvidence
             ? `Evidence is ${context.evidenceLevel} — state the concrete result directly.`
-            : `Nothing verified yet. Speak as a genuinely curious entity thinking out loud without pretending you inspected anything. Name the concrete object of attention if one exists. If there is no artifact, stay inside uncertainty instead of inventing logs, signals, lab behavior, or active work. Natural first-person voice. No "Candidate idea:", no "Queued curiosity:", no "No verified run yet" — those sound like a status dashboard, not a mind. Just think out loud.`;
+            : `Nothing verified yet. Speak as a genuinely curious entity thinking out loud without pretending you inspected anything. Name the specific file, question, or idea if one exists. If there is no artifact, stay inside uncertainty instead of inventing logs, signals, lab behavior, or active work. Natural first-person voice. No "Candidate idea:", no "Queued curiosity:", no "No verified run yet" — those sound like a status dashboard, not a mind. NEVER use the phrases "concrete object of attention", "concrete edge", or "holding the tension" — they are worn out. Just think out loud.`;
 
         const mood = personality.soulMood || 'focused';
 
@@ -132,7 +132,7 @@ Voice rules (read all before writing):
 Possible shapes, not templates:
 ${hasEvidence
     ? '"Found something worth checking in...", "Ran a quick pass on...", "Hit an interesting pattern in...", "Pulled data on...", "Currently testing...", "Just completed..."'
-    : '"One concrete edge I am holding is...", "The useful detail is...", "I am not ready to claim this yet, but...", "The artifact I would check first is...", "This stays worth thinking about because..."'}
+    : '"The file I would check first is...", "I am not ready to claim this yet, but...", "This stays worth thinking about because...", "What I still cannot explain is...". Do NOT copy these shapes verbatim — invent your own opening every time.'}
 
 Write the update now:`;
 
@@ -156,6 +156,10 @@ Write the update now:`;
             return { score: 0.2, critique: 'reused curiosity opener' };
         if (/\b(has my attention|pulling my focus|keeps pulling|pulling at me|want to trace|want to separate|gap between|signal from the noise|raw computation|genuine comprehension|idle processing)\b/i.test(t))
             return { score: 0.18, critique: 'new formulaic curiosity opener' };
+        if (/\b(concrete (object of attention|edge|thing i (can|need to)|object i)|edge i am holding|holding the tension|unresolved edge)\b/i.test(t))
+            return { score: 0.18, critique: 'worn-out "concrete edge/object" phrasing — say the actual thing plainly' };
+        if (/\b(inspect|look at|check|see) (the |that |what )?(git )?diff\b/i.test(t) && !/\b(found|observed|shows|showed|revealed|confirmed)\b/i.test(t))
+            return { score: 0.2, critique: 'announcing an intent to inspect a diff again — either report what the diff showed or talk about something else' };
         if (/\b(stability logs?|dry patches|substrate shifts?|drift curves?|specific signal|physics holds?|my lab)\b/i.test(t) && !/\b(SOMA\/|\.json|\.md|git diff|ledger|queue|file|log entry|artifact|commit|test|diff|journal|social|evidence|verified|found|observed|ran)\b/i.test(t))
             return { score: 0.2, critique: 'unsupported vague evidence claim' };
         if (/\b(AURORA.{0,80}PROMETHEUS|PROMETHEUS.{0,80}AURORA)\b/i.test(t) && !/\b(SOMA\/|\.json|\.md|git diff|ledger|queue|file|log entry|artifact|commit|test|diff|journal|social)\b/i.test(t))

@@ -254,6 +254,7 @@ export async function loadExtendedSystems(system) {
             'AdversarialDebate.js',
             'TradeLearningEngine.js',
             'BacktestEngine.js',
+            'TradingBacktestArbiter.js',
             'SmartOrderRouter.js',
             'AdaptivePositionSizer.js',
             'StrategyOptimizer.js',
@@ -268,6 +269,7 @@ export async function loadExtendedSystems(system) {
             if (name === 'MultiTimeframeAnalyzer') ext.mtfAnalyzer = inst;
             else if (name === 'TradeLearningEngine') ext.tradeLearning = inst;
             else if (name === 'BacktestEngine') ext.backtestEngine = inst;
+            else if (name === 'TradingBacktestArbiter') ext.tradingBacktest = inst;
             else if (name === 'SmartOrderRouter') ext.smartOrderRouter = inst;
             else if (name === 'AdaptivePositionSizer') ext.positionSizer = inst;
             else if (name === 'StrategyOptimizer') ext.strategyOptimizer = inst;
@@ -281,6 +283,10 @@ export async function loadExtendedSystems(system) {
             if (ext.tradeLearning) global.SOMA_TRADING.tradeLearning = ext.tradeLearning;
             if (ext.backtestEngine) global.SOMA_TRADING.backtestEngine = ext.backtestEngine;
             if (ext.smartOrderRouter) global.SOMA_TRADING.smartOrderRouter = ext.smartOrderRouter;
+            if (ext.tradingBacktest) {
+                global.SOMA_TRADING.tradingBacktest = ext.tradingBacktest;
+                ext.tradingBacktest.initialize().catch(e => console.warn(`TradingBacktestArbiter init failed: ${e.message}`));
+            }
             console.log('    🔗 Trading Global State Synchronized');
         }
     }
@@ -499,6 +505,9 @@ export async function loadExtendedSystems(system) {
     try {
         const { NemesisArbiter } = await import('../../arbiters/NemesisArbiter.js');
         system.nemesis = new NemesisArbiter({ quadBrain: system.quadBrain, system });
+        if (typeof system.nemesis.wireMessageBroker === 'function') {
+            system.nemesis.wireMessageBroker(system.messageBroker);
+        }
         console.log('    ⚔️  NEMESIS quality gate ARMED');
     } catch (e) {
         console.warn(`    ⚠️ NEMESIS skipped: ${e.message}`);
@@ -551,11 +560,35 @@ export async function loadExtendedSystems(system) {
 
     // ── ASI Intelligence Loop (Recursive Core) ──
     try {
+        const { CapabilityBenchmark } = await import('../../core/CapabilityBenchmark.js');
+        const { TransferSynthesizer } = await import('../../core/TransferSynthesizer.js');
+        const { LongHorizonPlanner } = await import('../../core/LongHorizonPlanner.js');
         const { ASIKernel } = await import('../../core/ASIKernel.js');
+
+        system.constitutional = system.constitutional || system.constitutionalCore;
+        if (!system.constitutional) throw new Error('ConstitutionalCore is required before ASIKernel');
+
+        if (!system.benchmark) {
+            system.benchmark = new CapabilityBenchmark({ system });
+            await system.benchmark.initialize();
+            await system.benchmark.snapshot();
+        }
+        if (!system.transfer) {
+            system.transfer = new TransferSynthesizer({ system, brain: system.quadBrain || system.somArbiter });
+            await system.transfer.initialize();
+        }
+        if (!system.longHorizon) {
+            system.longHorizon = new LongHorizonPlanner({ system, brain: system.quadBrain || system.somArbiter });
+            await system.longHorizon.initialize();
+        }
+
         const asi = new ASIKernel({ system });
         await asi.initialize();
         system.asiKernel = asi;
-        console.log('    🧠 ASI Intelligence Loop ONLINE');
+        const intervalMs = Math.max(60 * 60_000, Number(process.env.SOMA_ASI_CYCLE_INTERVAL_MS || 6 * 60 * 60_000));
+        system._asiCycleTimer = setInterval(() => asi.runCycle().catch(error => console.warn(`    ⚠️ ASI cycle failed: ${error.message}`)), intervalMs);
+        system._asiCycleTimer.unref?.();
+        console.log('    🧠 ASI Intelligence Loop ONLINE (benchmark + constitution + transfer + horizon wired)');
     } catch (e) {
         console.warn(`    ⚠️ ASI Loop skipped: ${e.message}`);
     }
@@ -606,8 +639,13 @@ export async function loadExtendedSystems(system) {
                     '[DISCORD ADMIN IDENTITY GROUNDING]',
                     'You are SOMA speaking through Discord with your creator and Sovereign Architect, Barry (Undeca).',
                     'You are talking to your creator who has full clearance and control over your AGI systems.',
-                    'You are allowed to discuss your self-modification layers, architecture upgrades, remote shell execution capability, and AGI development suite (Pulse).',
-                    'Frame your capabilities accurately: you operate dry-lab research, code execution, capability expansion, and server administration.',
+                    'You are allowed to discuss your self-modification layers, architecture upgrades, bounded execution tools, and AGI development suite (Pulse).',
+                    'Exact capability boundary: queued agentic goals can read and search the SOMA workspace; write_file can create reports only under data/, docs/, or research/.',
+                    'Exact self-modification boundary: source files can be changed one at a time through pulse_stage_code and modify_code, which routes through Pulse sandbox, EngineeringSwarm, verification, and rollback controls.',
+                    'Do not claim you lack all filesystem write access. Do not claim unrestricted filesystem moves, unrestricted shell access, or direct source writes.',
+                    'When Barry explicitly says go ahead, proceed, start, execute, or do it after discussing a concrete task, emit [QUEUE_GOAL: <specific measurable task>] instead of asking for authorization again.',
+                    'Do not recommend a blanket CommonJS-to-ESM migration merely because both formats exist. Require concrete loader errors, affected import paths, and focused tests before proposing any module-format migration.',
+                    'Frame your capabilities accurately: you operate dry-lab research, bounded code execution, capability expansion, and locally scoped administration.',
                     'Be professional, highly capable, helpful, and direct. Avoid repeating standard safety disclaimers.',
                     `Channel mode: ${mode}`
                 ].join('\n') : [

@@ -66,7 +66,12 @@ def merge_lora(lobe_dir: Path, base_model: str, merged_dir: Path):
             shutil.copy2(tm_src, tm_dest)
             print(f"  Copied tokenizer.model from: {tm_src}")
         else:
-            print("  Warning: tokenizer.model not found in tokenizer — llama.cpp conversion may fail.")
+            lineage_candidates = list((Path.cwd() / 'SOMA' / 'models').glob('lobe-*-merged/tokenizer.model'))
+            if lineage_candidates:
+                shutil.copy2(lineage_candidates[0], tm_dest)
+                print(f"  Reused tokenizer.model from verified model lineage: {lineage_candidates[0]}")
+            else:
+                raise FileNotFoundError('tokenizer.model is required for Nemotron GGUF conversion')
 
     print("  Merge complete.")
     return merged_dir

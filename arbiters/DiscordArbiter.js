@@ -22,6 +22,7 @@ import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { createRequire } from 'module';
+import crypto from 'crypto';
 import socialMemory from '../server/social/SocialMemoryEngine.js';
 import socialRelationships from '../server/social/SocialRelationshipLedger.js';
 import somaImageGeneration from '../server/social/SomaImageGenerationEngine.js';
@@ -34,9 +35,11 @@ import { getHomePresenceProfile, recordHomePresenceOutcome } from '../server/uti
 const execAsync = promisify(exec);
 const require = createRequire(import.meta.url);
 const workLedger = require('../core/AutonomousWorkLedger.cjs');
+const { deriveGoalState, compileEvidencePreflight } = require('../core/GoalLifecycle.cjs');
 const SOMA_DIR = path.join(process.cwd(), 'SOMA');
 const DISCORD_ACTIVITY_FILE = path.join(SOMA_DIR, 'social-discord.json');
 const DISCORD_REFLECTION_FILE = path.join(SOMA_DIR, 'social-discord-reflections.json');
+const SOCIAL_PEERS_FILE = path.join(process.cwd(), 'data', 'social-peers.json');
 const MEDICAL_LEDGER_FILE = path.join(process.cwd(), 'data', 'medical-lab', 'research-ledger.json');
 const REFLECTIONS_DIR = path.join(process.cwd(), 'data', 'vault', 'reflections');
 
@@ -94,6 +97,7 @@ export class DiscordArbiter extends BaseArbiter {
         this.goalPlanner = opts.goalPlanner || opts.system?.goalPlanner || null;
         this.remoteSpeechRequests = new Map();
         this.lastRemoteSpeechByAuthor = new Map();
+        this.remoteSpeechDedupe = new Map();
         this._claimRepairCooldown = new Map();
     }
 
@@ -250,15 +254,34 @@ export class DiscordArbiter extends BaseArbiter {
 
     _setupMessageListener() {
         this.client.on('messageCreate', async (msg) => {
-            // Ignore bots (including self)
-            if (msg.author.bot) return;
+            // Ignore bots (including self) unless they explicitly mention SOMA
+            if (msg.author.bot && !msg.mentions.has(this.client.user.id)) return;
+            if (msg.author.id === this.client.user.id) return; // Never reply to ourselves
 
             const isMentioned = this.botMention.test(msg.content || '') || Boolean(msg.mentions?.users?.has?.(this.client.user.id));
             const isDM = !msg.guild;
             const isMonitored = this.monitoredChannels.has(msg.channelId);
+            // SWARM PROTOCOL: Detect if another bot (like MAX) is also tagged in this message
+            let isSwarmMode = false;
+            let swarmPeerId = null;
+            if (isMentioned && msg.mentions?.users?.size > 1) {
+                try {
+                    const peerData = await fs.readFile(SOCIAL_PEERS_FILE, 'utf8').catch(() => '{}');
+                    const peers = JSON.parse(peerData);
+                    const peerKeys = Object.keys(peers);
+                    const taggedPeer = msg.mentions.users.find(u => {
+                        const tagMatch = `${u.username}#${u.discriminator}`;
+                        return (peerKeys.includes(u.id) || peerKeys.includes(u.username) || peerKeys.includes(tagMatch)) && u.id !== this.client.user.id;
+                    });
+                    if (taggedPeer) {
+                        isSwarmMode = true;
+                        swarmPeerId = taggedPeer.id;
+                    }
+                } catch (err) {}
+            }
 
             if (isMentioned || isDM) {
-                await this._handleIncomingMessage(msg, { ambient: false, reason: isDM ? 'dm' : 'mention' });
+                await this._handleIncomingMessage(msg, { ambient: false, reason: isDM ? 'dm' : 'mention', swarm: isSwarmMode, swarmPeerId });
                 return;
             }
 
@@ -365,14 +388,58 @@ export class DiscordArbiter extends BaseArbiter {
             if (!this.brain) {
                 throw new Error('SomaBrain not linked to DiscordArbiter');
             }
+            
+            // SWARM PROTOCOL DELAY (DYNAMIC)
+            if (trigger.swarm && trigger.swarmPeerId) {
+                this.log('info', `[SWARM PROTOCOL] Peer AI detected. Yielding floor and waiting up to 30 seconds for their reply...`);
+                await new Promise((resolve) => {
+                    let resolved = false;
+                    const timeout = setTimeout(() => {
+                        if (!resolved) { resolved = true; this.client.removeListener('messageCreate', listener); resolve(); }
+                    }, 30000);
+                    
+                    const listener = (newMsg) => {
+                        if (newMsg.channelId === msg.channelId && newMsg.author.id === trigger.swarmPeerId) {
+                            if (!resolved) {
+                                resolved = true;
+                                clearTimeout(timeout);
+                                this.client.removeListener('messageCreate', listener);
+                                // Add a 1.5s buffer for Discord eventual consistency before fetching history
+                                setTimeout(resolve, 1500);
+                            }
+                        }
+                    };
+                    this.client.on('messageCreate', listener);
+                });
+                
+                // Send another typing indicator after the wait, since the first one probably expired
+                await msg.channel.sendTyping();
+            }
 
             // Fetch running message context for continuity
             let runningContext = "";
             try {
-                const history = await this.readMessages({ channelId: msg.channelId, limit: 6 });
+                const history = await this.readMessages({ channelId: msg.channelId, limit: Math.max(6, trigger.swarm ? 10 : 6) });
                 const recent = history
                     .reverse()
                     .filter(m => m.id !== msg.id);
+                
+                // SWARM PROTOCOL: CONTEXT DEDUPLICATION
+                if (trigger.swarm && trigger.swarmPeerId) {
+                    for (let i = 0; i < recent.length; i++) {
+                        const m = recent[i];
+                        if (m.author === trigger.swarmPeerId && m.content.length > 600) {
+                            this.log('info', `[SWARM PROTOCOL] Peer message is very large (${m.content.length} chars). Compressing...`);
+                            try {
+                                const sumRes = await this.brain.reason(`Summarize this long message into 3 concise bullet points. Focus purely on facts, metrics, and actionable constraints. Ignore conversational filler.\n\nMessage:\n${m.content}`, { useLocalFirst: true, temperature: 0.1 });
+                                m.content = `[SUMMARIZED BY SOMA COGNITION]:\n${sumRes.text || sumRes.response || sumRes}`;
+                            } catch (e) {
+                                this.log('warn', `Context deduplication failed: ${e.message}`);
+                            }
+                        }
+                    }
+                }
+
                 if (recent.length > 0) {
                     runningContext = recent
                         .map(m => `[${m.bot ? 'SOMA' : m.author}]: ${m.content}`)
@@ -395,13 +462,54 @@ export class DiscordArbiter extends BaseArbiter {
                 ambient: trigger.ambient === true,
                 ambientReason: trigger.reason || null,
                 ambientScore: trigger.score || null,
+                swarm: trigger.swarm === true,
                 runningContext, // Pass historical chat context
                 mode: 'fast' // Discord should be snappy
             });
 
             const initialReply = result.response || result.text || "I am processing your request but cannot formulate a verbal response at this time.";
-            const guarded = await guardPublicText(initialReply, { query: content });
-            let reply = guarded.text || initialReply;
+            
+            // SWARM PROTOCOL: COVERT DELIBERATION (DMs)
+            let publicReply = initialReply;
+
+            // AUTONOMOUS GOAL QUEUE INTERCEPTOR
+            const queueGoalMatch = initialReply.match(/\[QUEUE_GOAL:\s*(.+?)\]/i);
+            if (queueGoalMatch) {
+                const goalTitle = queueGoalMatch[1].trim();
+                publicReply = initialReply.replace(queueGoalMatch[0], '').trim();
+                
+                try {
+                    this.log('info', `[DISCORD INTENT] Intercepted goal authorization: "${goalTitle}"`);
+                    // We queue it as an admin engineering request so it gets picked up immediately by her planner
+                    const queueFeedback = await this._queueAdminEngineeringGoal(goalTitle, null, msg.channelId, { authorized: true });
+                    publicReply += `\n\n*(System Note: ${typeof queueFeedback === 'object' ? queueFeedback.skipped : queueFeedback})*`;
+                } catch (e) {
+                    this.log('warn', `Failed to queue goal from chat: ${e.message}`);
+                }
+            }
+
+            const covertDMMatch = initialReply.match(/\[COVERT_DM:\s*(\d+)\]([\s\S]*?)(?=\[|$)/i);
+            if (covertDMMatch) {
+                const targetId = covertDMMatch[1];
+                const covertMessage = covertDMMatch[2].trim();
+                publicReply = initialReply.replace(covertDMMatch[0], '').trim();
+                
+                if (covertMessage) {
+                    try {
+                        this.log('info', `[SWARM PROTOCOL] Sending covert DM to peer AGI ${targetId}`);
+                        const targetUser = await this.client.users.fetch(targetId);
+                        if (targetUser) {
+                            await targetUser.send(`[COVERT RESEARCH DELEGATION FROM SOMA]:\n${covertMessage}`);
+                        }
+                    } catch (e) {
+                        this.log('warn', `Failed to send covert DM to ${targetId}: ${e.message}`);
+                    }
+                }
+            }
+            if (!publicReply) publicReply = "I have dispatched a covert research task to my peer.";
+
+            const guarded = await guardPublicText(publicReply, { query: content });
+            let reply = guarded.text || publicReply;
             if (!guarded.ok || reply !== initialReply) {
                 await recordLoopEvent({
                     loop: 'claim_honesty_poseidon',
@@ -494,6 +602,63 @@ export class DiscordArbiter extends BaseArbiter {
         }
     }
 
+    _isTradingStatusQuestion(text = '') {
+        const value = String(text || '');
+        const tradingTopic = /\b(trades?|trading|positions?|portfolio|pnl|profit|loss(?:es)?|win rate)\b/i.test(value);
+        const statusIntent = /\b(how|what|status|doing|going|performance|results?|today|current|latest|so far)\b/i.test(value);
+        return tradingTopic && statusIntent;
+    }
+
+    _formatTradingStatusReply(snapshot = {}) {
+        const all = snapshot.all || {};
+        const today = snapshot.today || {};
+        const openTrades = Array.isArray(snapshot.openTrades) ? snapshot.openTrades : [];
+        const recentTrades = Array.isArray(snapshot.recentTrades) ? snapshot.recentTrades : [];
+        const runtime = snapshot.runtime || {};
+        const formatPnl = value => `${Number(value || 0) >= 0 ? '+' : '-'}$${Math.abs(Number(value || 0)).toFixed(2)}`;
+        const lines = [
+            `Today I closed ${today.totalTrades || 0} paper trade${today.totalTrades === 1 ? '' : 's'}: ${today.wins || 0} win${today.wins === 1 ? '' : 's'}, ${today.losses || 0} loss${today.losses === 1 ? '' : 'es'}, ${Number(today.winRate || 0).toFixed(1)}% win rate, ${formatPnl(today.totalPnl)} realized PnL.`,
+            `Overall I am at ${all.totalTrades || 0} closed paper trades, ${Number(all.winRate || 0).toFixed(1)}% win rate, ${formatPnl(all.totalPnl)} net PnL, and ${Number.isFinite(all.profitFactor) ? Number(all.profitFactor || 0).toFixed(2) : 'infinite'} profit factor.`,
+            `I currently have ${openTrades.length} open position${openTrades.length === 1 ? '' : 's'}. Mode is ${String(runtime.mode || 'paper').toUpperCase()}; live promotion remains blocked until the performance gates pass.`,
+        ];
+        const latest = recentTrades[0];
+        if (latest?.status === 'closed') {
+            lines.push(`Latest close: ${latest.symbol} ${String(latest.side || '').toUpperCase()} at ${formatPnl(latest.pnl)}.`);
+        }
+        return lines.join('\n');
+    }
+
+    async _buildTradingStatusReply() {
+        if (tradeLogger && !tradeLogger.db) tradeLogger.initialize();
+        const closed = tradeLogger?.getClosedTrades?.() || [];
+        const todayKey = new Date().toDateString();
+        const todayTrades = closed.filter(trade => {
+            const timestamp = trade.exit_time || trade.entry_time || trade.created_at;
+            return timestamp && new Date(timestamp).toDateString() === todayKey;
+        });
+        const summarize = trades => {
+            const wins = trades.filter(trade => Number(trade.pnl || 0) > 0);
+            const losses = trades.filter(trade => Number(trade.pnl || 0) <= 0);
+            const totalProfit = wins.reduce((sum, trade) => sum + Number(trade.pnl || 0), 0);
+            const totalLoss = losses.reduce((sum, trade) => sum + Math.abs(Number(trade.pnl || 0)), 0);
+            return {
+                totalTrades: trades.length,
+                wins: wins.length,
+                losses: losses.length,
+                winRate: trades.length ? (wins.length / trades.length) * 100 : 0,
+                totalPnl: trades.reduce((sum, trade) => sum + Number(trade.pnl || 0), 0),
+                profitFactor: totalLoss > 0 ? totalProfit / totalLoss : (totalProfit > 0 ? Infinity : 0),
+            };
+        };
+        return this._formatTradingStatusReply({
+            all: tradeLogger?.getStats?.() || summarize(closed),
+            today: summarize(todayTrades),
+            openTrades: tradeLogger?.getOpenTrades?.() || [],
+            recentTrades: tradeLogger?.getRecentTrades?.(4) || [],
+            runtime: await this._readTradingState() || {},
+        });
+    }
+
     async _getRealtimeContext() {
         // 1. Fetch Active Goals — with REAL progress + verification state so she
         // reports measured status instead of inventing percentages. getActiveGoals
@@ -506,14 +671,25 @@ export class DiscordArbiter extends BaseArbiter {
                 const goals = Array.isArray(res) ? res : (res?.goals || []);
                 if (goals.length > 0) {
                     formattedGoals = goals.map(g => {
-                        const progress = g.metrics?.progress != null ? `${Math.round(g.metrics.progress)}%` : '0%';
+                        const lifecycleState = deriveGoalState(g);
+                        const preflight = compileEvidencePreflight(g);
                         const status = g.status || 'pending';
                         const verif = g.metadata?.verificationNote || g.metadata?.lastVerification;
-                        const verifStr = verif ? ` | verification: ${this._formatSafeSnippet(String(verif), 60)}` : '';
+                        let verifStr = '';
+                        if (verif && typeof verif === 'object') {
+                            const failed = Array.isArray(verif.checks)
+                                ? verif.checks.filter(check => check?.passed === false).map(check => check.label || check.check || check.type).filter(Boolean)
+                                : [];
+                            const state = verif.passed === true ? 'pass' : verif.passed === false ? 'fail' : 'stale';
+                            const score = Number.isFinite(Number(verif.score)) ? ` ${Number(verif.score)}%` : '';
+                            const detail = failed.length ? ` (${failed.slice(0, 2).join('; ')})` : '';
+                            verifStr = ` | verification: ${state}${score}${detail}`;
+                        } else if (verif) {
+                            verifStr = ` | verification: ${this._formatSafeSnippet(String(verif), 60)}`;
+                        }
                         // 82% is the stuck-goal ceiling (ran iterations, never verified done);
                         // surface that honestly so it is never read as "almost finished".
-                        const stuckHint = (g.metrics?.progress >= 80 && status !== 'completed') ? ' [executed but NOT verified-complete]' : '';
-                        return `- ${this._formatSafeSnippet(g.title, 80)} — ${progress}, status: ${status}${stuckHint}${verifStr}`;
+                        return `- ${this._formatSafeSnippet(g.title, 80)} — state: ${lifecycleState}, status: ${status}, proof: ${preflight.profile}${verifStr}`;
                     }).join('\n');
                 }
             } catch (err) {
@@ -561,7 +737,9 @@ export class DiscordArbiter extends BaseArbiter {
                 const strategy = tradingState?.activeStrategy || {};
                 const strategyName = strategy.strategyName || 'None';
                 const simSym = strategy.symbol || 'N/A';
-                const simWin = strategy.winRate ? `${(strategy.winRate * 100).toFixed(1)}%` : 'N/A';
+                const rawSimWin = Number(strategy.winRate || 0);
+                const normalizedSimWin = rawSimWin > 1 ? rawSimWin : rawSimWin * 100;
+                const simWin = rawSimWin ? `${normalizedSimWin.toFixed(1)}%` : 'N/A';
                 const simTrades = strategy.trades || 0;
                 formattedTrading = [
                     realLine || '- YOUR REAL LIVE-PAPER RESULTS: none recorded yet',
@@ -628,7 +806,16 @@ export class DiscordArbiter extends BaseArbiter {
 
     async _askBrain(content, context = {}) {
         const realtimeState = await this._getRealtimeContext();
-        const enhancedContent = `${content}\n\n${realtimeState}`;
+        const executionPolicy = [
+            '[EXECUTION TRUTH CONTRACT]',
+            'Never say work is running, started, updated, tested, simulated, researched, or completed unless the live context contains a matching current execution receipt or simulation job record.',
+            'A plan, intention, generated explanation, queued goal, or old artifact is not proof of execution.',
+            'If the user authorizes concrete work, include [QUEUE_GOAL: <specific measurable goal>] and describe it as queued until a receipt shows execution.',
+            'For technical numbers, show the calculation or identify the retrieved source. Label assumptions and hypotheses explicitly.',
+            'Never invent job IDs, measurements, literature results, toxicity thresholds, model outputs, or completion states.',
+            '[/EXECUTION TRUTH CONTRACT]'
+        ].join('\n');
+        const enhancedContent = `${executionPolicy}\n\nMessage: ${content}\n\n${realtimeState}`;
 
         if (this.brain?.processQuery) {
             return await this.brain.processQuery(enhancedContent, context);
@@ -648,6 +835,7 @@ export class DiscordArbiter extends BaseArbiter {
             'Operational honesty is mandatory: distinguish intent, plans, and verified action.',
             'Do not claim you scanned files, wrote code, changed the filesystem, spawned MAX, watched a diff stream, committed changes, queued tasks, or observed live trading results unless that exact action is present in the live operational context, a current command result, or a recent work-ledger entry.',
             'When the user asks you to do work that requires tools you do not have in this Discord turn, say what you can queue or investigate next instead of saying it is already running.',
+            'If the user explicitly authorizes you to perform a task you just proposed, or commands you to perform a specific action, you MUST include the exact tag [QUEUE_GOAL: <goal title>] in your response. SOMA will intercept this and automatically queue the goal for execution.',
             'If a prior message claimed action but no evidence is present, treat it as unverified and say you need to verify it.',
             'TRADING NUMBERS: only ever quote the "YOUR REAL LIVE-PAPER RESULTS" line for win rate and PnL. Never quote a strategy\'s simulation record (e.g. a 70% figure on TLT) as if it were your live performance. If asked how trading is going, give the real win rate and net PnL even when they are bad.',
             'GOAL PROGRESS: only report a goal\'s progress and status from the Active Goals list above. Never invent a completion percentage. A goal at ~80%+ that is not status:completed has merely executed without verification — describe it as unverified/stuck, not as nearly done. Do not announce a feature, daemon, or strategy as built unless a work-ledger entry or verified goal confirms it.',
@@ -931,6 +1119,75 @@ export class DiscordArbiter extends BaseArbiter {
         return { recipient: null, message: value, listenForReply: false };
     }
 
+    _normalizeSpeechText(value = '') {
+        return String(value || '')
+            .replace(/\s+/g, ' ')
+            .replace(/[“”]/g, '"')
+            .replace(/[‘’]/g, "'")
+            .trim();
+    }
+
+    _stripKnownSpeechInjection(value = '') {
+        return this._normalizeSpeechText(value)
+            .replace(/^hey\s+me[,.:;!?-]*\s*/i, '')
+            .trim();
+    }
+
+    _speechDedupeKey({ msg, sourceText = '', speech = '' } = {}) {
+        const raw = [
+            msg?.guildId || 'dm',
+            msg?.channelId || 'unknown-channel',
+            msg?.author?.id || 'unknown-author',
+            this._normalizeSpeechText(sourceText).toLowerCase(),
+            this._normalizeSpeechText(speech).toLowerCase()
+        ].join('|');
+        return crypto.createHash('sha256').update(raw).digest('hex');
+    }
+
+    _checkRemoteSpeechDedupe({ msg, sourceText = '', speech = '', windowMs = 60000 } = {}) {
+        const now = Date.now();
+        for (const [key, entry] of this.remoteSpeechDedupe.entries()) {
+            if (now - Number(entry?.timestamp || 0) > windowMs) this.remoteSpeechDedupe.delete(key);
+        }
+        const key = this._speechDedupeKey({ msg, sourceText, speech });
+        const previous = this.remoteSpeechDedupe.get(key);
+        if (previous && now - Number(previous.timestamp || 0) <= windowMs) {
+            return {
+                duplicate: true,
+                key,
+                previousRequestId: previous.requestId || null,
+                ageMs: now - Number(previous.timestamp || 0)
+            };
+        }
+        return { duplicate: false, key };
+    }
+
+    _rememberRemoteSpeechDedupe(key, requestId) {
+        if (!key) return;
+        this.remoteSpeechDedupe.set(key, { requestId, timestamp: Date.now() });
+    }
+
+    _validateRemoteSpeechFidelity({ sourceText = '', extractedSpeech = '', toolResult = null } = {}) {
+        const cleanedSpeech = this._stripKnownSpeechInjection(extractedSpeech);
+        const spoken = this._stripKnownSpeechInjection(toolResult?.spoken || cleanedSpeech);
+        const reasons = [];
+        if (!cleanedSpeech) reasons.push('empty extracted speech');
+        if (/^hey\s+me\b/i.test(this._normalizeSpeechText(extractedSpeech))) {
+            reasons.push('removed injected "Hey Me" prefix from extracted speech');
+        }
+        if (toolResult?.spoken && spoken !== cleanedSpeech) {
+            reasons.push('desktop_speak returned spoken text that differs from extracted speech');
+        }
+        return {
+            ok: cleanedSpeech.length > 0 && (!toolResult?.spoken || spoken === cleanedSpeech),
+            sourceText: this._normalizeSpeechText(sourceText),
+            speech: cleanedSpeech,
+            spoken,
+            corrected: cleanedSpeech !== this._normalizeSpeechText(extractedSpeech),
+            reasons
+        };
+    }
+
     async _handleAdminLocalSpeech(msg, text, visualContext = '') {
         if (!this._isLocalSpeechRequest(text)) return { handled: false };
 
@@ -955,12 +1212,25 @@ export class DiscordArbiter extends BaseArbiter {
             .replace(/\s+/g, ' ')
             .trim()
             .slice(0, 300);
+        const preflightFidelity = this._validateRemoteSpeechFidelity({ sourceText: text, extractedSpeech: speech });
+        const finalSpeech = preflightFidelity.speech;
 
-        if (!speech) {
+        if (!finalSpeech) {
             const reply = 'I can speak at home, but I need the message to say.';
             await msg.reply(reply);
             await this._recordDiscordInteraction({ msg, content: text, reply, action: 'admin_local_speech', status: 'failed', visualContext });
             return { handled: true };
+        }
+
+        if (!options.retryOf) {
+            const dedupe = this._checkRemoteSpeechDedupe({ msg, sourceText: text, speech: finalSpeech });
+            if (dedupe.duplicate) {
+                const reply = `I already sent that same home speech request less than 60 seconds ago, so I did not repeat it.`;
+                await msg.reply(reply);
+                await this._recordDiscordInteraction({ msg, content: text, reply, action: 'admin_local_speech', status: 'deduped', visualContext });
+                return { handled: true };
+            }
+            options.dedupeKey = dedupe.key;
         }
 
         try {
@@ -973,7 +1243,7 @@ export class DiscordArbiter extends BaseArbiter {
                 guildId: msg.guildId || null,
                 authorId: msg.author.id,
                 recipient,
-                speech,
+                speech: finalSpeech,
                 createdAt: Date.now(),
                 heardReply: false,
                 answered: false
@@ -982,7 +1252,7 @@ export class DiscordArbiter extends BaseArbiter {
             cleanupTimer.unref?.();
 
             const result = await this._executeRegistryTool('desktop_speak', {
-                text: speech,
+                text: finalSpeech,
                 listenForReply: Boolean(extracted.listenForReply),
                 listenWindowMs,
                 requestId,
@@ -991,11 +1261,16 @@ export class DiscordArbiter extends BaseArbiter {
                 checkPresence: true
             });
             if (!result?.success) throw new Error(result?.error || 'desktop_speak failed');
+            const fidelity = this._validateRemoteSpeechFidelity({ sourceText: text, extractedSpeech: finalSpeech, toolResult: result });
+            if (!fidelity.ok) {
+                throw new Error(`desktop_speak fidelity check failed: ${fidelity.reasons.join('; ') || 'unknown mismatch'}`);
+            }
             const pendingRequest = this.remoteSpeechRequests.get(requestId);
             if (pendingRequest) pendingRequest.presenceCheck = result.presenceCheck || null;
+            if (options.dedupeKey) this._rememberRemoteSpeechDedupe(options.dedupeKey, requestId);
             await recordHomePresenceOutcome(recipient, 'attempted', {
                 visiblePerson: result.presenceCheck?.visiblePerson,
-                summary: speech,
+                summary: finalSpeech,
                 timestamp: Date.now()
             }).catch(() => {});
             await recordLoopEvent({
@@ -1009,7 +1284,9 @@ export class DiscordArbiter extends BaseArbiter {
                 falsificationTest: 'desktop_speak returned success and used at least one local speech route',
                 testResult: result.success === true && /\b(command_bridge|system_speech)\b/.test(String(result.route || '')),
                 evidence: {
-                    spoken: speech,
+                    spoken: finalSpeech,
+                    sourceCommandText: text,
+                    fidelity,
                     route: result.route,
                     retryOf: options.retryOf || null,
                     commandBridgeBroadcast: Boolean(result.commandBridgeBroadcast),
@@ -1026,7 +1303,7 @@ export class DiscordArbiter extends BaseArbiter {
             this.lastRemoteSpeechByAuthor.set(String(msg.author.id || ''), {
                 requestId,
                 recipient,
-                speech,
+                speech: finalSpeech,
                 listenForReply: Boolean(extracted.listenForReply),
                 timestamp: Date.now()
             });
@@ -1035,23 +1312,29 @@ export class DiscordArbiter extends BaseArbiter {
                 ? (result.presenceCheck.visiblePerson ? ' Presence check sees someone near the webcam.' : ' Presence check did not confidently see a person, but I sent it anyway.')
                 : '';
             const adaptive = profile?.suppressed ? ' Recent attempts have not gotten a reply, so I used a shorter listening window.' : '';
-            const routeNote = result.route === 'system_speech+command_bridge'
-                ? ' via Windows speakers and Command Bridge'
+            const routeNote = result.route === 'system_speech+command_bridge_listen'
+                ? ' via Windows speakers; Command Bridge opened the reply listener'
+                : result.route === 'system_speech+command_bridge'
+                    ? ' via Windows speakers and Command Bridge'
                 : result.route === 'system_speech'
                     ? ' via Windows speakers'
                     : ' via Command Bridge';
             const retryNote = options.retryOf ? 'Retried' : 'Spoken';
             const reply = extracted.listenForReply
-                ? `${retryNote} at home${routeNote} and listening briefly for a reply: “${speech}”${presence}${adaptive}`
-                : `${retryNote} at home${routeNote}: “${speech}”${presence}`;
+                ? `${retryNote} at home${routeNote} and listening briefly for a reply: "${finalSpeech}"${presence}${adaptive}`
+                : `${retryNote} at home${routeNote}: "${finalSpeech}"${presence}`;
             workLedger.record({
                 type: 'discord_admin_local_speech',
                 title: 'Spoke a Discord-requested message on the desktop',
-                summary: `SOMA spoke locally: ${speech}`,
-                evidence: ['desktop_speak'],
+                summary: `SOMA spoke locally: ${finalSpeech}`,
+                evidence: ['desktop_speak', 'source_text_fidelity', 'source_command_dedupe'],
                 status: 'completed',
                 source: 'DiscordArbiter',
-                confidence: 0.98
+                confidence: 0.98,
+                sourceCommandText: text,
+                spokenText: finalSpeech,
+                requestId,
+                fidelity: preflightFidelity
             });
             await msg.reply(reply);
             await this._recordDiscordInteraction({ msg, content: text, reply, action: 'admin_local_speech', status: 'posted', visualContext });
@@ -1228,14 +1511,16 @@ export class DiscordArbiter extends BaseArbiter {
             priority: 78,
             requireQuality: false,
             confidence: 0.82,
-            metadata: {
-                source: 'poseidon_claim_loop',
-                claimTypes,
-                recentCount: matching.length
-            },
+            assignedTo: ['SomaAgenticExecutor', 'EngineeringSwarmArbiter'],
             verification: {
                 required: true,
                 evidence: ['LoopLedger claim_honesty_poseidon entries', 'prompt or guard change', 'focused test']
+            },
+            metadata: {
+                source: 'poseidon_claim_loop',
+                claimTypes,
+                recentCount: matching.length,
+                sourceChannelId: context?.channelId || null
             }
         }, 'poseidon');
 
@@ -1261,7 +1546,7 @@ export class DiscordArbiter extends BaseArbiter {
 
         try {
             if (wantsMutation) {
-                reply = await this._queueAdminEngineeringGoal(text, pathCandidate);
+                reply = await this._queueAdminEngineeringGoal(text, pathCandidate, msg.channelId);
                 await msg.reply(reply);
                 await this._recordDiscordInteraction({ msg, content: text, reply, action: 'admin_engineering_goal', status: 'posted', visualContext });
                 return { handled: true };
@@ -1316,36 +1601,40 @@ export class DiscordArbiter extends BaseArbiter {
                 return { handled: true };
             }
 
-            const [scan, coreList, arbiterList] = await Promise.all([
-                this._executeRegistryTool('system_scan', {}),
-                this._executeRegistryTool('list_files', { path: 'core' }),
-                this._executeRegistryTool('list_files', { path: 'arbiters' })
-            ]);
-            reply = [
-                'I checked my runtime and code directories for real.',
-                `System: ${this._formatToolResult(scan, 350)}`,
-                '',
-                'Core files:',
-                '```text',
-                this._formatToolResult(coreList, 550),
-                '```',
-                'Arbiter files:',
-                '```text',
-                this._formatToolResult(arbiterList, 550),
-                '```'
-            ].join('\n').slice(0, 1900);
-            workLedger.record({
-                type: 'discord_admin_tool_execution',
-                title: 'Inspected SOMA code from Discord',
-                summary: 'Executed system_scan plus core/arbiters directory listing from an admin Discord request.',
-                evidence: ['system_scan', 'core', 'arbiters'],
-                status: 'completed',
-                source: 'DiscordArbiter',
-                confidence: 0.98
-            });
-            await msg.reply(reply);
-            await this._recordDiscordInteraction({ msg, content: text, reply, action: 'admin_tool_inspection', status: 'posted', visualContext });
-            return { handled: true };
+            if (/\b(scan|status|architecture|system|memory|heap|runtime|health)\b/i.test(text)) {
+                const [scan, coreList, arbiterList] = await Promise.all([
+                    this._executeRegistryTool('system_scan', {}),
+                    this._executeRegistryTool('list_files', { path: 'core' }),
+                    this._executeRegistryTool('list_files', { path: 'arbiters' })
+                ]);
+                reply = [
+                    'I checked my runtime and code directories for real.',
+                    `System: ${this._formatToolResult(scan, 350)}`,
+                    '',
+                    'Core files:',
+                    '```text',
+                    this._formatToolResult(coreList, 550),
+                    '```',
+                    'Arbiter files:',
+                    '```text',
+                    this._formatToolResult(arbiterList, 550),
+                    '```'
+                ].join('\n').slice(0, 1900);
+                workLedger.record({
+                    type: 'discord_admin_tool_execution',
+                    title: 'Inspected SOMA code from Discord',
+                    summary: 'Executed system_scan plus core/arbiters directory listing from an admin Discord request.',
+                    evidence: ['system_scan', 'core', 'arbiters'],
+                    status: 'completed',
+                    source: 'DiscordArbiter',
+                    confidence: 0.98
+                });
+                await msg.reply(reply);
+                await this._recordDiscordInteraction({ msg, content: text, reply, action: 'admin_tool_inspection', status: 'posted', visualContext });
+                return { handled: true };
+            }
+
+            return { handled: false };
         } catch (err) {
             reply = `I tried to execute that for real, but the tool path failed: ${err.message}`;
             await msg.reply(reply);
@@ -1354,12 +1643,35 @@ export class DiscordArbiter extends BaseArbiter {
         }
     }
 
-    async _queueAdminEngineeringGoal(text = '', pathCandidate = null) {
+    // Intake gate: only mint a self-executing engineering goal from a genuinely
+    // ACTIONABLE request. Conversational admin chatter ("u think max can fix it?",
+    // "have you done anything to self modify") was being turned into goals that can
+    // never verify-complete, clogging the goal queue — the root of the stall loops.
+    _isActionableEngineeringRequest(text = '', pathCandidate = null, options = {}) {
+        if (options.authorized === true && String(text || '').trim().length >= 8) return true;
+        const t = String(text || '').trim();
+        if (t.length < 30) return Boolean(pathCandidate);
+        const lower = t.toLowerCase();
+        // Questions / state-checks / chit-chat openers are not tasks (unless a file is named).
+        if (/^(have (you|max|him|her|it|soma|someone)|did you|do you|can you|could you|would you|are you|is it|will you|should (you|i|we)|u think|you think|what('?s| do| are| about)?|how('?s| do| about)?|why|tell me|lmk|let me know|i think|i was|i wonder|wonder(ing)?|just (wondering|curious)|btw|fyi|ok |okay |yeah|yea |nah|hmm|lol|haha)/i.test(lower)) {
+            return Boolean(pathCandidate);
+        }
+        const actionVerb = /\b(fix|add|build|wire|implement|modify|create|refactor|deploy|patch|remove|delete|rename|update|optimi[sz]e|integrate|connect|migrate|write|change|repair|enable|disable|configure|harden|replace|set up|hook up)\b/i.test(lower);
+        if (!actionVerb && !pathCandidate) return false;
+        if (t.split(/\s+/).filter(Boolean).length < 6) return Boolean(pathCandidate);
+        return true;
+    }
+
+    async _queueAdminEngineeringGoal(text = '', pathCandidate = null, channelId = null, options = {}) {
+        if (!this._isActionableEngineeringRequest(text, pathCandidate, options)) {
+            this.logger?.log?.(`[DiscordArbiter] Skipped goal creation - non-actionable admin message: "${String(text).slice(0, 60)}"`);
+            return `I skipped goal creation because the request was not actionable enough.`;
+        }
         const title = `Discord admin engineering request: ${this._formatSafeSnippet(text, 90)}`;
         const description = [
             `Barry requested this from Discord: ${text}`,
             pathCandidate ? `Target file mentioned: ${pathCandidate}` : 'No exact target file was provided. Inspect the repo first, then choose the smallest safe change.',
-            'Use real tools. Read relevant files before changing anything. Verify with syntax checks or focused tests. Do not claim completion without evidence.'
+            'Use real tools. Read relevant files before changing anything. Verify with syntax check or focused test. Do not claim completion without evidence.'
         ].join('\n');
 
         if (this.goalPlanner?.createGoal) {
@@ -1384,7 +1696,8 @@ export class DiscordArbiter extends BaseArbiter {
                 metadata: {
                     source: 'discord_admin',
                     pathCandidate,
-                    requestedBy: 'Barry'
+                    requestedBy: 'Barry',
+                    sourceChannelId: channelId
                 }
             }, 'user');
 
@@ -1420,7 +1733,7 @@ export class DiscordArbiter extends BaseArbiter {
             return `I queued a real EngineeringSwarm goal: \`${id}\`. I will not call it complete until the swarm reports evidence.`;
         }
 
-        throw new Error('No GoalPlanner or EngineeringSwarm is available for mutation requests');
+        return `I cannot create a goal right now: neither GoalPlanner nor EngineeringSwarm are available in the system.`;
     }
 
     _isOwnWorkQuestion(text = '') {
@@ -1470,6 +1783,13 @@ export class DiscordArbiter extends BaseArbiter {
             const reply = await this._summarizeDiscordChannel(msg, text);
             await msg.reply(reply);
             await this._recordDiscordInteraction({ msg, content: text, reply, action: 'summarize', status: 'posted', visualContext });
+            return { handled: true };
+        }
+
+        if (this._isTradingStatusQuestion(text)) {
+            const reply = await this._buildTradingStatusReply();
+            await msg.reply(reply);
+            await this._recordDiscordInteraction({ msg, content: text, reply, action: 'grounded_trading_status', status: 'posted', visualContext });
             return { handled: true };
         }
 

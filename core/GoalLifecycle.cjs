@@ -8,6 +8,7 @@ const STATUS = Object.freeze({
   VERIFICATION_FAILED: 'verification_failed',
   FAILED: 'failed',
   DEFERRED: 'deferred',
+  DELEGATED: 'delegated',
   BROKEN: 'broken',
   REJECTED: 'rejected',
   ABANDONED: 'abandoned',
@@ -29,12 +30,62 @@ const TERMINAL_STATUSES = new Set([
   STATUS.ARCHIVED
 ]);
 
+const HUMAN_SOURCES = new Set(['user', 'user_requested', 'human', 'discord', 'discord_admin', 'priorities_md']);
+
+function isHumanGoal(goal = {}) {
+  const source = String(goal.source || goal.metadata?.source || '').toLowerCase();
+  return HUMAN_SOURCES.has(source) || String(goal.title || '').startsWith('Discord admin engineering request:');
+}
+
+function inferEvidenceProfile(goal = {}) {
+  const text = `${goal.type || ''} ${goal.category || ''} ${goal.title || ''}`.toLowerCase();
+  if (/\b(code|coding|repair|refactor|implementation|software|dependency|daemon|arbiter|frontend|backend|module|function|route)\b/.test(text)) return 'code';
+  if (/\b(research|knowledge|paper|study|investigat|audit|analysis|blueprint)\b/.test(text)) return 'research';
+  if (/\b(memory|mnemonic|recall|consolidat|compaction)\b/.test(text)) return 'memory';
+  return 'operational';
+}
+
+function compileEvidencePreflight(goal = {}) {
+  const contract = goal.metadata?.goalContract || {};
+  const verification = goal.verification || goal.metadata?.verification || contract.verification || {};
+  const profile = verification.profile || contract.evidenceProfile || inferEvidenceProfile(goal);
+  const defaults = {
+    code: { evidenceRequired: ['summary', 'artifact'], proof: ['changed file', 'syntax or build', 'tests'] },
+    research: { evidenceRequired: ['summary', 'artifact'], proof: ['non-empty report', 'source trail'] },
+    memory: { evidenceRequired: ['summary', 'receipt'], proof: ['successful memory write', 'retrieval readback'] },
+    operational: { evidenceRequired: ['summary'], proof: ['measured state, command result, or durable receipt'] },
+  }[profile];
+  const evidenceRequired = [...new Set(verification.evidenceRequired || contract.evidenceRequired || defaults.evidenceRequired)];
+  return {
+    profile,
+    evidenceRequired,
+    proof: defaults.proof,
+    filesExist: Array.isArray(verification.filesExist) ? verification.filesExist : [],
+    commands: Array.isArray(verification.commands) ? verification.commands : [],
+    requiresExecutableProof: profile === 'code' || verification.requiresExecutableProof === true,
+  };
+}
+
+function deriveGoalState(goal = {}) {
+  const status = normalizeStatus(goal.status);
+  if (status === STATUS.COMPLETED) return 'completed';
+  if ([STATUS.FAILED, STATUS.BROKEN, STATUS.VERIFICATION_FAILED].includes(status)) return 'blocked';
+  if (status === STATUS.DEFERRED) return 'deferred';
+  if (status === STATUS.DELEGATED) return 'delegated';
+  const verification = goal.metadata?.lastVerification;
+  if (verification?.passed === false) return 'awaiting_evidence';
+  if (status === STATUS.PENDING) return 'queued';
+  if (status === STATUS.ACTIVE) return Number(goal.metadata?.executionAttempts || 0) > 0 ? 'executing' : 'ready';
+  return status || 'unknown';
+}
+
 const ALLOWED = Object.freeze({
-  [STATUS.PROPOSED]: new Set([STATUS.PENDING, STATUS.ACTIVE, STATUS.DEFERRED, STATUS.REJECTED, STATUS.FAILED]),
-  [STATUS.PENDING]: new Set([STATUS.ACTIVE, STATUS.COMPLETED, STATUS.DEFERRED, STATUS.FAILED, STATUS.VERIFICATION_FAILED, STATUS.BROKEN]),
-  [STATUS.ACTIVE]: new Set([STATUS.PENDING, STATUS.COMPLETED, STATUS.DEFERRED, STATUS.FAILED, STATUS.VERIFICATION_FAILED, STATUS.BROKEN]),
-  [STATUS.BROKEN]: new Set([STATUS.PENDING, STATUS.FAILED, STATUS.DEFERRED, STATUS.ARCHIVED]),
-  [STATUS.DEFERRED]: new Set([STATUS.PENDING, STATUS.COMPLETED, STATUS.ARCHIVED]),
+  [STATUS.PROPOSED]: new Set([STATUS.PENDING, STATUS.ACTIVE, STATUS.DEFERRED, STATUS.DELEGATED, STATUS.REJECTED, STATUS.FAILED]),
+  [STATUS.PENDING]: new Set([STATUS.ACTIVE, STATUS.COMPLETED, STATUS.DEFERRED, STATUS.DELEGATED, STATUS.FAILED, STATUS.VERIFICATION_FAILED, STATUS.BROKEN]),
+  [STATUS.ACTIVE]: new Set([STATUS.PENDING, STATUS.COMPLETED, STATUS.DEFERRED, STATUS.DELEGATED, STATUS.FAILED, STATUS.VERIFICATION_FAILED, STATUS.BROKEN]),
+  [STATUS.BROKEN]: new Set([STATUS.PENDING, STATUS.FAILED, STATUS.DEFERRED, STATUS.DELEGATED, STATUS.ARCHIVED]),
+  [STATUS.DEFERRED]: new Set([STATUS.PENDING, STATUS.COMPLETED, STATUS.DELEGATED, STATUS.ARCHIVED]),
+  [STATUS.DELEGATED]: new Set([STATUS.PENDING, STATUS.COMPLETED, STATUS.FAILED, STATUS.ARCHIVED]),
   [STATUS.VERIFICATION_FAILED]: new Set([STATUS.PENDING, STATUS.FAILED, STATUS.ARCHIVED]),
   [STATUS.FAILED]: new Set([STATUS.PENDING, STATUS.ARCHIVED]),
   [STATUS.REJECTED]: new Set([STATUS.ARCHIVED]),
@@ -92,5 +143,9 @@ module.exports = {
   TERMINAL_STATUSES,
   normalizeStatus,
   isTerminal,
-  transitionGoal
+  transitionGoal,
+  isHumanGoal,
+  inferEvidenceProfile,
+  compileEvidencePreflight,
+  deriveGoalState
 };

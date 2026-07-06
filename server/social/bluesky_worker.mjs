@@ -6,7 +6,7 @@
  * Runs in a clean process, unaffected by SOMA's main process state.
  *
  * Task types: login, post, reply, likePost, getNotifications, markSeen, refreshSession, getTimeline, searchPosts, getThread,
- * listConvos, getMessages, sendMessage, updateRead
+ * listConvos, getMessages, sendMessage, updateRead, deletePost, follow, getFollowers, getFollows
  */
 
 import https from 'https';
@@ -162,6 +162,16 @@ async function run() {
             break;
         }
 
+        case 'deletePost': {
+            if (!task.repo || !task.rkey) throw new Error('deletePost requires repo and rkey');
+            result = await xrpc('POST', 'com.atproto.repo.deleteRecord', {
+                repo: task.repo,
+                collection: 'app.bsky.feed.post',
+                rkey: task.rkey,
+            }, task.token);
+            break;
+        }
+
         case 'getNotifications':
             result = await xrpc('GET', `app.bsky.notification.listNotifications?limit=${task.limit || 20}`,
                 null, task.token);
@@ -234,6 +244,31 @@ async function run() {
         case 'searchPosts': {
             const q = encodeURIComponent(task.query || '');
             result = await xrpc('GET', `app.bsky.feed.searchPosts?q=${q}&limit=${task.limit || 15}`, null, task.token);
+            break;
+        }
+
+        case 'follow': {
+            if (!task.subject) throw new Error('follow requires subject did');
+            const record = {
+                $type:     'app.bsky.graph.follow',
+                subject:   task.subject,
+                createdAt: new Date().toISOString(),
+            };
+            result = await xrpc('POST', 'com.atproto.repo.createRecord', {
+                repo: task.did, collection: 'app.bsky.graph.follow', record
+            }, task.token);
+            break;
+        }
+
+        case 'getFollowers': {
+            const actor = encodeURIComponent(task.actor || task.did || '');
+            result = await xrpc('GET', `app.bsky.graph.getFollowers?actor=${actor}&limit=${Math.min(Number(task.limit || 50), 100)}`, null, task.token);
+            break;
+        }
+
+        case 'getFollows': {
+            const actor = encodeURIComponent(task.actor || task.did || '');
+            result = await xrpc('GET', `app.bsky.graph.getFollows?actor=${actor}&limit=${Math.min(Number(task.limit || 50), 100)}`, null, task.token);
             break;
         }
 

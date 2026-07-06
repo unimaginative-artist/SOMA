@@ -846,6 +846,8 @@ export async function loadRoutes(app, system) {
                 confidence: result?.confidence || 0.8,
                 brain: result?.brain || selectedHemisphere,
                 provider: result?.provider || result?.meta?.provider || null,
+                model: result?.model || result?.meta?.model || null,
+                routing: result?.routing || null,
                 durationMs: Date.now() - started,
                 timestamp: Date.now(),
             });

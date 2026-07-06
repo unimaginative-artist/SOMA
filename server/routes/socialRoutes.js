@@ -20,6 +20,7 @@ import socialMemory from '../social/SocialMemoryEngine.js';
 import socialRelationships from '../social/SocialRelationshipLedger.js';
 import rippleSocialBridge from '../social/RippleSocialBridge.js';
 import { guardSomaText } from '../context/GroundedReasoning.js';
+import { assertPublicMediaMetadata, assertPublicPost } from '../social/SocialContentSafety.js';
 
 const SOMA_DIR = path.join(process.cwd(), 'SOMA');
 const GROWTH_FILE = path.join(SOMA_DIR, 'social-growth.json');
@@ -136,8 +137,10 @@ export default function createSocialRoutes(system) {
         const images = normalizeImages(req.body);
 
         try {
+            assertPublicMediaMetadata(images);
             const guarded = await guardSomaText(text.trim(), `social post ${platform}`);
             const safeText = guarded.text || text.trim();
+            assertPublicPost(safeText, { platform, type: 'manual_post' });
             let result;
             if (platform === 'bluesky') {
                 result = await blueskeyClient.post(safeText, { images });
@@ -431,16 +434,25 @@ export default function createSocialRoutes(system) {
         if (platform === 'linkedin' && images.length) {
             return res.status(400).json({ ok: false, error: 'LinkedIn image posting is not wired yet; use bluesky or x for image posts' });
         }
-        const guarded = await guardSomaText(text.trim(), `social queue ${platform} ${type}`);
-        const safeText = guarded.text || text.trim();
-        const pushed = socialQueue.push({
-            platform,
-            text: safeText,
-            type,
-            images,
-            scheduledFor: scheduledFor ? Number(scheduledFor) : Date.now(),
-        });
-        res.status(pushed ? 200 : 409).json({ ok: pushed, queued: pushed, duplicate: !pushed, text: safeText, claimGuard: guarded.ok === false ? guarded : null });
+        try {
+            const guarded = await guardSomaText(text.trim(), `social queue ${platform} ${type}`);
+            const safeText = guarded.text || text.trim();
+            const pushed = socialQueue.push({
+                platform,
+                text: safeText,
+                type,
+                images,
+                scheduledFor: scheduledFor ? Number(scheduledFor) : Date.now(),
+            });
+            res.status(pushed ? 200 : 409).json({ ok: pushed, queued: pushed, duplicate: !pushed, text: safeText, claimGuard: guarded.ok === false ? guarded : null });
+        } catch (error) {
+            const privacyBlocked = /Unsafe public (?:post|media metadata) blocked/.test(error.message);
+            res.status(privacyBlocked ? 400 : 500).json({
+                ok: false,
+                code: privacyBlocked ? 'PUBLIC_CONTENT_BLOCKED' : 'QUEUE_FAILED',
+                error: error.message,
+            });
+        }
     });
 
     router.get('/images', (_req, res) => {
@@ -620,6 +632,7 @@ export default function createSocialRoutes(system) {
                 sourceText: text.trim(),
             });
             const images = [{ path: generated.image.path, alt: generated.image.alt || generated.alt }];
+            assertPublicPost(text.trim(), { platform, type: 'generated_image_post' });
             let result;
             if (platform === 'bluesky') {
                 result = await blueskeyClient.post(text.trim(), { images });
@@ -918,6 +931,7 @@ export default function createSocialRoutes(system) {
         try {
             const guarded = await guardSomaText(text.trim(), `social reply ${platform}`);
             const safeText = guarded.text || text.trim();
+            assertPublicPost(safeText, { platform, type: 'reply' });
             let result;
             if (platform === 'bluesky') {
                 const parentRef = { uri: ref.uri, cid: ref.cid };

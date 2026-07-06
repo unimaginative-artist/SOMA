@@ -25,15 +25,26 @@ function now() {
   return Date.now();
 }
 
+function isUnsupportedCrossDomainTheater(value = '') {
+  const text = String(value || '').toLowerCase();
+  const speculativeScience = /\b(chemistry|chemical|reaction kinetics|thermodynamics|quantum|molecular|principle of least action)\b/.test(text);
+  const softwareTarget = /\b(ai|agent|software|code|coding|build|debug|git|computational|self[- ]?modification)\b/.test(text);
+  const unsupportedAction = /\b(conduct|run|perform|try|start|plan)\b.{0,40}\b(experiment|lab|reaction|titration|synthesis)\b/.test(text)
+    || /\b(analogy|maps? cleanly|same pattern|could significantly boost|accelerates computational)\b/.test(text);
+  return speculativeScience && softwareTarget && unsupportedAction;
+}
+
 function readState() {
   try {
     if (fs.existsSync(STATE_FILE)) {
       const parsed = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
       if (parsed && typeof parsed === 'object') {
+        const activeThreads = Array.isArray(parsed.activeThreads) ? parsed.activeThreads : [];
+        const history = Array.isArray(parsed.history) ? parsed.history : [];
         return {
           version: 1,
-          activeThreads: Array.isArray(parsed.activeThreads) ? parsed.activeThreads : [],
-          history: Array.isArray(parsed.history) ? parsed.history : [],
+          activeThreads: activeThreads.filter(thread => !isUnsupportedCrossDomainTheater(activeText(thread))),
+          history: history.filter(item => !isUnsupportedCrossDomainTheater(`${item.focus || ''} ${item.text || ''}`)),
           affect: parsed.affect && typeof parsed.affect === 'object' ? parsed.affect : {},
           lastDecision: parsed.lastDecision || null
         };
@@ -350,6 +361,7 @@ module.exports = {
   writeState,
   decide,
   buildContextBlock,
+  isUnsupportedCrossDomainTheater,
   tokens,
   jaccard
 };

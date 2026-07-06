@@ -164,6 +164,10 @@ export class MaxAgentBridge {
 
     /** Write a file (creates or overwrites). */
     async writeFile(filePath, content) {
+        const targetDir = path.dirname(filePath);
+        if (!existsSync(targetDir)) {
+            return { success: false, error: `Directory does not exist: ${targetDir}`, hint: `Create the directory first or check path.` };
+        }
         return this._tool('file', 'write', { filePath, content });
     }
 
@@ -173,7 +177,21 @@ export class MaxAgentBridge {
      * Returns { success, error, hint } — check success before continuing.
      */
     async replaceInFile(filePath, oldText, newText) {
-        return this._tool('file', 'replace', { filePath, oldText, newText });
+        if (!existsSync(filePath)) {
+            return { success: false, error: `File does not exist: ${filePath}`, hint: `Verify the exact file path before replacing.` };
+        }
+        
+        // Cache original content for rollback in case of partial or corrupted execution
+        const originalContent = readFileSync(filePath, 'utf8');
+        
+        const result = await this._tool('file', 'replace', { filePath, oldText, newText });
+        
+        if (!result || !result.success) {
+            // Rollback trigger - restore original content if the patch failed verification
+            await this._tool('file', 'write', { filePath, content: originalContent });
+        }
+        
+        return result;
     }
 
     /** List files in a directory. */
@@ -229,7 +247,7 @@ export class MaxAgentBridge {
      * Useful for SOMA to ask MAX to investigate or explain something.
      */
     async chat(message, opts = {}) {
-        return this._fetchJSON('POST', '/api/chat', {
+        return this._fetchJSON('POST', '/api/soma/chat', {
             message,
             persona:     opts.persona     || null,
             temperature: opts.temperature ?? 0.7,

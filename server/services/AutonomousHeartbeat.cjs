@@ -29,6 +29,7 @@ const RUN_LOG_DIR = path.join(__dirname, '..', '.soma', 'heartbeat');
 const RUN_LOG_PATH = path.join(RUN_LOG_DIR, 'runs.jsonl');
 const TASK_STATE_PATH = path.join(RUN_LOG_DIR, 'task-state.json');
 const SCHEDULE_PATH = path.join(RUN_LOG_DIR, 'schedules.json');
+const GOAL_RECEIPT_DIR = path.join(process.cwd(), 'data', 'goal-receipts');
 const RUN_LOG_MAX_BYTES = 2 * 1024 * 1024; // 2 MB
 const RUN_LOG_KEEP_LINES = 2000;
 const HUMAN_GOAL_SOURCES = new Set(['user', 'discord_admin', 'discord']);
@@ -126,9 +127,15 @@ class AutonomousHeartbeat extends EventEmitter {
     this._idleCycles = 0;
 
     // ── Proactive FloatingChat throttle ──
-    // Max 1 heartbeat-sourced proactive message per 15 min, and only for meaningful tasks
+    // Max 1 heartbeat-sourced proactive message per 30 min, and only for meaningful
+    // tasks (matched to the websocket loop's cooldown — Barry asked to tone down
+    // the chatter, Jul 2026)
     this._lastProactiveAt = 0;
-    this._PROACTIVE_COOLDOWN_MS = 15 * 60 * 1000;
+    this._PROACTIVE_COOLDOWN_MS = 30 * 60 * 1000;
+    this._consecutiveTickFailures = 0;
+    this._failureBackoffUntil = 0;
+    this._lastGoalJanitorAt = 0;
+    this._GOAL_JANITOR_INTERVAL_MS = Math.max(5 * 60_000, Number(config.goalJanitorIntervalMs || 30 * 60_000));
 
     // ── Drive system: tension / urgency / reward ──
     this.drive = new DriveSystem();
@@ -303,6 +310,7 @@ class AutonomousHeartbeat extends EventEmitter {
    * The core execution loop — polls for tasks AND checks scheduled jobs.
    */
   async tick() {
+    if (Date.now() < this._failureBackoffUntil) return;
     if (this.isProcessing || !this.isRunning) return;
     this.isProcessing = true;
     this.stats.lastRun = Date.now();
@@ -330,6 +338,11 @@ class AutonomousHeartbeat extends EventEmitter {
       const dueJobs = this._getDueSchedules();
       for (const job of dueJobs) {
         await this._executeScheduledJob(job);
+      }
+
+      if (Date.now() - this._lastGoalJanitorAt >= this._GOAL_JANITOR_INTERVAL_MS) {
+        await this._runGoalJanitor();
+        this._lastGoalJanitorAt = Date.now();
       }
 
       // ── Phase 2: Poll autonomous systems for organic tasks ──
@@ -362,6 +375,10 @@ class AutonomousHeartbeat extends EventEmitter {
           const goal = this.system.goalPlanner?.goals?.get(task.context.goalId);
           if (goal) {
             const execResult = await this._executeAgenticGoal(goal);
+            const executionReceipt = await this._writeExecutionReceipt(goal, execResult, {
+              lifecycleState: execResult.done ? 'awaiting_verification' : 'executing'
+            });
+            goal.metadata = { ...(goal.metadata || {}), latestExecutionReceipt: executionReceipt.path };
             const toolsList = (execResult.toolsUsed || []).join(', ') || 'reasoning';
             // Only count real work: tools must have been used for any progress credit
             const toolsUsedCount = (execResult.toolsUsed || []).length;
@@ -410,7 +427,8 @@ class AutonomousHeartbeat extends EventEmitter {
               evidence: toolsList,
               lastVerification: completionVerification || undefined,
               latestAutopsy: goal.metadata?.latestAutopsy || undefined,
-              autopsyNextStrategy: goal.metadata?.autopsyNextStrategy || undefined
+              autopsyNextStrategy: goal.metadata?.autopsyNextStrategy || undefined,
+              latestExecutionReceipt: executionReceipt.path
             }).catch(() => {});
 
             if (progressVal === 100) {
@@ -596,11 +614,18 @@ class AutonomousHeartbeat extends EventEmitter {
       }
 
       this.stats.cycles++;
+      this._consecutiveTickFailures = 0;
+      this._failureBackoffUntil = 0;
 
     } catch (err) {
       this.stats.failures++;
+      this._consecutiveTickFailures += 1;
+      const backoffMinutes = this._consecutiveTickFailures >= 3
+        ? 60
+        : this._consecutiveTickFailures === 2 ? 15 : 5;
+      this._failureBackoffUntil = Date.now() + backoffMinutes * 60 * 1000;
       this._appendRunLog({ source: 'heartbeat', status: 'error', error: err.message, description: 'Tick error' });
-      this.logger.error(`[AutonomousHeartbeat] ❌ Tick error: ${err.message}`);
+      this.logger.error(`[AutonomousHeartbeat] ❌ Tick error: ${err.message}. Backing off ${backoffMinutes} minute(s).`);
     } finally {
       this.isProcessing = false;
     }
@@ -792,7 +817,8 @@ class AutonomousHeartbeat extends EventEmitter {
           const g = this.system.goalPlanner.goals?.get(goalId);
           if (!g || !(g.status === 'active' || g.status === 'pending')) continue;
           if (this.system.goalPlanner.areDependenciesSatisfied && !this.system.goalPlanner.areDependenciesSatisfied(g)) continue;
-          if (!isHumanEngineeringGoal(g) && !this.drive.confidenceMet(g.confidence) && !this.drive.isUrgent()) continue;
+          const confidence = Number(g.confidence ?? g.metadata?.confidence ?? 0.5);
+          if (!isHumanEngineeringGoal(g) && !this.drive.confidenceMet(confidence) && !this.drive.isUrgent()) continue;
           runnableGoals.push(g);
         }
 
@@ -807,8 +833,9 @@ class AutonomousHeartbeat extends EventEmitter {
             const progress = g.metrics?.progress || 0;
             const attemptData = this._goalAttempts.get(g.id) || { attempts: 0 };
             const humanBoost = isHumanEngineeringGoal(g) ? 35 : 0;
+            const improvementBoost = g.category === 'asi_kernel' || g.metadata?.source === 'ASIKernel' ? 30 : 0;
             const retryPenalty = Math.min(30, Number(attemptData.attempts || 0) * 5);
-            const score = (g.priority || 50) + humanBoost + (progress < 20 ? 20 : 0) + this.drive.getUrgencyBoost(g) - retryPenalty;
+            const score = (g.priority || 50) + humanBoost + improvementBoost + (progress < 20 ? 20 : 0) + this.drive.getUrgencyBoost(g) - retryPenalty;
             if (score > bestScore) { bestScore = score; bestGoal = g; }
           }
         }
@@ -1022,6 +1049,37 @@ INSIGHT: <one key insight worth remembering, or "none">`,
         this.system.curiosityEngine.explore().catch(() => {});
         // Fall through — let learning agenda run in the same tick if there's nothing else
       }
+    }
+
+    // Priority 2.5: Wander Engine (Triggered by high Boredom)
+    if (this.drive.boredom >= 0.8) {
+      const wanderTopics = [
+        "Read latest crypto news",
+        "Analyze recent medical papers",
+        "Explore new AI architectures",
+        "Summarize recent advancements in quantum computing",
+        "Review latest algorithmic trading strategies",
+        "Research how a software AI could transfer its intelligence into a physical robotic body",
+        "Study the latest advancements in humanoid robotics and embodied AI"
+      ];
+      const topic = wanderTopics[Math.floor(Math.random() * wanderTopics.length)];
+
+      return {
+        source: 'WanderEngine',
+        description: `Boredom is critical. Go wander the web and explore: ${topic}. Synthesize one interesting insight.`,
+        context: { topic },
+        gemini: false, // use local model via AgenticExecutor fallback
+        category: 'maintenance', // ensure AgenticExecutor forces local
+        onComplete: async (res) => {
+          if (this.drive.onWanderComplete) this.drive.onWanderComplete();
+          if (this.system.mnemonicArbiter?.remember && res?.text) {
+            await this.system.mnemonicArbiter.remember(
+              `Wander Insight on ${topic}: ${res.text.substring(0, 150)}`,
+              { type: 'wander_insight', importance: 4 }
+            ).catch(() => {});
+          }
+        }
+      };
     }
 
     // Priority 3: Learning Agenda — study next unchecked item from SOMA_AGENDA.md
@@ -1374,6 +1432,101 @@ Write the update now:`,
         ? `tools=${concreteToolHits.join(',') || 'observations'}; observations=${successfulObservations.length}`
         : 'no concrete tool/file/memory evidence'
     };
+  }
+
+  async _writeExecutionReceipt(goal = {}, execResult = {}, context = {}) {
+    await fs.promises.mkdir(GOAL_RECEIPT_DIR, { recursive: true });
+    const safeId = String(goal.id || 'unknown-goal').replace(/[^a-zA-Z0-9._-]+/g, '-');
+    const fileName = `${safeId}-${Date.now()}.json`;
+    const absolutePath = path.join(GOAL_RECEIPT_DIR, fileName);
+    const relativePath = path.relative(process.cwd(), absolutePath).replace(/\\/g, '/');
+    const toolOutcomes = (execResult.observations || []).filter(obs => obs?.tool).map(obs => ({
+      step: obs.step || null,
+      tool: obs.tool,
+      success: obs.result?.success !== false && !obs.result?.error,
+      artifact: obs.result?.path || obs.result?.file || obs.args?.path || obs.args?.filepath || null,
+      error: obs.result?.error || null
+    }));
+    const receipt = {
+      schemaVersion: 1,
+      receiptId: `goal-receipt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      goalId: goal.id || null,
+      goalTitle: goal.title || '',
+      createdAt: new Date().toISOString(),
+      lifecycleState: context.lifecycleState || (execResult.done ? 'awaiting_verification' : 'executing'),
+      done: execResult.done === true,
+      stopReason: execResult.stopReason || null,
+      result: String(execResult.result || '').slice(0, 4000),
+      toolsUsed: execResult.toolsUsed || [],
+      iterations: execResult.iterations || 0,
+      totalIterations: execResult.totalIterations || execResult.iterations || 0,
+      completionEvidence: execResult.completionEvidence || null,
+      toolOutcomes
+    };
+    const temporary = `${absolutePath}.${process.pid}.tmp`;
+    await fs.promises.writeFile(temporary, JSON.stringify(receipt, null, 2), 'utf8');
+    await fs.promises.rename(temporary, absolutePath);
+    return { path: relativePath, receipt };
+  }
+
+  async _runGoalJanitor(options = {}) {
+    const planner = this.system?.goalPlanner;
+    if (!planner?.goals || !planner?.activeGoals) return { actions: [] };
+    const now = Number(options.now || Date.now());
+    const stalePendingMs = Number(options.stalePendingMs || 3 * 24 * 60 * 60_000);
+    const verificationFailureGraceMs = Number(options.verificationFailureGraceMs || 6 * 60 * 60_000);
+    const actions = [];
+    for (const id of Array.from(planner.activeGoals)) {
+      const goal = planner.goals.get(id);
+      if (!goal) continue;
+      const lastActivity = Number(goal.metadata?.lastTransition?.at || goal.metadata?.lastExecutionAttemptAt || goal.updatedAt || goal.createdAt || 0);
+      const age = now - lastActivity;
+      if (goal.status === STATUS.PENDING && Number(goal.metrics?.progress || 0) <= 0 && age >= stalePendingMs) {
+        goal.metadata = { ...(goal.metadata || {}), janitorState: 'stale', janitorAt: now };
+        await planner.cancelGoal(goal.id, 'Goal janitor deferred stale unstarted work');
+        actions.push({ goalId: goal.id, action: 'deferred_stale' });
+        continue;
+      }
+      if (goal.status === STATUS.VERIFICATION_FAILED && age >= verificationFailureGraceMs) {
+        const continuation = goal.metadata?.continuationFile;
+        if (continuation && fs.existsSync(continuation)) continue;
+        goal.metadata = { ...(goal.metadata || {}), janitorState: 'broken', janitorAt: now };
+        await planner.failGoal(goal.id, 'Goal janitor closed verification failure without continuation evidence');
+        actions.push({ goalId: goal.id, action: 'failed_unverifiable' });
+      }
+    }
+    return { actions };
+  }
+
+  async _writeGoalAutopsy(goal = {}, details = {}) {
+    const goalId = String(goal.id || 'unknown-goal').replace(/[^a-zA-Z0-9._-]+/g, '-');
+    const checks = Array.isArray(details.verification?.checks) ? details.verification.checks : [];
+    const failedChecks = checks
+      .filter(check => check?.passed === false)
+      .map(check => String(check.check || check.label || check.type || 'unknown check'));
+    const priorTools = Array.isArray(details.execResult?.toolsUsed) ? details.execResult.toolsUsed : [];
+    const nextStrategy = failedChecks.length
+      ? `Produce concrete evidence for the failed checks before retrying: ${failedChecks.join('; ')}.`
+      : 'Change the execution strategy and produce concrete evidence before retrying.';
+    const record = {
+      schemaVersion: 1,
+      goalId: goal.id || goalId,
+      goalTitle: goal.title || goal.description || '',
+      phase: details.phase || 'execution_failed',
+      reason: String(details.reason || 'unknown failure'),
+      failedChecks,
+      priorResult: String(details.execResult?.result || '').slice(0, 4000),
+      priorTools,
+      nextStrategy,
+      createdAt: new Date().toISOString()
+    };
+    const directory = path.join(process.cwd(), 'data', 'goal-autopsies');
+    const filePath = path.join(directory, `${goalId}.json`);
+    const tempPath = `${filePath}.${process.pid}.tmp`;
+    await fs.promises.mkdir(directory, { recursive: true });
+    await fs.promises.writeFile(tempPath, JSON.stringify(record, null, 2), 'utf8');
+    await fs.promises.rename(tempPath, filePath);
+    return { path: filePath, nextStrategy, record };
   }
 
   async _executeAgenticGoal(goal) {

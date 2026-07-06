@@ -306,6 +306,17 @@
       "status": null
     },
     {
+      "file": "ForecasterArbiter.js",
+      "cls": "ForecasterArbiter",
+      "capabilities": [
+        "search-web",
+        "execute-code"
+      ],
+      "role": "specialist",
+      "lobe": null,
+      "status": "verified"
+    },
+    {
       "file": "FinanceAgentArbiter.js",
       "cls": "FinanceAgentArbiter",
       "capabilities": [
@@ -318,17 +329,6 @@
       "role": "specialist",
       "lobe": null,
       "status": null
-    },
-    {
-      "file": "ForecasterArbiter.js",
-      "cls": "ForecasterArbiter",
-      "capabilities": [
-        "search-web",
-        "execute-code"
-      ],
-      "role": "specialist",
-      "lobe": null,
-      "status": "verified"
     },
     {
       "file": "MedicalDiscoveryCortex.js",
@@ -1034,6 +1034,43 @@
       "status": null
     }
   ],
+  "cache-data": [
+    {
+      "file": "DreamArbiter.cjs",
+      "cls": "DreamArbiter",
+      "capabilities": [
+        "cache-data",
+        "access-db"
+      ],
+      "role": null,
+      "lobe": null,
+      "status": "verified"
+    },
+    {
+      "file": "MnemonicArbiter.cjs",
+      "cls": "MnemonicArbiter",
+      "capabilities": [
+        "cache-data",
+        "access-db",
+        "clone-self"
+      ],
+      "role": "mnemonic",
+      "lobe": null,
+      "status": null
+    },
+    {
+      "file": "MnemonicArbiter.js",
+      "cls": "MnemonicArbiter",
+      "capabilities": [
+        "cache-data",
+        "access-db",
+        "clone-self"
+      ],
+      "role": "mnemonic",
+      "lobe": null,
+      "status": null
+    }
+  ],
   "auditory-processing": [
     {
       "file": "DiscordArbiter.js",
@@ -1104,6 +1141,17 @@
       "status": null
     },
     {
+      "file": "ForecasterArbiter.js",
+      "cls": "ForecasterArbiter",
+      "capabilities": [
+        "search-web",
+        "execute-code"
+      ],
+      "role": "specialist",
+      "lobe": null,
+      "status": "verified"
+    },
+    {
       "file": "FinanceAgentArbiter.js",
       "cls": "FinanceAgentArbiter",
       "capabilities": [
@@ -1118,17 +1166,6 @@
       "status": null
     },
     {
-      "file": "ForecasterArbiter.js",
-      "cls": "ForecasterArbiter",
-      "capabilities": [
-        "search-web",
-        "execute-code"
-      ],
-      "role": "specialist",
-      "lobe": null,
-      "status": "verified"
-    },
-    {
       "file": "LoadPipelineArbiter.js",
       "cls": "LoadPipelineArbiter",
       "capabilities": [
@@ -1136,17 +1173,6 @@
         "memory-access"
       ],
       "role": "architect",
-      "lobe": null,
-      "status": null
-    },
-    {
-      "file": "QuantumSimulationArbiter.js",
-      "cls": "QuantumSimulationArbiter",
-      "capabilities": [
-        "execute-code",
-        "memory-access"
-      ],
-      "role": "specialist",
       "lobe": null,
       "status": null
     },
@@ -1165,6 +1191,17 @@
       "status": null
     },
     {
+      "file": "QuantumSimulationArbiter.js",
+      "cls": "QuantumSimulationArbiter",
+      "capabilities": [
+        "execute-code",
+        "memory-access"
+      ],
+      "role": "specialist",
+      "lobe": null,
+      "status": null
+    },
+    {
       "file": "ToolCreatorArbiter.js",
       "cls": "ToolCreatorArbiter",
       "capabilities": [
@@ -1173,43 +1210,6 @@
         "read-files"
       ],
       "role": "architect",
-      "lobe": null,
-      "status": null
-    }
-  ],
-  "cache-data": [
-    {
-      "file": "DreamArbiter.cjs",
-      "cls": "DreamArbiter",
-      "capabilities": [
-        "cache-data",
-        "access-db"
-      ],
-      "role": null,
-      "lobe": null,
-      "status": "verified"
-    },
-    {
-      "file": "MnemonicArbiter.cjs",
-      "cls": "MnemonicArbiter",
-      "capabilities": [
-        "cache-data",
-        "access-db",
-        "clone-self"
-      ],
-      "role": "mnemonic",
-      "lobe": null,
-      "status": null
-    },
-    {
-      "file": "MnemonicArbiter.js",
-      "cls": "MnemonicArbiter",
-      "capabilities": [
-        "cache-data",
-        "access-db",
-        "clone-self"
-      ],
-      "role": "mnemonic",
       "lobe": null,
       "status": null
     }
@@ -1380,17 +1380,6 @@
       "status": "verified"
     },
     {
-      "file": "QuantumSimulationArbiter.js",
-      "cls": "QuantumSimulationArbiter",
-      "capabilities": [
-        "execute-code",
-        "memory-access"
-      ],
-      "role": "specialist",
-      "lobe": null,
-      "status": null
-    },
-    {
       "file": "PulseArbiter.js",
       "cls": "PulseArbiter",
       "capabilities": [
@@ -1402,6 +1391,17 @@
       ],
       "role": "orchestrator",
       "lobe": "COGNITIVE",
+      "status": null
+    },
+    {
+      "file": "QuantumSimulationArbiter.js",
+      "cls": "QuantumSimulationArbiter",
+      "capabilities": [
+        "execute-code",
+        "memory-access"
+      ],
+      "role": "specialist",
+      "lobe": null,
       "status": null
     },
     {
@@ -1824,6 +1824,18 @@
       "status": null
     }
   ],
+  "analyze-data": [
+    {
+      "file": "ProprioceptionArbiter.js",
+      "cls": "ProprioceptionArbiter",
+      "capabilities": [
+        "analyze-data"
+      ],
+      "role": "analyst",
+      "lobe": null,
+      "status": null
+    }
+  ],
   "causal-reasoning": [
     {
       "file": "ProactiveCouncilArbiter.js",
@@ -1858,18 +1870,6 @@
         "analysis",
         "causal-reasoning",
         "monitor-performance"
-      ],
-      "role": "analyst",
-      "lobe": null,
-      "status": null
-    }
-  ],
-  "analyze-data": [
-    {
-      "file": "ProprioceptionArbiter.js",
-      "cls": "ProprioceptionArbiter",
-      "capabilities": [
-        "analyze-data"
       ],
       "role": "analyst",
       "lobe": null,

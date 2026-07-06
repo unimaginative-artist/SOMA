@@ -149,10 +149,10 @@ def load_jsonl(path, max_samples):
 
 def main():
     parser = argparse.ArgumentParser(description="SOMA LoRA Fine-tuning — per-lobe specialist models")
-    parser.add_argument("--data", required=True, help="Path to JSONL training file")
+    parser.add_argument("--data", default=None, help="Path to JSONL training file")
     parser.add_argument("--output", default="./models/soma-latest", help="Output dir for weights + GGUF")
-    parser.add_argument("--model", default="google/gemma-3-4b-it",
-                        help="Base model (4b for RTX 5070 12GB; use 1b for 4GB GPUs)")
+    parser.add_argument("--model", default="nvidia/nemotron-mini-4b-instruct",
+                        help="Base model; defaults to SOMA's locally cached Nemotron 4B lineage")
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--max-samples", type=int, default=2000)
@@ -162,10 +162,18 @@ def main():
                         choices=["logos", "aurora", "prometheus", "thalamus"],
                         help="Which cognitive lobe to train (sets system prompt + Ollama model name)")
     parser.add_argument("--hf-token", default=os.environ.get("HF_TOKEN", ""), help="HuggingFace token")
+    parser.add_argument("--ollama-model-name", default=None,
+                        help="Immutable Ollama model name, for example soma-logos:v12")
+    parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument("--adapter-only", action="store_true",
+                        help="Diagnostic mode: run gradient training and save adapter without GGUF/Ollama promotion")
     args = parser.parse_args()
 
+    if not args.preflight_only and not args.data:
+        parser.error("--data is required unless --preflight-only is used")
+
     # Derive Ollama model name from lobe
-    ollama_model_name = f"soma-{args.lobe}:latest"
+    ollama_model_name = args.ollama_model_name or f"soma-{args.lobe}:latest"
     lobe_system_prompt = LOBE_SYSTEM_PROMPTS[args.lobe]
 
     import torch
@@ -180,6 +188,17 @@ def main():
         USE_SFT_CONFIG = False
     from transformers import TrainingArguments
     from datasets import Dataset
+
+    if args.preflight_only:
+        status = {
+            "ok": bool(torch.cuda.is_available()),
+            "python": sys.version.split()[0],
+            "torch": torch.__version__,
+            "cuda": torch.version.cuda,
+            "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        }
+        print(json.dumps(status))
+        return 0 if status["ok"] else 2
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -248,7 +267,7 @@ def main():
         model = AutoModelForCausalLM.from_pretrained(
             args.model,
             quantization_config=bnb_config,
-            device_map="auto",
+            device_map={"": 0},
             token=hf_token or None,
         )
         model = prepare_model_for_kbit_training(model)
@@ -398,7 +417,9 @@ def main():
 
     # ── GGUF export + Ollama (unsloth only) ───────────────────────────────────
     gguf_file = None
-    if USE_UNSLOTH:
+    if args.adapter_only:
+        print('[SOMA Train] Adapter-only diagnostic complete; skipping GGUF export and Ollama registration')
+    elif USE_UNSLOTH:
         try:
             print("\n[SOMA Train] Exporting Q4_K_M GGUF for Ollama...")
             model.save_pretrained_gguf(str(output_dir), tokenizer, quantization_method="q4_k_m")
@@ -430,8 +451,25 @@ def main():
             print(f"[SOMA Train] GGUF export failed: {e}")
             print("[SOMA Train] Adapter saved — re-run on RTX 5070 for full GGUF export")
     else:
-        print("[SOMA Train] ⚠️  No GGUF on this machine (unsloth required)")
-        print(f"[SOMA Train]    Run on the RTX 5070 to get soma-{args.lobe}:latest in Ollama")
+        print("[SOMA Train] Exporting PEFT adapter through llama.cpp...")
+        exporter = Path(os.getcwd()) / 'scripts' / 'export_adapter_to_ollama.py'
+        export_result = subprocess.run([
+            sys.executable,
+            str(exporter),
+            '--adapter-dir', str(adapter_dir),
+            '--base-model', args.model,
+            '--output-dir', str(output_dir),
+            '--model-name', ollama_model_name,
+            '--lobe', args.lobe,
+        ])
+        if export_result.returncode != 0:
+            print('[SOMA Train] Adapter export or Ollama registration failed')
+            return 2
+        exported = sorted(output_dir.glob('*.gguf'), key=lambda p: p.stat().st_mtime)
+        gguf_file = exported[-1] if exported else None
+        if gguf_file is None:
+            print('[SOMA Train] Export completed without a GGUF artifact')
+            return 2
 
     # Save training log
     log = {

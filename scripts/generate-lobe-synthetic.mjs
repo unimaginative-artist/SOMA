@@ -22,10 +22,17 @@ import { promises as fs, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+import deepSeekGateway from '../server/core/DeepSeekGateway.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const require = createRequire(import.meta.url);
+const PAID_GENERATION_ENABLED = process.argv.includes('--allow-paid') || process.env.SOMA_ALLOW_PAID_SYNTHETIC === 'true';
+
+if (!PAID_GENERATION_ENABLED) {
+    console.error('Paid synthetic generation is disabled. Pass --allow-paid or set SOMA_ALLOW_PAID_SYNTHETIC=true.');
+    process.exit(1);
+}
 
 // Load API key
 require('dotenv').config({ path: path.join(ROOT, 'config', 'api-keys.env') });
@@ -223,26 +230,19 @@ const LOBE_TOPICS = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function callDeepSeek(prompt, temperature = 0.85) {
-    const response = await fetch('https://api.deepseek.com/chat/completions', {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            model: 'deepseek-chat',
-            messages: [{ role: 'user', content: prompt }],
-            temperature,
-            max_tokens: 1200,
-        }),
+    const completion = await deepSeekGateway.complete({
+        apiKey: DEEPSEEK_API_KEY,
+        model: 'deepseek-chat',
+        messages: [{ role: 'user', content: prompt }],
+        temperature,
+        maxTokens: 1200,
+        timeoutMs: 45_000,
+        priority: 'background',
+        actor: 'SyntheticLobeGenerator',
+        action: 'paid_training_data',
+        dailyCallLimit: Number(process.env.SOMA_SYNTHETIC_DEEPSEEK_DAILY_CALL_LIMIT || 50),
     });
-
-    if (!response.ok) {
-        const err = await response.text();
-        throw new Error(`DeepSeek error ${response.status}: ${err}`);
-    }
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || '';
+    return completion.data.choices?.[0]?.message?.content || '';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -357,7 +357,11 @@ async function generateForLobe(lobe, count, outDir) {
 const args = process.argv.slice(2);
 const SINGLE_LOBE = args.includes('--lobe') ? args[args.indexOf('--lobe') + 1] : null;
 const ALL_LOBES = args.includes('--all');
-const COUNT = args.includes('--count') ? parseInt(args[args.indexOf('--count') + 1]) : 100;
+const COUNT = args.includes('--count') ? parseInt(args[args.indexOf('--count') + 1]) : 25;
+if ((!Number.isFinite(COUNT) || COUNT < 1) || (COUNT > 50 && !args.includes('--allow-large-batch'))) {
+    console.error('Count must be 1-50 unless --allow-large-batch is explicitly supplied.');
+    process.exit(1);
+}
 
 const LOBES_TO_RUN = ALL_LOBES
     ? ['logos', 'aurora', 'prometheus', 'thalamus']

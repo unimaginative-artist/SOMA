@@ -4,13 +4,17 @@
 class DriveSystem {
     constructor(config = {}) {
         this.tension        = 0.0;
+        this.boredom        = 0.0;
         this.satisfaction   = 0.0;
         this.lastActionAt   = Date.now();
         this.goalsCompleted = 0;
         this.tasksWorked    = 0;
+        this.ticksAtMaxTension = 0;
 
         this.config = {
             tensionBuildRate:       0.04,
+            boredomBuildRate:       0.05,
+            boredomDecayOnWander:   0.80,
             tensionDecayOnWork:     0.15,
             tensionDecayOnComplete: 0.50,
             urgencyRatePerMinute:   1.5,
@@ -24,17 +28,40 @@ class DriveSystem {
 
     onIdleTick() {
         this.tension      = Math.min(1.0, this.tension + this.config.tensionBuildRate);
+        this.boredom      = Math.min(1.0, this.boredom + this.config.boredomBuildRate);
         this.satisfaction = Math.max(0,   this.satisfaction - this.config.satisfactionDecayRate);
+        
+        if (this.tension >= 0.95) {
+            this.ticksAtMaxTension++;
+        } else {
+            this.ticksAtMaxTension = 0;
+        }
+    }
+
+    isCircuitBreakerTripped() {
+        return this.ticksAtMaxTension >= 10;
+    }
+
+    resetCircuitBreaker() {
+        this.tension = 0.0;
+        this.ticksAtMaxTension = 0;
+        this.satisfaction = 1.0;
+    }
+
+    onWanderComplete() {
+        this.boredom = Math.max(0, this.boredom - this.config.boredomDecayOnWander);
     }
 
     onTaskExecuted() {
         this.tension      = Math.max(0, this.tension - this.config.tensionDecayOnWork);
+        this.ticksAtMaxTension = 0;
         this.lastActionAt = Date.now();
         this.tasksWorked++;
     }
 
     onGoalComplete(goal) {
         this.tension      = Math.max(0, this.tension - this.config.tensionDecayOnComplete);
+        this.ticksAtMaxTension = 0;
         this.satisfaction = Math.min(1.0, this.satisfaction + 0.6);
         this.lastActionAt = Date.now();
         this.goalsCompleted++;
@@ -65,6 +92,7 @@ class DriveSystem {
     getStatus() {
         return {
             tension:         parseFloat(this.tension.toFixed(3)),
+            boredom:         parseFloat(this.boredom.toFixed(3)),
             satisfaction:    parseFloat(this.satisfaction.toFixed(3)),
             actionThreshold: parseFloat(this.getActionThreshold().toFixed(3)),
             isUrgent:        this.isUrgent(),

@@ -1,4 +1,8 @@
 import tradeLogger from '../finance/TradeLogger.js';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const { deriveGoalState, compileEvidencePreflight } = require('../../core/GoalLifecycle.cjs');
 
 /**
  * Builds a [VERIFIED OPERATIONAL TRUTH] block from real measured state so
@@ -40,10 +44,9 @@ export function buildOperationalTruthBlock(system = null) {
             const goals = Array.isArray(res) ? res : (res?.goals || []);
             if (goals.length > 0) {
                 const formatted = goals.slice(0, 5).map(g => {
-                    const p = g.metrics?.progress != null ? `${Math.round(g.metrics.progress)}%` : '0%';
-                    // 82% is the stuck-goal ceiling: executed iterations, never verified done.
-                    const stuck = (g.metrics?.progress >= 80 && g.status !== 'completed') ? ' (executed, NOT verified-complete)' : '';
-                    return `"${String(g.title || 'goal').slice(0, 70)}" — ${p}, ${g.status || 'pending'}${stuck}`;
+                    const state = deriveGoalState(g);
+                    const profile = compileEvidencePreflight(g).profile;
+                    return `"${String(g.title || 'goal').slice(0, 70)}" — ${state}, proof profile: ${profile}`;
                 }).join('; ');
                 lines.push(`Active goals (report progress ONLY from here, never invent a percentage): ${formatted}.`);
             } else {

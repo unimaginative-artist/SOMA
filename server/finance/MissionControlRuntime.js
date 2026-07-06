@@ -4,13 +4,16 @@ import strategyRegistry from './StrategyRegistry.js';
 import historicalDataCache from './HistoricalDataCache.js';
 import trainingJobRunner from './TrainingJobRunner.js';
 import { brokerAdapters } from './BrokerAdapter.js';
-import { applyTierProfile, clampTier, evaluatePromotionLadder, getTier, PROMOTION_TIERS } from './PromotionLadder.js';
+import { applyTierProfile, clampTier, evaluatePromotionLadder, getTier, hasRealOutOfSampleEvidence, PROMOTION_TIERS } from './PromotionLadder.js';
 import marketEvidenceStore from './MarketEvidenceStore.js';
+import tradingPerformanceGuard from './TradingPerformanceGuard.js';
+import { compileMarketLabEntry } from './MarketStrategyCompiler.js';
 import crypto from 'crypto';
 
 const DATA_DIR = path.join(process.cwd(), 'data', 'trading');
 const STATE_PATH = path.join(DATA_DIR, 'mission-control-runtime.json');
 const MARKET_LEDGER_PATH = path.join(process.cwd(), 'data', 'market-lab', 'strategy-ledger.json');
+const SIM_TO_LIVE_REPORT_PATH = path.join(DATA_DIR, 'sim-to-live-report.json');
 const UCB_STATE_PATH = path.join(DATA_DIR, 'strategy-ucb-state.json');
 
 const STRATEGY_PROFILES = {
@@ -59,6 +62,8 @@ class MissionControlRuntime {
             liveEligible: false,
             paperCapital: 10000,
             activeStrategy: null,
+            strategySelectionMode: 'auto',
+            manualStrategy: null,
             council: {
                 director: 0.55,
                 tech: 0.55,
@@ -69,12 +74,17 @@ class MissionControlRuntime {
             promotionPolicy: {
                 minClosedTrades: 100,
                 minWinRate: 60,
+                minWinRateWilsonLB: 52,
                 minProfitFactor: 1.4,
                 maxAvgSlippagePct: 0.25,
                 minMarketLabScore: 0.72,
                 minTestingDays: 7,
                 maxDrawdownPct: 12,
-                requireOutOfSample: true
+                requireOutOfSample: true,
+                // Trades before this ISO timestamp don't count toward promotion:
+                // everything earlier was earned under the '1Day'→1m poisoned regime
+                // data (fixed 2026-07-03) and measures a broken era, not the strategy.
+                statsSinceIso: '2026-07-03T14:00:00.000Z'
             },
             lastHydratedAt: null,
             lastPromotion: null
@@ -131,9 +141,69 @@ class MissionControlRuntime {
         }
     }
 
+    _readSimToLiveReport() {
+        try {
+            if (!fs.existsSync(SIM_TO_LIVE_REPORT_PATH)) return null;
+            return JSON.parse(fs.readFileSync(SIM_TO_LIVE_REPORT_PATH, 'utf8'));
+        } catch {
+            return null;
+        }
+    }
+
+    _hydrateFromSimToLive({ persist = true } = {}) {
+        const report = this._readSimToLiveReport();
+        const candidate = report?.selectedIncumbent || report?.paperQueue?.[0] || null;
+        if (!candidate?.strategyId || !candidate?.symbol) return null;
+
+        this.state.activeStrategy = {
+            source: 'sim_to_live',
+            state: candidate.state,
+            action: candidate.action,
+            candidateId: candidate.id || null,
+            candidateKey: candidate.key || null,
+            compiledStrategyId: candidate.compiledStrategy?.id || null,
+            symbol: candidate.symbol,
+            assetClass: candidate.assetClass || candidate.compiledStrategy?.assetClass || null,
+            strategyId: normalizeStrategyId(candidate.strategyId),
+            strategyName: candidate.compiledStrategy?.strategyName || candidate.strategyId,
+            score: Number(candidate.simulation?.score || 0),
+            priorityScore: Number(candidate.priorityScore || 0),
+            pnl: Number(candidate.paper?.totalPnl || 0),
+            pnlPct: 0,
+            winRate: Number(candidate.paper?.trades ? candidate.paper?.winRate : candidate.simulation?.winRate || 0),
+            trades: Number(candidate.paper?.trades || 0),
+            neededTrades: Number(candidate.neededTrades || 0),
+            liveCandidate: !!candidate.live?.candidate,
+            liveRequiresHumanApproval: candidate.live?.requiresHumanApproval !== false,
+            learnedAt: report.generatedAt || new Date().toISOString()
+        };
+        this.state.lastHydratedAt = new Date().toISOString();
+        if (persist) this._saveState();
+        return this.state.activeStrategy;
+    }
+
     hydrateFromMarketLab({ persist = true } = {}) {
+        if (this.state.strategySelectionMode === 'manual' && this.state.manualStrategy) {
+            this.state.activeStrategy = {
+                ...this.state.manualStrategy,
+                source: 'manual_override',
+                state: 'manual_override',
+                action: 'operator_selected',
+                liveRequiresHumanApproval: true,
+                learnedAt: this.state.manualStrategy.learnedAt || new Date().toISOString()
+            };
+            this.state.lastHydratedAt = new Date().toISOString();
+            if (persist) this._saveState();
+            return this.state.activeStrategy;
+        }
+
+        const simToLiveStrategy = this._hydrateFromSimToLive({ persist });
+        if (simToLiveStrategy) return simToLiveStrategy;
+
         const entries = this._readMarketLedger()
             .filter(entry => entry && entry.strategy && entry.metrics)
+            .map(entry => entry.compiledStrategy && entry.graduation ? entry : compileMarketLabEntry(entry))
+            .filter(entry => entry.graduation?.canPromoteToPaper)
             .sort((a, b) => {
                 const scoreA = Number(a.prometheusScore ?? a.metrics?.prometheusScore ?? 0);
                 const scoreB = Number(b.prometheusScore ?? b.metrics?.prometheusScore ?? 0);
@@ -175,7 +245,13 @@ class MissionControlRuntime {
 
     getActiveExecutionProfile({ symbol = null, preset = null, baseConfig = {} } = {}) {
         this.hydrateFromMarketLab();
-        const active = this.state.activeStrategy;
+        let active = this.state.activeStrategy;
+        
+        // Prevent symbol mismatch: If global active strategy is for SOL but trader asks for ETH, ignore it.
+        if (active && active.symbol && symbol && String(active.symbol).toUpperCase() !== String(symbol).toUpperCase()) {
+            active = null;
+        }
+
         const strategyId = normalizeStrategyId(active?.strategyId || preset);
         const learned = STRATEGY_PROFILES[strategyId] || null;
         const profile = learned || STRATEGY_PROFILES.standard_portfolio;
@@ -262,8 +338,9 @@ class MissionControlRuntime {
 
     evaluatePromotion({ recordEvidence = false } = {}) {
         this.hydrateFromMarketLab();
-        const liveStats = this.tradeLogger?.getStats?.(90) || {};
-        const closedTrades = this.tradeLogger?.getClosedTrades?.(90) || [];
+        const statsSince = this.state.promotionPolicy?.statsSinceIso || null;
+        const liveStats = this.tradeLogger?.getStats?.(90, { since: statsSince }) || {};
+        const closedTrades = this.tradeLogger?.getClosedTrades?.(90, { since: statsSince }) || [];
         const active = this.state.activeStrategy || {};
 
         // Merge live stats with market_lab validated stats.
@@ -287,7 +364,7 @@ class MissionControlRuntime {
         const testingDays = firstTradeTime ? (Date.now() - firstTradeTime) / 86400000 : 0;
         const worstTrade = closedTrades.reduce((min, trade) => Math.min(min, Number(trade.pnl_pct || 0)), 0);
         const latestTraining = trainingJobRunner.getStatus().jobs?.[0] || null;
-        const outOfSampleReady = !policy.requireOutOfSample || !!latestTraining?.best;
+        const outOfSampleReady = !policy.requireOutOfSample || hasRealOutOfSampleEvidence(latestTraining);
         const checks = {
             closedTrades: (stats.totalTrades || 0) >= policy.minClosedTrades,
             winRate: (stats.winRate || 0) >= policy.minWinRate,
@@ -387,6 +464,36 @@ class MissionControlRuntime {
     }
 
     updateRiskConfig(updates = {}) {
+        const selectionMode = updates.strategySelectionMode != null
+            ? String(updates.strategySelectionMode).toLowerCase()
+            : null;
+        if (selectionMode != null) {
+            const mode = selectionMode;
+            if (!['auto', 'manual'].includes(mode)) {
+                throw new Error('strategySelectionMode must be auto or manual');
+            }
+            this.state.strategySelectionMode = mode;
+        }
+        if (updates.manualStrategy && typeof updates.manualStrategy === 'object') {
+            const strategyId = normalizeStrategyId(updates.manualStrategy.strategyId || updates.manualStrategy.id);
+            if (!strategyId) throw new Error('manualStrategy.strategyId is required');
+            this.state.manualStrategy = {
+                source: 'manual_override',
+                symbol: updates.manualStrategy.symbol || null,
+                assetClass: updates.manualStrategy.assetClass || null,
+                strategyId,
+                strategyName: updates.manualStrategy.strategyName || updates.manualStrategy.name || strategyId,
+                score: Number(updates.manualStrategy.score || 0),
+                pnl: Number(updates.manualStrategy.pnl || 0),
+                winRate: Number(updates.manualStrategy.winRate || 0),
+                trades: Number(updates.manualStrategy.trades || 0),
+                reason: updates.manualStrategy.reason || 'Manual operator override',
+                learnedAt: new Date().toISOString()
+            };
+        }
+        if (selectionMode === 'auto') {
+            this.state.manualStrategy = null;
+        }
         if (updates.paperCapital != null) {
             this.state.paperCapital = clamp(updates.paperCapital, 1, 100000);
         }
@@ -463,6 +570,14 @@ class MissionControlRuntime {
             if (!strategies[id].byRegime) strategies[id].byRegime = {};
         }
 
+        const isStrategyAllowed = (id) => {
+            const verdict = tradingPerformanceGuard.evaluate({ strategyId: id });
+            if (!verdict.allowed) {
+                console.warn(`[MCR] Strategy ${id} quarantined by performance guard: ${verdict.reasons.join('; ')}`);
+            }
+            return verdict.allowed;
+        };
+
         const liveTotal = Object.values(strategies).reduce((sum, s) => sum + (s.live?.trials || 0), 0);
 
         // Regime-specific selection on LIVE data only
@@ -487,7 +602,7 @@ class MissionControlRuntime {
         }
 
         // Force exploration: any strategy with < 3 LIVE trials goes first
-        const underexplored = Object.entries(strategies).filter(([, s]) => (s.live?.trials || 0) < 3);
+        const underexplored = Object.entries(strategies).filter(([id, s]) => (s.live?.trials || 0) < 3 && isStrategyAllowed(id));
         if (underexplored.length > 0) {
             const [id] = underexplored[Math.floor(Math.random() * underexplored.length)];
             console.log(`[MCR] UCB1 live-explore: ${id} (${underexplored.length} strategies lack live data)`);
@@ -497,6 +612,7 @@ class MissionControlRuntime {
         // Global UCB1 on live ledger: liveAvgReward + C * sqrt(ln(liveTotal) / liveTrials)
         let bestId = null, bestScore = -Infinity;
         for (const [id, s] of Object.entries(strategies)) {
+            if (!isStrategyAllowed(id)) continue;
             const lt = s.live?.trials || 0;
             const exploit = lt >= 3 ? s.live.avgReward : (s.avgReward || 0) * SIM_PRIOR_DISCOUNT;
             const explore = C * Math.sqrt(Math.log(Math.max(liveTotal, 2)) / (lt || 1));
@@ -650,6 +766,8 @@ class MissionControlRuntime {
             promotionTiers: PROMOTION_TIERS,
             liveEligible: this.state.liveEligible,
             paperCapital: this.state.paperCapital,
+            strategySelectionMode: this.state.strategySelectionMode || 'auto',
+            manualStrategy: this.state.manualStrategy || null,
             activeStrategy: this.state.activeStrategy,
             council: this.state.council,
             promotionPolicy: this.state.promotionPolicy,

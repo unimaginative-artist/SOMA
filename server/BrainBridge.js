@@ -49,8 +49,18 @@ export class BrainBridge extends EventEmitter {
             workerCalls: 0,
             directCalls: 0,
             errors: 0,
-            avgLatencyMs: 0
+            avgLatencyMs: 0,
+            byProvider: {},
+            byLobe: {},
+            byModel: {},
+            routeMismatches: 0
         };
+        this._localRollouts = Object.fromEntries(
+            ['LOGOS', 'AURORA', 'PROMETHEUS', 'THALAMUS'].map(lobe => [
+                lobe,
+                Math.max(0, Math.min(100, Number(process.env[`SOMA_LOCAL_ROLLOUT_${lobe}`] || 0)))
+            ])
+        );
 
         console.log('[BrainBridge] Initialized — Phase 1 (direct) active');
     }
@@ -157,13 +167,14 @@ export class BrainBridge extends EventEmitter {
     async reason(query, context = {}) {
         this._stats.totalCalls++;
         const startTime = Date.now();
+        const routedContext = await this._resolveRouting(query, context);
 
         let result;
         if (!this._useWorker) {
             // Phase 1: direct call on main thread
             this._stats.directCalls++;
             try {
-                result = await this._direct.reason(query, context);
+                result = await this._direct.reason(query, routedContext);
             } catch (err) {
                 this._stats.errors++;
                 throw err;
@@ -178,13 +189,13 @@ export class BrainBridge extends EventEmitter {
                 if (this._pending.size > 50) {
                     console.warn('[BrainBridge] Worker queue full — falling back to direct for this call');
                     this._stats.directCalls++;
-                    this._direct.reason(query, context).then(resolve).catch(reject);
+                    this._direct.reason(query, routedContext).then(resolve).catch(reject);
                     return;
                 }
 
                 this._pending.set(id, { resolve, reject, startTime });
                 // Trim history before posting to worker — prevents unbounded message growth
-                const workerContext = { ...context };
+                const workerContext = { ...routedContext };
                 if (Array.isArray(workerContext.history) && workerContext.history.length > 20) {
                     workerContext.history = workerContext.history.slice(-20);
                 }
@@ -193,7 +204,9 @@ export class BrainBridge extends EventEmitter {
         }
 
         // 🛠️ MAIN THREAD TOOL EXECUTION LOOP (Handles worker tool results)
-        if (result && result.toolCall && !context.isAgenticTask && this._direct.toolRegistry) {
+        this._recordRouteResult(routedContext, result);
+
+        if (result && result.toolCall && !routedContext.isAgenticTask && this._direct.toolRegistry) {
             const toolCall = result.toolCall;
             console.log(`[BrainBridge] 🛠️ Tool execution triggered: ${toolCall.tool} (ID: ${this._msgId})`);
             
@@ -209,9 +222,9 @@ export class BrainBridge extends EventEmitter {
 
                 // Follow-up reasoning with tool result
                 const followupContext = {
-                    ...context,
-                    history: [...(context.history || [])],
-                    recentLearnings: (context.recentLearnings || '') + `\n\nTOOL OUTPUT (${toolCall.tool}):\n${outputStr}`,
+                    ...routedContext,
+                    history: [...(routedContext.history || [])],
+                    recentLearnings: (routedContext.recentLearnings || '') + `\n\nTOOL OUTPUT (${toolCall.tool}):\n${outputStr}`,
                     // FORCE natural language for the follow-up
                     systemOverride: "The requested tool has executed. Use the result provided in the history to answer the user's original question in natural language. DO NOT return any JSON."
                 };
@@ -262,7 +275,8 @@ export class BrainBridge extends EventEmitter {
                 workerStarting: this._workerStarting,
                 pendingCalls: this._pending.size,
                 stats: this._stats
-            }
+            },
+            localRollouts: { ...this._localRollouts }
         };
     }
 
@@ -271,12 +285,99 @@ export class BrainBridge extends EventEmitter {
     setLimbicState(s) { return this._direct?.setLimbicState?.(s); }
     async handleMessage(envelope) { return this._direct?.handleMessage?.(envelope); }
 
+    async updateModels(models = {}) {
+        if (models.baseModel) this._direct.ollamaModel = models.baseModel;
+        if (models.lobeModels && this._direct?.lobeModels) {
+            Object.assign(this._direct.lobeModels, models.lobeModels);
+            this._direct._ollamaModelCache = { models: null, ts: 0 };
+        }
+        if (!this._useWorker) return { updated: true, worker: false };
+        return this._requestWorker('update_models', models, 10000);
+    }
+
+    setLocalRollout(lobe, percent) {
+        const key = String(lobe || '').toUpperCase();
+        if (!(key in this._localRollouts)) throw new Error(`Unknown lobe: ${lobe}`);
+        this._localRollouts[key] = Math.max(0, Math.min(100, Number(percent) || 0));
+        return { lobe: key, percent: this._localRollouts[key] };
+    }
+
     // ── Internal helpers ───────────────────────────────────────
     _updateLatency(ms) {
         const n = this._stats.totalCalls;
         this._stats.avgLatencyMs = Math.round(
             (this._stats.avgLatencyMs * (n - 1) + ms) / n
         );
+    }
+
+    async _resolveRouting(query, context = {}) {
+        const valid = new Set(['LOGOS', 'AURORA', 'PROMETHEUS', 'THALAMUS']);
+        const explicit = String(context.activeLobe || context.preferredBrain || context.brain || '').toUpperCase();
+        if (valid.has(explicit)) {
+            return this._applyLocalRollout(query, {
+                ...context,
+                activeLobe: explicit,
+                routingDecision: context.routingDecision || { lobe: explicit, method: 'explicit_context', confidence: 1 }
+            });
+        }
+        if (context.disableAdaptiveRouting || typeof this._direct?.router?.route !== 'function') return context;
+        try {
+            const decision = await this._direct.router.route(String(query || ''), context);
+            const lobe = String(decision?.brain || '').toUpperCase();
+            if (!valid.has(lobe)) return { ...context, routingDecision: decision || null };
+            return this._applyLocalRollout(query, { ...context, activeLobe: lobe, routingDecision: { ...decision, lobe } });
+        } catch (error) {
+            return { ...context, routingDecision: { lobe: null, method: 'router_error', confidence: 0, error: error.message } };
+        }
+    }
+
+    _applyLocalRollout(query, context) {
+        if (context.forceLocal || context.disableLocalRollout) return context;
+        const lobe = context.activeLobe;
+        const percent = this._localRollouts[lobe] || 0;
+        if (percent <= 0) return context;
+        const key = `${context.sessionId || context.userId || ''}:${String(query || '')}`;
+        let hash = 2166136261;
+        for (let i = 0; i < key.length; i++) {
+            hash ^= key.charCodeAt(i);
+            hash = Math.imul(hash, 16777619);
+        }
+        const bucket = (hash >>> 0) % 100;
+        if (bucket >= percent) return context;
+        return {
+            ...context,
+            forceLocal: true,
+            routingDecision: { ...context.routingDecision, rollout: 'local_canary', rolloutPercent: percent, bucket }
+        };
+    }
+
+    _recordRouteResult(context, result) {
+        if (!result) return;
+        const increment = (bucket, key) => {
+            if (!key) return;
+            bucket[key] = (bucket[key] || 0) + 1;
+        };
+        increment(this._stats.byProvider, result.provider || 'unknown');
+        increment(this._stats.byLobe, result.brain || 'unknown');
+        increment(this._stats.byModel, result.model || 'unknown');
+        const requested = context?.routingDecision?.lobe || context?.activeLobe;
+        if (requested && result.brain && requested !== result.brain) this._stats.routeMismatches++;
+    }
+
+    _requestWorker(type, payload = {}, timeoutMs = 10000) {
+        const id = ++this._msgId;
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this._pending.delete(id);
+                reject(new Error(`BrainWorker ${type} timed out`));
+            }, timeoutMs);
+            this._pending.set(id, {
+                startTime: Date.now(),
+                resolve: value => { clearTimeout(timer); resolve(value); },
+                reject: error => { clearTimeout(timer); reject(error); }
+            });
+            this._worker.postMessage({ id, type, ...payload });
+        });
     }
 
     async shutdown() {

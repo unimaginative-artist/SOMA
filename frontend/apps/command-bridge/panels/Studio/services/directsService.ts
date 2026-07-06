@@ -3,12 +3,17 @@ import { ChatMessage, ChatSession } from '../types';
 export const axisHeaders = () => {
   let axisUser: any = null;
   try { axisUser = JSON.parse(localStorage.getItem('axis_user_v2') || 'null'); } catch {}
-  return {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'x-axis-user-id': axisUser?.id || 'studio-user',
     'x-axis-user-name': axisUser?.name || 'Studio User',
     'x-axis-user-color': axisUser?.color || 'violet',
   };
+  try {
+    const token = localStorage.getItem('studio_session_v1');
+    if (token) headers.Authorization = `Bearer ${token}`;
+  } catch {}
+  return headers;
 };
 
 export async function getDirects() {

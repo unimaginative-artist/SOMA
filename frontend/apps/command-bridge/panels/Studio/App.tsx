@@ -6,6 +6,7 @@ import GalleryWidget from './components/widgets/GalleryWidget';
 import { ProfileWidget } from './components/widgets/ProfileWidget';
 import HubFeedWidget from './components/widgets/HubFeedWidget';
 import ChatDetail from './components/views/ChatDetail';
+import PathwaysView from './components/views/PathwaysView';
 import CommunityView from './components/views/CommunityView';
 import CommunityHubView from './components/views/CommunityHubView';
 import PortfolioView from './components/views/PortfolioView';
@@ -130,6 +131,8 @@ function StudioSignInGate({
         location: data.profile?.location,
         timezone: data.profile?.timezone,
       };
+      if (data.token) localStorage.setItem('studio_session_v1', data.token);
+      localStorage.setItem('studio_user_v2', JSON.stringify(data.user));
       localStorage.setItem('axis_user_v2', JSON.stringify(axisUser));
       window.dispatchEvent(new CustomEvent('studio:profile-saved', { detail: data.profile }));
       onRegistered(data.profile);
@@ -392,6 +395,9 @@ function App() {
           } else if (view === 'ecosystem') {
               setCurrentView('ecosystem');
               window.scrollTo({ top: 0, behavior: 'smooth' });
+          } else if (view === 'stage') {
+              setCurrentView('stage');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
           } else if (view === 'chats') {
               setCurrentView('chats');
               if (context?.chat) setActiveChat(context.chat);
@@ -403,11 +409,18 @@ function App() {
           }
       };
 
+      // The Stage iframe (Studio.dc.html) posts this when its logo is clicked.
+      const handleStageMessage = (e: MessageEvent) => {
+          if (e?.data?.type === 'studio-stage-exit') handleNavigate('home');
+      };
+
       window.addEventListener('app:navigate', handleAppNavigate);
       window.addEventListener('studio:navigate', handleAppNavigate);
+      window.addEventListener('message', handleStageMessage);
       return () => {
           window.removeEventListener('app:navigate', handleAppNavigate);
           window.removeEventListener('studio:navigate', handleAppNavigate);
+          window.removeEventListener('message', handleStageMessage);
       };
   }, []);
 
@@ -487,6 +500,8 @@ function App() {
 
   const signOutStudio = () => {
       localStorage.setItem('studio:signed-out', 'true');
+      localStorage.removeItem('studio_session_v1');
+      localStorage.removeItem('studio_user_v2');
       localStorage.removeItem('axis_user_v2');
       setAccountMenuOpen(false);
       setSignedOut(true);
@@ -497,7 +512,7 @@ function App() {
       {profileStatus !== 'loading' && studioProfile && (!identityRegistered || signedOut) && (
         <StudioSignInGate profile={studioProfile} onRegistered={handleIdentityRegistered} mode={identityRegistered ? 'signin' : 'register'} />
       )}
-      {identityRegistered && !signedOut && !activeChat && currentView !== 'home' && currentView !== 'ecosystem' && currentView !== 'profile-editor' && (
+      {identityRegistered && !signedOut && !activeChat && currentView !== 'home' && currentView !== 'ecosystem' && currentView !== 'stage' && currentView !== 'profile-editor' && (
         <div className="fixed right-4 top-4 z-[90]">
           <button
             onClick={() => setAccountMenuOpen(v => !v)}
@@ -589,6 +604,20 @@ function App() {
                             />
                         </div>
                     )}
+                </motion.div>
+            )}
+
+            {/* PATHWAYS VIEW — Scatter Protocol P2P (Snapchat × BitChat) */}
+            {currentView === 'pathways' && (
+                <motion.div
+                    key="pathways"
+                    initial="initial" animate="in" exit="out" variants={pageVariants} transition={pageTransition}
+                    className="w-full min-h-screen"
+                >
+                    <PathwaysView
+                        currentUser={userProfile}
+                        onBack={() => handleNavigate('home')}
+                    />
                 </motion.div>
             )}
 
@@ -689,6 +718,25 @@ function App() {
                 </motion.div>
             )}
 
+            {/* STAGE VIEW — the full Studio experience (Current / Flux / Brainrot / Signals / Live / Communities) */}
+            {currentView === 'stage' && (
+                <motion.div
+                    key="stage"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.3 }}
+                    className="fixed inset-0 z-[100] w-full bg-[#06060a]"
+                >
+                    <iframe
+                        src="/stage/Studio.dc.html"
+                        title="Studio Stage"
+                        className="absolute inset-0 h-full w-full border-0"
+                        allow="autoplay; fullscreen; clipboard-read; clipboard-write"
+                    />
+                </motion.div>
+            )}
+
             {currentView === 'studio-space' && activeIdentity && (
                 <motion.div
                     key="studio-space"
@@ -707,8 +755,8 @@ function App() {
           </AnimatePresence>
       </main>
 
-      {!activeChat && currentView !== 'ecosystem' && currentView !== 'profile-editor' && (
-          <BottomNav 
+      {!activeChat && currentView !== 'ecosystem' && currentView !== 'stage' && currentView !== 'profile-editor' && (
+          <BottomNav
             currentView={currentView}
             onNavigate={handleNavigate}
             theme={navTheme}

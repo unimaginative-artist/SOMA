@@ -4415,19 +4415,39 @@ const PALETTE_CMDS = [
 ];
 
 function CommandPalette({ files, onOpenFile, onRunCmd, onClose }) {
-  const [q, setQ] = React.useState('');
+  const [q, setQ] = React.useState(window.__paletteInitialQuery || '');
   const [selIdx, setSelIdx] = React.useState(0);
+  const [serverSymbols, setServerSymbols] = React.useState([]);
   const inputRef = React.useRef(null);
-  React.useEffect(()=>{ inputRef.current?.focus(); }, []);
+  
+  React.useEffect(()=>{ 
+    if (window.__paletteInitialQuery) { window.__paletteInitialQuery = null; }
+    inputRef.current?.focus(); 
+  }, []);
 
+  React.useEffect(() => {
+    if (q.startsWith('@') && q.length > 1) {
+      const term = q.slice(1);
+      fetch('/api/pulse/ast/symbols?limit=25&query=' + encodeURIComponent(term))
+        .then(r=>r.json()).then(d=>{ if(d.success) setServerSymbols(d.symbols); });
+    } else { setServerSymbols([]); }
+  }, [q]);
+
+  const isSym = q.startsWith('@');
   const flatAll = (arr) => (arr||[]).flatMap(f => f.type==='dir' ? flatAll(f.children||[]) : [f]);
   const allFiles = flatAll(files);
-  const fileItems = allFiles
+  const fileItems = isSym ? [] : allFiles
     .filter(f => !q || f.name.toLowerCase().includes(q.toLowerCase()))
+    .slice(0, 30)
     .map(f => ({ type:'file', icon:'file', label:f.name, f }));
-  const cmdItems = PALETTE_CMDS
+  const cmdItems = isSym ? [] : PALETTE_CMDS
     .filter(c => !q || c.label.includes(q.toLowerCase()) || c.hint.toLowerCase().includes(q.toLowerCase()));
-  const allItems = [...fileItems, ...cmdItems];
+  const symItems = isSym ? serverSymbols.map(s => ({
+    type:'symbol', icon:'code', label: `${s.name} (${s.type})`, hint: s.file_path, 
+    f: { name: s.file_path.split('/').pop(), path: s.file_path, line: s.start_line }
+  })) : [];
+  
+  const allItems = [...fileItems, ...symItems, ...cmdItems];
 
   const onKey = e => {
     if (e.key==='ArrowDown'){ e.preventDefault(); setSelIdx(i=>Math.min(i+1,allItems.length-1)); }
@@ -4438,7 +4458,7 @@ function CommandPalette({ files, onOpenFile, onRunCmd, onClose }) {
 
   const pick = item => {
     if (!item) return;
-    if (item.type==='file') onOpenFile(item.f);
+    if (item.type==='file' || item.type==='symbol') onOpenFile(item.f);
     else onRunCmd(item.action);
     onClose();
   };
@@ -4448,7 +4468,7 @@ function CommandPalette({ files, onOpenFile, onRunCmd, onClose }) {
       <div className="palette-box" onClick={e=>e.stopPropagation()}>
         <div className="palette-input-row">
           <span style={{display:'flex',color:'var(--muted)'}}>{ICONS.search}</span>
-          <input ref={inputRef} className="palette-input" placeholder="Search files, run commands…"
+          <input ref={inputRef} className="palette-input" placeholder="Search files (@ for symbols), run commands…"
             value={q} onChange={e=>{setQ(e.target.value);setSelIdx(0);}} onKeyDown={onKey}/>
           <span style={{fontSize:11,color:'var(--muted2)',fontFamily:'var(--mono)'}}>Esc</span>
         </div>
@@ -4456,19 +4476,32 @@ function CommandPalette({ files, onOpenFile, onRunCmd, onClose }) {
           {fileItems.length>0 && <>
             <div className="palette-section-label">Files</div>
             {fileItems.map((item,i)=>(
-              <div key={item.label} className={`palette-item ${selIdx===i?'sel':''}`} onClick={()=>pick(item)}>
+              <div key={`file-${i}`} className={`palette-item ${selIdx===i?'sel':''}`} onClick={()=>pick(item)}>
                 <span className="pi-icon">{ICONS.file}</span>
                 <span className="pi-label">{item.label}</span>
                 <span className="pi-badge">open</span>
               </div>
             ))}
           </>}
+          {symItems.length>0 && <>
+            <div className="palette-section-label">Symbols</div>
+            {symItems.map((item,i)=>{
+              const globalIdx = fileItems.length+i;
+              return (
+                <div key={`sym-${i}`} className={`palette-item ${selIdx===globalIdx?'sel':''}`} onClick={()=>pick(item)}>
+                  <span className="pi-icon" style={{color:'var(--accent)'}}>{ICONS.code||'<>'}</span>
+                  <span className="pi-label">{item.label}</span>
+                  <span className="pi-hint" style={{fontSize:11}}>{item.hint}:{item.f.line}</span>
+                </div>
+              );
+            })}
+          </>}
           {cmdItems.length>0 && <>
             <div className="palette-section-label">Commands</div>
             {cmdItems.map((item,i)=>{
-              const globalIdx = fileItems.length+i;
+              const globalIdx = fileItems.length+symItems.length+i;
               return (
-                <div key={item.label} className={`palette-item ${selIdx===globalIdx?'sel':''}`} onClick={()=>pick(item)}>
+                <div key={`cmd-${i}`} className={`palette-item ${selIdx===globalIdx?'sel':''}`} onClick={()=>pick(item)}>
                   <span className="pi-icon">{ICONS[item.icon]||ICONS.bolt}</span>
                   <span className="pi-label">{item.label}</span>
                   <span className="pi-hint">{item.hint}</span>
@@ -4482,7 +4515,7 @@ function CommandPalette({ files, onOpenFile, onRunCmd, onClose }) {
           <span><kbd>↑↓</kbd> navigate</span>
           <span><kbd>Enter</kbd> open</span>
           <span><kbd>Esc</kbd> close</span>
-          <span style={{marginLeft:'auto'}}><kbd>Ctrl</kbd>+<kbd>K</kbd> to reopen</span>
+          <span style={{marginLeft:'auto'}}><kbd>Ctrl</kbd>+<kbd>P</kbd> to search symbols</span>
         </div>
       </div>
     </div>
@@ -5026,10 +5059,13 @@ function getMonacoLanguage(fileName) {
   return map[ext] || 'plaintext';
 }
 
-function MonacoEditor({ fileName, content, onChange, readOnly, langOverride, pendingChange, onAcceptPending, onRejectPending }) {
+function MonacoEditor({ fileName, content, onChange, readOnly, langOverride, pendingChange, onAcceptPending, onRejectPending, onInlineGenerate }) {
   const containerRef = React.useRef(null);
   const editorRef    = React.useRef(null);
   const modelRef     = React.useRef(null);
+  const inlineInputRef = React.useRef(null);
+  const [inlineOpen, setInlineOpen] = React.useState(false);
+  const [inlineInput, setInlineInput] = React.useState('');
 
   const [blastRadius, setBlastRadius] = React.useState(null);
   const [showBlastRadiusDetails, setShowBlastRadiusDetails] = React.useState(false);
@@ -5249,6 +5285,46 @@ function MonacoEditor({ fileName, content, onChange, readOnly, langOverride, pen
         });
         editorRef.current = editor;
 
+        window.jumpToLine = (line) => {
+          editor.revealLineInCenter(line);
+          editor.setPosition({ lineNumber: line, column: 1 });
+          editor.focus();
+        };
+
+        editor.addCommand(window.monaco.KeyMod.CtrlCmd | window.monaco.KeyCode.KeyP, () => {
+          document.dispatchEvent(new CustomEvent('pulse-cmd-palette', { detail: '@' }));
+        });
+
+        const openInline = () => {
+          setInlineOpen(true);
+          setTimeout(() => inlineInputRef.current?.focus(), 50);
+        };
+        editor.addCommand(window.monaco.KeyMod.CtrlCmd | window.monaco.KeyCode.KeyK, openInline);
+        editor.addCommand(window.monaco.KeyMod.CtrlCmd | window.monaco.KeyCode.KeyI, openInline);
+
+        editor.addAction({
+          id: 'trace-type-deps',
+          label: 'Find All References (Type Level)',
+          contextMenuGroupId: 'navigation',
+          contextMenuOrder: 1.5,
+          run: (ed) => {
+            const position = ed.getPosition();
+            const word = ed.getModel().getWordAtPosition(position);
+            if (word) {
+              fetch('/api/pulse/ast/types/trace?typeName=' + encodeURIComponent(word.word))
+                .then(r=>r.json()).then(data=>{
+                  if (data.success && data.references && data.references.length > 0) {
+                     alert(`Found ${data.references.length} usages of type '${data.typeName}'.\n\n` + 
+                           data.references.slice(0, 5).map(r => `- ${r.caller} in ${r.filePath}:${r.line}`).join('\n') +
+                           (data.references.length > 5 ? '\n...and more' : ''));
+                  } else {
+                     alert(`No type usages found for '${word.word}'`);
+                  }
+                });
+            }
+          }
+        });
+
         if (onChange) {
           model.onDidChangeContent(() => {
             onChange(model.getValue());
@@ -5450,6 +5526,37 @@ function MonacoEditor({ fileName, content, onChange, readOnly, langOverride, pen
           )}
         </div>
       )}
+
+      {inlineOpen && (
+        <div style={{
+          position: 'absolute', top: '15%', left: '50%', transform: 'translateX(-50%)',
+          width: 450, background: 'var(--bg)', border: '1px solid var(--border)',
+          borderRadius: 8, boxShadow: '0 12px 40px rgba(0,0,0,0.8)', zIndex: 100,
+          display: 'flex', flexDirection: 'column', overflow: 'hidden'
+        }}>
+          <div style={{ padding: '8px 12px', background: 'var(--s2)', borderBottom: '1px solid var(--border)', fontSize: 11, color: 'var(--muted)', display: 'flex', justifyContent: 'space-between' }}>
+            <span>{ICONS.bolt} Generate Inline (Cmd+K)</span>
+            <span style={{ cursor: 'pointer' }} onClick={() => setInlineOpen(false)}>{ICONS.close}</span>
+          </div>
+          <input 
+            ref={inlineInputRef}
+            style={{ width: '100%', padding: '12px', background: 'transparent', border: 'none', color: 'var(--text)', outline: 'none', fontFamily: 'var(--ui)', fontSize: 13 }}
+            placeholder="What should SOMA build here?"
+            value={inlineInput}
+            onChange={e => setInlineInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Escape') setInlineOpen(false);
+              if (e.key === 'Enter' && inlineInput.trim() && onInlineGenerate) {
+                e.preventDefault();
+                onInlineGenerate(inlineInput, editorRef.current?.getSelection());
+                setInlineOpen(false);
+                setInlineInput('');
+              }
+            }}
+          />
+        </div>
+      )}
+
       <div ref={containerRef} style={{width:'100%', height:'100%', minHeight:300, flex:1}} />
     </div>
   );
@@ -6269,6 +6376,8 @@ function App() {
   const [problemCount, setProblemCount] = useState(0);
   const [termInput, setTermInput]     = useState('');
   const [termRunning, setTermRunning] = useState(false);
+  const [aiTermInput, setAiTermInput] = useState('');
+  const [aiTermTranslating, setAiTermTranslating] = useState(false);
   const [termHistory, setTermHistory] = useState([]);
   const [termHistIdx, setTermHistIdx] = useState(-1);
   const termBodyRef = useRef(null);
@@ -6468,10 +6577,22 @@ function App() {
   useEffect(()=>{
     const handler = e => {
       if ((e.metaKey||e.ctrlKey) && e.key==='k') { e.preventDefault(); setShowPalette(p=>!p); }
+      if ((e.metaKey||e.ctrlKey) && e.key==='p') { e.preventDefault(); document.dispatchEvent(new CustomEvent('pulse-cmd-palette', { detail: '@' })); }
       if (e.key==='Escape') setShowPalette(false);
     };
     window.addEventListener('keydown', handler);
     return ()=>window.removeEventListener('keydown', handler);
+  }, []);
+
+  useEffect(() => {
+    const handleCmdPalette = (e) => {
+      setShowPalette(true);
+      if (e.detail) {
+        window.__paletteInitialQuery = e.detail;
+      }
+    };
+    document.addEventListener('pulse-cmd-palette', handleCmdPalette);
+    return () => document.removeEventListener('pulse-cmd-palette', handleCmdPalette);
   }, []);
   const inputRef = useRef(null);
   const sseRef = useRef(null);
@@ -6997,7 +7118,7 @@ function App() {
         
         socketRef.current.send(JSON.stringify({
           type: 'chat_request',
-          message: text,
+          message: resolvedPrompt,
           requestId: msgId2,
           tier: mode==='swarm'?'code':activeTier
         }));
@@ -7008,7 +7129,7 @@ function App() {
       // REST fallback: main code chat talks to SOMA; preview bubble talks to Steve for refinement.
       const endpoint=showPreview?'/api/pulse/arbiter/steve-assist':mode==='swarm'?'/api/swarm':mode==='debate'?'/api/debate':'/api/chat';
       const body=showPreview
-        ? {message:text, history:steveMessages.slice(-8).map(m=>({role:m.role==='user'?'user':'assistant', content:m.text||''})), context:{
+        ? {message:resolvedPrompt, history:steveMessages.slice(-8).map(m=>({role:m.role==='user'?'user':'assistant', content:m.text||''})), context:{
             surface:'pulse-preview',
             agent:'steve',
             stream:true,
@@ -7028,7 +7149,7 @@ function App() {
             activeTabPath,
             source:activeSource
           }}
-        : mode==='swarm'?{task:text}:mode==='debate'?{topic:text}:{message:text, model:activeModel, tier:activeTier};
+        : mode==='swarm'?{task:resolvedPrompt}:mode==='debate'?{topic:resolvedPrompt}:{message:resolvedPrompt, model:activeModel, tier:activeTier};
       const controller = new AbortController();
       activeAbortControllerRef.current = controller;
 
@@ -7458,6 +7579,28 @@ function App() {
     }
   };
 
+  const handleAiTerminal = async () => {
+    if (!aiTermInput.trim() || aiTermTranslating || termRunning) return;
+    setAiTermTranslating(true);
+    try {
+      const res = await fetch(maxUrl + '/api/pulse/terminal/translate', {
+        method: 'POST', headers: authHdrs(),
+        body: JSON.stringify({ prompt: aiTermInput })
+      });
+      const data = await res.json();
+      if (data.success && data.command) {
+        setTermInput(data.command);
+        setAiTermInput('');
+        if (termInputRef.current) termInputRef.current.focus();
+      } else {
+        setTermLines(l => [...l, { id: Date.now(), type: 'err', text: 'AI could not translate that request.' }]);
+      }
+    } catch (e) {
+      setTermLines(l => [...l, { id: Date.now(), type: 'err', text: 'AI Translation error: ' + e.message }]);
+    }
+    setAiTermTranslating(false);
+  };
+
   const runCommand = async (cmd) => {
     if (!cmd.trim() || termRunning) return;
     const id = Date.now();
@@ -7709,6 +7852,9 @@ function App() {
     if (connected && (fileContents[path] === undefined || f.forceReload)) {
       const content = await readFile2(path);
       if (content !== null) setFileContents(c => ({...c, [path]: content}));
+    }
+    if (f.line) {
+      setTimeout(() => { if (window.jumpToLine) window.jumpToLine(f.line); }, 250);
     }
   };
   // Keep ref fresh so the SSE handler (closed over on mount) always calls the latest openFile
@@ -8168,6 +8314,15 @@ function App() {
                   pendingChange={activePendingChange}
                   onAcceptPending={handleAcceptPendingChange}
                   onRejectPending={handleRejectPendingChange}
+                  onInlineGenerate={(prompt, sel) => {
+                     let msg = `INLINE EDIT REQUEST: ${prompt}\nFile: ${activeTab}`;
+                     if (sel && sel.startLineNumber !== sel.endLineNumber) {
+                       const lines = (edContent||'').split('\n');
+                       const target = lines.slice(sel.startLineNumber-1, sel.endLineNumber).join('\n');
+                       msg += `\nTarget lines ${sel.startLineNumber}-${sel.endLineNumber}:\n${target}`;
+                     }
+                     sendMessage(msg);
+                  }}
                 />
               );
             })()}
@@ -8204,6 +8359,20 @@ function App() {
                     </div>
                   ))}
                   {termRunning && <div className="term-line"><span className="term-info"><span className="term-spinner">◌</span> running…</span></div>}
+                </div>
+                <div className="ai-term-row" style={{display:'flex', gap:8, padding:'6px 12px', background:'var(--s2)', borderBottom:'1px solid var(--border)', alignItems:'center'}}>
+                  <span style={{color:'var(--accent)', fontSize:14}}>{ICONS.bolt}</span>
+                  <input className="term-input" style={{fontFamily:'var(--ui)', fontSize:12, flex:1, background:'transparent', border:'none', color:'var(--text)', outline:'none'}}
+                    placeholder="AI Terminal: What do you want to do? (e.g., undo last commit)"
+                    value={aiTermInput} onChange={e=>setAiTermInput(e.target.value)}
+                    onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); handleAiTerminal(); } }}
+                    disabled={aiTermTranslating || termRunning || !connected} spellCheck="false"
+                  />
+                  {aiTermTranslating && <span className="term-spinner" style={{color:'var(--accent)',fontSize:13}}>◌</span>}
+                  <button style={{padding:'3px 10px', background:'var(--accent)', border:'none', borderRadius:4, color:'#fff', cursor:'pointer', fontSize:11, fontWeight:600}} 
+                          onClick={handleAiTerminal} disabled={aiTermTranslating || termRunning || !connected}>
+                    Translate
+                  </button>
                 </div>
                 <div className="term-input-row">
                   <span className="term-prompt">❯</span>

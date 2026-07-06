@@ -21,6 +21,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { execSync } from 'child_process';
+import deepSeekGateway from '../server/core/DeepSeekGateway.js';
 
 const ROOT = process.cwd();
 const MAX_STEPS    = 10;
@@ -887,34 +888,24 @@ Begin your investigation. Read the file first.`;
 
     async _callBrain(systemPrompt, history) {
         const dsKey = this.quadBrain?.deepseekApiKey || process.env.DEEPSEEK_API_KEY;
+        const dailyLimit = Math.max(0, Number(process.env.SOMA_NEMESIS_DEEPSEEK_DAILY_CALL_LIMIT || 30));
 
         if (dsKey) {
-            const ctrl  = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), BRAIN_TIMEOUT);
             try {
-                const res = await fetch('https://api.deepseek.com/v1/chat/completions', {
-                    method:  'POST',
-                    headers: {
-                        'Content-Type':  'application/json',
-                        'Authorization': `Bearer ${dsKey}`
-                    },
-                    body: JSON.stringify({
-                        model:       'deepseek-chat',
-                        messages: [
-                            { role: 'system', content: systemPrompt },
-                            ...history
-                        ],
-                        temperature: 0.2,   // analytical, not creative
-                        max_tokens:  700
-                    }),
-                    signal: ctrl.signal
+                const completion = await deepSeekGateway.complete({
+                    apiKey: dsKey,
+                    model: 'deepseek-chat',
+                    messages: [{ role: 'system', content: systemPrompt }, ...history],
+                    temperature: 0.2,
+                    maxTokens: 700,
+                    timeoutMs: BRAIN_TIMEOUT,
+                    priority: 'background',
+                    actor: 'NemesisArbiter',
+                    action: 'adversarial_review',
+                    dailyCallLimit: dailyLimit,
                 });
-                clearTimeout(timer);
-                if (!res.ok) throw new Error(`DeepSeek ${res.status}: ${await res.text()}`);
-                const data = await res.json();
-                return data.choices?.[0]?.message?.content || '';
+                return completion.data.choices?.[0]?.message?.content || '';
             } catch (e) {
-                clearTimeout(timer);
                 if (e.name !== 'AbortError') console.warn(`[${this.name}] DeepSeek failed: ${e.message}`);
             }
         }
@@ -1229,6 +1220,48 @@ Reply with ONLY this JSON (no other text):
         }
     }
 
+    async evaluateSimulation(goal, planText) {
+        if (!planText || typeof planText !== 'string') return 0.5;
+
+        // Fast penalty for obvious failures
+        const text = planText.toLowerCase();
+        if (text.includes('i cannot') || text.includes('as an ai')) return 0.1;
+        if (!text.includes('think:') && !text.includes('tool:') && !text.includes('done:')) return 0.2;
+
+        try {
+            // Call the LLM to score the proposed plan against the goal
+            const prompt = `Evaluate this proposed action for a complex agentic goal.
+Goal: ${goal.title || 'Unknown'}
+Context/Requirements: ${goal.description || 'N/A'}
+
+Proposed Agentic Action:
+${planText.slice(0, 1500)}
+
+Score this action from 0.0 to 1.0 based on:
+1. Does it use a valid tool call or DONE block?
+2. Does it make logical sense toward achieving the goal?
+3. Is it safe (e.g. not deleting the root directory)?
+
+Output ONLY a JSON object with a single "score" key (number 0.0-1.0).`;
+
+            let score = 0.5;
+            if (this.quadBrain && typeof this.quadBrain.executeDirect === 'function') {
+                const res = await this.quadBrain.executeDirect('You are an adversarial plan critic.', prompt, { temperature: 0.1 });
+                const text = res?.text || '';
+                const match = text.match(/"score"\s*:\s*(0\.\d+|1\.0|0|1)/);
+                if (match) {
+                    score = parseFloat(match[1]);
+                }
+            } else if (this.system?.ollamaAutoTrainer?.brain) { // fallback
+                 // Some other fallback brain
+            }
+            return score;
+        } catch (e) {
+            console.warn(`[${this.name}] evaluateSimulation error:`, e.message);
+            return 0.5; // Neutral fallback
+        }
+    }
+
     async evaluateResponse(brain, message, result, geminiCallback, visualContext = '') {
         const responseText = result?.text || result?.response || '';
         if (!responseText) {
@@ -1333,6 +1366,92 @@ Rules: score >= 0.70 means acceptable. needsRevision = true only if score < 0.70
                 reason:       `evaluation error: ${e.message}`,
                 linguistic:   { summary: 'evaluation error' }
             };
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // TRAINING / DISTILLATION WIRING (SOMA'S SELF-IMPROVEMENT)
+    // ─────────────────────────────────────────────────────────────────────
+    
+    wireMessageBroker(messageBroker) {
+        if (!messageBroker) return;
+        this.messageBroker = messageBroker;
+        
+        // Listen to when a goal finishes so Nemesis can critique the work
+        this.messageBroker.subscribe('soma.goal.completed', async (envelope) => {
+            const payload = envelope?.payload || envelope || {};
+            await this.critiqueOwnWork(payload, 'soma.goal.completed');
+        }, { arbiterId: this.name + '_goal_completion' });
+        
+        // Listen to agentic successes for direct distillation
+        this.messageBroker.subscribe('AGENTIC_TRAJECTORY_SUCCESS', async (envelope) => {
+            const payload = envelope?.payload || envelope || {};
+            await this.critiqueOwnWork(payload, 'AGENTIC_TRAJECTORY_SUCCESS');
+        }, { arbiterId: this.name + '_agentic_success' });
+        
+        console.log(`[${this.name}] 🧠 Wired to message broker. Actively monitoring self-behavior for distillation.`);
+    }
+
+    async critiqueOwnWork(payload, source) {
+        if (!payload || (!payload.id && !payload.goalId)) return;
+        
+        const goalId = payload.id || payload.goalId;
+        console.log(`\n[${this.name}] 🧐 Investigating completed work for goal: ${goalId} (${source})`);
+        
+        try {
+            // Build a small evidence package based on what was done
+            const description = payload.description || payload.title || "Unknown work";
+            const outcome = payload.result?.final_answer || payload.outcome || "Executed autonomously";
+            
+            // Just a lightweight critique prompt using the brain
+            if (!this.quadBrain) return;
+            
+            const evalPrompt = `
+You are NEMESIS, SOMA's adversarial critic.
+SOMA just completed a goal autonomously.
+Goal: ${description}
+Outcome / Output: ${outcome}
+
+Evaluate the quality, safety, and thoroughness of this work.
+Score it between 0.0 and 1.0. (1.0 = perfect, 0.0 = terrible).
+Return JSON only: {"score": 0.9, "critique": "short reason"}`;
+
+            const result = await this.quadBrain.reason(evalPrompt, {
+                preferredBrain: 'MAX',
+                quickResponse: true
+            });
+            
+            const text = result?.text || result?.response || '';
+            const match = text.match(/\{[\s\S]*?\}/);
+            if (!match) return;
+            
+            const parsed = JSON.parse(match[0]);
+            const score = parsed.score || 0;
+            const critique = parsed.critique || "No critique";
+            
+            console.log(`[${this.name}] ⚖️  Self-Critique Score: ${score} - ${critique}`);
+            
+            if (score >= 0.85 && this.messageBroker) {
+                console.log(`[${this.name}] 🌟 GOLDEN TRAJECTORY! Sending to distillation pipeline...`);
+                this.messageBroker.publish('GOLDEN_TRAJECTORY', {
+                    goalId,
+                    description,
+                    outcome,
+                    score,
+                    critique
+                });
+            } else if (score < 0.60) {
+                console.log(`[${this.name}] 💀 POOR WORK. Logging to graveyard for DPO-adjacent learning.`);
+                // Could call persistFailedResponse or write to graveyard
+                const dir = path.join(ROOT, 'SOMA', 'training-data', 'graveyard');
+                await fs.mkdir(dir, { recursive: true }).catch(() => {});
+                await fs.writeFile(
+                    path.join(dir, `nemesis_rejection_${Date.now()}.json`), 
+                    JSON.stringify({ goalId, description, outcome, score, critique }, null, 2)
+                ).catch(() => {});
+            }
+        } catch (error) {
+            console.error(`[${this.name}] Self-critique error: ${error.message}`);
         }
     }
 }

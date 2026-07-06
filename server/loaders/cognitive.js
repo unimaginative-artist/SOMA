@@ -37,6 +37,7 @@ const BeliefSystemModule = require('../../arbiters/BeliefSystemArbiter.cjs');
 const LearningVelocityTrackerModule = require('../../arbiters/LearningVelocityTracker.cjs');
 const TimekeeperArbiter = require('../../arbiters/TimekeeperArbiter.cjs');
 const SteveArbiter = require('../../arbiters/SteveArbiter.cjs');
+const { SwarmDelegationArbiter } = require('../../arbiters/SwarmDelegationArbiter.cjs');
 const ExecutiveCortexArbiter = require('../../arbiters/ExecutiveCortexArbiter.js').ExecutiveCortexArbiter || require('../../arbiters/ExecutiveCortexArbiter.js').default || require('../../arbiters/ExecutiveCortexArbiter.js');
 const SensoryCortexArbiter = require('../../arbiters/SensoryCortexArbiter.js').SensoryCortexArbiter || require('../../arbiters/SensoryCortexArbiter.js').default || require('../../arbiters/SensoryCortexArbiter.js');
 const ImmuneCortexArbiter = require('../../arbiters/ImmuneCortexArbiter.js').ImmuneCortexArbiter || require('../../arbiters/ImmuneCortexArbiter.js').default || require('../../arbiters/ImmuneCortexArbiter.js');
@@ -209,7 +210,13 @@ export async function loadCognitiveSystems(toolRegistry = null) {
         graphify: graphify,
         rootPath: process.cwd()
     });
-    system.goalPlanner = new GoalPlannerArbiter({ name: 'GoalPlanner', messageBroker, quadBrain, maxActiveGoals: 100 });
+    system.goalPlanner = new GoalPlannerArbiter({
+        name: 'GoalPlanner',
+        messageBroker,
+        quadBrain,
+        maxActiveGoals: Math.max(5, Number(process.env.SOMA_MAX_ACTIVE_GOALS || 20)),
+    });
+    system.swarmDelegation = new SwarmDelegationArbiter({ name: 'SwarmDelegationArbiter', system });
     system.beliefSystem = new BeliefSystemArbiter({ name: 'BeliefSystem', messageBroker, quadBrain });
     system.distillation = new DistillationArbiter({ messageBroker, quadBrain, beliefSystem: system.beliefSystem });
     system.substrateOptimizer = new SubstrateOptimizerArbiter({ name: 'SubstrateOptimizer' });
@@ -238,6 +245,7 @@ export async function loadCognitiveSystems(toolRegistry = null) {
 
     await Promise.all([
         initIfPossible(system.goalPlanner, 'GoalPlanner'),
+        initIfPossible(system.swarmDelegation, 'SwarmDelegationArbiter'),
         initIfPossible(system.beliefSystem, 'BeliefSystem'),
         initIfPossible(system.distillation, 'DistillationArbiter'),
         initIfPossible(system.museEngine, 'MuseEngine'),

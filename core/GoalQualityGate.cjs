@@ -2,6 +2,7 @@ const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { normalizeGoalContract } = require('./LearningSpine.cjs');
+const { compileEvidencePreflight } = require('./GoalLifecycle.cjs');
 
 const DEFAULT_STOPWORDS = new Set([
   'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'goal',
@@ -91,7 +92,7 @@ function runCommand(command, repoRoot) {
   }
 }
 
-function verifyGoal(goal = {}, result = {}, options = {}) {
+async function verifyGoal(goal = {}, result = {}, options = {}) {
   const repoRoot = options.repoRoot || process.cwd();
   const metadata = goal.metadata || {};
   const contract = metadata.goalContract || normalizeGoalContract(goal);
@@ -101,6 +102,7 @@ function verifyGoal(goal = {}, result = {}, options = {}) {
     ? evidence.completionEvidence
     : null;
   const checks = [];
+  const preflight = compileEvidencePreflight(goal);
 
   const criteria = result.successCriteria || metadata.successCriteria || goal.successCriteria || contract.successCriteria || [];
   for (let index = 0; index < criteria.length; index++) {
@@ -138,6 +140,31 @@ function verifyGoal(goal = {}, result = {}, options = {}) {
       passed,
       output: passed ? 'Evidence present' : `Missing required evidence: ${key}`
     });
+  }
+
+  const artifactValue = result.artifact || evidence.artifact || result.file || result.filepath || result.path || evidence.file || evidence.filepath || evidence.path;
+  if (['code', 'research'].includes(preflight.profile) && artifactValue) {
+    let artifactPath = null;
+    let artifactContent = '';
+    try {
+      artifactPath = safeResolve(repoRoot, artifactValue);
+      artifactContent = fs.readFileSync(artifactPath, 'utf8');
+      checks.push({ type: 'artifact_readback', file: artifactValue, passed: artifactContent.trim().length > 0, output: 'Artifact exists and is non-empty' });
+    } catch (error) {
+      checks.push({ type: 'artifact_readback', file: artifactValue, passed: false, output: error.message });
+    }
+    if (preflight.profile === 'research') {
+      const sources = Array.isArray(result.sources) ? result.sources : Array.isArray(evidence.sources) ? evidence.sources : [];
+      const sourceCount = sources.length + (artifactContent.match(/https?:\/\/\S+/g) || []).length;
+      checks.push({ type: 'source_trail', label: 'Research source trail', passed: sourceCount > 0, output: `${sourceCount} source reference(s)` });
+    }
+  }
+
+  if (preflight.profile === 'memory') {
+    const memoryReceipt = scopedEvidence?.checks?.some(check => check?.passed && /memory|recall|receipt/i.test(`${check.type || ''} ${check.tool || ''}`)) ||
+      checks.some(check => check.passed && /memory|receipt/i.test(`${check.type || ''} ${check.label || ''}`)) ||
+      Boolean(result.receipt || evidence.receipt);
+    checks.push({ type: 'memory_receipt', label: 'Memory write/readback receipt', passed: memoryReceipt, output: memoryReceipt ? 'Memory receipt present' : 'Missing memory write and retrieval evidence' });
   }
 
   if (verification?.commands && Array.isArray(verification.commands)) {
@@ -181,7 +208,7 @@ function verifyGoal(goal = {}, result = {}, options = {}) {
     toolsUsed.some(tool => ['modify_code', 'pulse_stage_code'].includes(tool)) ||
     (toolsUsed.includes('write_file') && /\.(?:js|cjs|mjs|ts)$/i.test(String(writtenPath)))
   );
-  const requiresExecutableProof = Boolean(verification?.requiresExecutableProof || metadata.requiresExecutableProof || codeTouched);
+  const requiresExecutableProof = Boolean(preflight.requiresExecutableProof || verification?.requiresExecutableProof || metadata.requiresExecutableProof || codeTouched);
   if (requiresExecutableProof) {
     const commandPassed = checks.some(check => check.type === 'command' && check.passed);
     const syntaxPassed = Boolean(result.verifySyntax || evidence.verifySyntax || checks.some(check => check.type === 'syntax' && check.passed));
@@ -207,11 +234,53 @@ function verifyGoal(goal = {}, result = {}, options = {}) {
   }
 
   const passed = checks.every(check => check.passed);
+  
+  // ----------------------------------------------------
+  // POSEIDON PROTOCOL VERIFICATION
+  // ----------------------------------------------------
+  let poseidonVerdict = null;
+  
+  if (!result.force) {
+    try {
+        const { Poseidon } = await import('./Poseidon.js');
+        const poseidon = new Poseidon();
+        
+        const claim = `Goal Completed: ${goal.title}`;
+        
+        // A true falsification test must be a physical verification, not just text or success criteria assertions
+        const validPhysicalTestTypes = ['command', 'file_exists', 'contains', 'syntax', 'executable_proof', 'artifact_readback'];
+        const physicalChecks = checks.filter(c => c.passed && validPhysicalTestTypes.includes(c.type));
+        
+        const falsificationTest = physicalChecks.length > 0 
+            ? `Physical checks passed: ${physicalChecks.map(c => c.type).join(', ')}` 
+            : null;
+            
+        poseidonVerdict = await poseidon.verify(claim, {
+            falsificationTest: falsificationTest,
+            testResult: passed
+        });
+        
+        if (poseidonVerdict) {
+            checks.push({
+                type: 'poseidon_protocol',
+                label: 'Poseidon Ternary Certification',
+                passed: poseidonVerdict.state === 'TRUE',
+                output: poseidonVerdict.reason
+            });
+        }
+    } catch (e) {
+        console.error("Poseidon Verification Error:", e);
+    }
+  }
+
+  const finalPassed = passed && (!poseidonVerdict || poseidonVerdict.state === 'TRUE');
+
   return {
-    passed,
+    passed: finalPassed,
     checkedAt: Date.now(),
     checks,
-    score: checks.length ? Math.round((checks.filter(c => c.passed).length / checks.length) * 100) : 0
+    score: checks.length ? Math.round((checks.filter(c => c.passed).length / checks.length) * 100) : 0,
+    poseidon: poseidonVerdict
   };
 }
 

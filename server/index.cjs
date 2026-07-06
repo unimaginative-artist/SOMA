@@ -62,6 +62,11 @@ class SOMAServer {
         const notificationRoutes = (await import('./routes/notificationRoutes.js')).default;
         this.app.use('/api/notifications', notificationRoutes);
         console.log('    📡 Mounted /api/notifications routes');
+        
+        // Mount MAX bidirectional control channel
+        const maxControlChannel = require('./routes/maxControlChannel.js')(this.orchestrator);
+        this.app.use('/api/max', maxControlChannel);
+        console.log('    📡 Mounted /api/max bidirectional control channel');
     } catch (e) {
         console.warn('    ⚠️ Failed to mount dynamic routes:', e.message);
     }

@@ -17,6 +17,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const workLedger = require('../core/AutonomousWorkLedger.cjs');
+const { isHumanGoal } = require('../core/GoalLifecycle.cjs');
 
 const RESEARCH_CATEGORIES = new Set([
     'learning', 'research', 'knowledge_synthesis', 'github_discovery',
@@ -64,7 +65,9 @@ export class GoalExecutorDaemon extends BaseDaemon {
             if (goal.status !== 'pending' && goal.status !== 'proposed') continue;
             if (goal.metadata?._executorSkip) continue;
             if ((this._retryMap.get(goal.id) || 0) >= MAX_RETRIES) continue;
-            if (!best || (goal.priority || 0) > (best.priority || 0)) best = goal;
+            const score = (goal.priority || 0) + (isHumanGoal(goal) ? 100 : 0);
+            const bestScore = best ? (best.priority || 0) + (isHumanGoal(best) ? 100 : 0) : -Infinity;
+            if (!best || score > bestScore) best = goal;
         }
         return best;
     }

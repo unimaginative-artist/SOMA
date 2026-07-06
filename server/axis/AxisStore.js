@@ -243,6 +243,18 @@ class AxisStore {
         try { this.db.prepare("ALTER TABLE communities ADD COLUMN rules TEXT DEFAULT ''").run();          } catch {}
         try { this.db.prepare("ALTER TABLE communities ADD COLUMN links TEXT DEFAULT '[]'").run();        } catch {}
         try { this.db.prepare("ALTER TABLE communities ADD COLUMN moderation_tone TEXT DEFAULT 'thoughtful'").run(); } catch {}
+        // Robust community creation — branding, handle, join policy, SOMA assist, workspace link
+        try { this.db.prepare("ALTER TABLE communities ADD COLUMN color TEXT DEFAULT ''").run(); } catch {}
+        try { this.db.prepare("ALTER TABLE communities ADD COLUMN handle TEXT DEFAULT ''").run(); } catch {}
+        try { this.db.prepare("ALTER TABLE communities ADD COLUMN theme TEXT DEFAULT ''").run(); } catch {}
+        try { this.db.prepare("ALTER TABLE communities ADD COLUMN join_policy TEXT DEFAULT 'open'").run(); } catch {}
+        try { this.db.prepare("ALTER TABLE communities ADD COLUMN soma_assist INTEGER DEFAULT 1").run(); } catch {}
+        try { this.db.prepare("ALTER TABLE communities ADD COLUMN soma_features TEXT DEFAULT '[]'").run(); } catch {}
+        try { this.db.prepare("ALTER TABLE communities ADD COLUMN structure TEXT DEFAULT ''").run(); } catch {}
+        try { this.db.prepare("ALTER TABLE communities ADD COLUMN workspace_id TEXT").run(); } catch {}
+        try { this.db.prepare("ALTER TABLE communities ADD COLUMN verified INTEGER DEFAULT 0").run(); } catch {}
+        try { this.db.prepare("ALTER TABLE communities ADD COLUMN updated_at INTEGER").run(); } catch {}
+        try { this.db.prepare("ALTER TABLE community_members ADD COLUMN status TEXT DEFAULT 'active'").run(); } catch {}
 
         // FTS5 search index — wrapped so a bad SQLite FTS5 build doesn't crash the store
         try {
@@ -791,6 +803,14 @@ class AxisStore {
             ...row,
             tags: parse(row.tags, []),
             links: parse(row.links, []),
+            rules: parse(row.rules, []),
+            soma_features: parse(row.soma_features, []),
+            soma_assist: row.soma_assist == null ? true : !!row.soma_assist,
+            is_public: !!row.is_public,
+            verified: !!row.verified,
+            join_policy: row.join_policy || 'open',
+            color: row.color || '',
+            handle: row.handle || '',
             post_count: postCount,
             latest_post_at: latestPostAt,
             merit_score,
@@ -825,14 +845,60 @@ class AxisStore {
         const role = this.getCommunityRole(communityId, userId);
         return community?.creator_id === userId || role === 'admin' || role === 'mod';
     }
-    createCommunity({ name, description = '', icon = '🌐', coverImage = '', creatorId, creatorName, isPublic = true, category = 'General', tags = [], rules = '', links = [], moderationTone = 'thoughtful' }) {
-        const id = `com-${uid()}`, now = Date.now();
-        this.db.prepare('INSERT INTO communities (id,name,description,icon,cover_image,creator_id,creator_name,is_public,member_count,category,tags,rules,links,moderation_tone,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-            .run(id, name, description, icon, coverImage, creatorId, creatorName, isPublic ? 1 : 0, 1, category || 'General', JSON.stringify(Array.isArray(tags) ? tags : []), rules || '', JSON.stringify(Array.isArray(links) ? links : []), moderationTone || 'thoughtful', now);
-        this.joinCommunity(id, { userId: creatorId, userName: creatorName, role: 'admin' });
+    uniqueCommunityHandle(base) {
+        let h = String(base || 'community').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'community';
+        let cand = h, n = 1;
+        while (this.db.prepare('SELECT 1 FROM communities WHERE handle = ?').get(cand)) cand = `${h}-${++n}`;
+        return cand;
+    }
+    createCommunity({
+        name, description = '', icon = '🌐', coverImage = '', creatorId, creatorName, isPublic = true,
+        category = 'General', tags = [], rules = [], links = [], moderationTone = 'thoughtful',
+        color = '', handle = '', theme = '', joinPolicy = 'open', somaAssist = true, somaFeatures = [],
+        channels = [], structure = '', verified = false,
+    } = {}) {
+        if (!name || !String(name).trim()) throw new Error('Community name is required');
+        const id = `c-${uid()}`, now = Date.now();
+        const finalHandle = this.uniqueCommunityHandle(handle || name);
+        const rulesJson = JSON.stringify(Array.isArray(rules) ? rules : (rules ? [rules] : []));
+        this.db.prepare(`INSERT INTO communities
+            (id,name,description,icon,cover_image,creator_id,creator_name,is_public,member_count,category,tags,rules,links,moderation_tone,color,handle,theme,join_policy,soma_assist,soma_features,structure,verified,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+            .run(id, String(name).trim(), description, icon, coverImage, creatorId, creatorName, isPublic ? 1 : 0, 1,
+                category || 'General', JSON.stringify(Array.isArray(tags) ? tags : []), rulesJson,
+                JSON.stringify(Array.isArray(links) ? links : []), moderationTone || 'thoughtful',
+                color || '', finalHandle, theme || '', joinPolicy || 'open', somaAssist ? 1 : 0,
+                JSON.stringify(Array.isArray(somaFeatures) ? somaFeatures : []), structure || '', verified ? 1 : 0, now, now);
+        // Founder is admin
+        this.joinCommunity(id, { userId: creatorId, userName: creatorName, role: 'admin', force: true });
+        // A real workspace + channels back the community (not just a feed)
+        try {
+            const ws = this.createWorkspace({
+                name, icon: (typeof icon === 'string' && icon.length <= 4) ? icon : '💬',
+                color: color || 'blue', createdBy: creatorId, type: 'community', description, community_id: id,
+            });
+            const extra = (Array.isArray(channels) ? channels : []).map(c => String(c || '').trim())
+                .filter(Boolean).filter(c => c.toLowerCase() !== 'general');
+            for (const ch of extra) { try { this.createChannel({ workspaceId: ws.id, name: ch, createdBy: creatorId }); } catch {} }
+            this.db.prepare('UPDATE communities SET workspace_id = ? WHERE id = ?').run(ws.id, id);
+        } catch {}
+        // SOMA "welcome" assist drops a founding post
+        try {
+            const wantsWelcome = somaAssist && (!Array.isArray(somaFeatures) || !somaFeatures.length || somaFeatures.some(f => /welcome/i.test(f)));
+            if (wantsWelcome) this.createCommunityPost({ communityId: id, authorId: creatorId, authorName: creatorName,
+                content: `${String(name).trim()} is live. ${description || 'Welcome — introduce yourself and start the first thread.'}`.trim() });
+        } catch {}
         return this.getCommunity(id, { userId: creatorId });
     }
-    updateCommunity(id, { name, description, icon, coverImage, isPublic, category, tags, rules, links, moderationTone } = {}) {
+    approveCommunityMember(communityId, userId) {
+        this.db.prepare("UPDATE community_members SET status = 'active' WHERE community_id = ? AND user_id = ?").run(communityId, userId);
+        this.db.prepare("UPDATE communities SET member_count = (SELECT COUNT(*) FROM community_members WHERE community_id = ? AND status = 'active') WHERE id = ?").run(communityId, communityId);
+        return this.getCommunityRole(communityId, userId);
+    }
+    getCommunityJoinRequests(communityId) {
+        return this.db.prepare("SELECT * FROM community_members WHERE community_id = ? AND status = 'pending' ORDER BY joined_at ASC").all(communityId);
+    }
+    updateCommunity(id, { name, description, icon, coverImage, isPublic, category, tags, rules, links, moderationTone, color, handle, theme, joinPolicy, somaAssist, somaFeatures, structure, verified } = {}) {
         const fields = [], vals = [];
         if (name        !== undefined) { fields.push('name = ?');        vals.push(name); }
         if (description !== undefined) { fields.push('description = ?'); vals.push(description); }
@@ -841,18 +907,31 @@ class AxisStore {
         if (isPublic    !== undefined) { fields.push('is_public = ?');   vals.push(isPublic ? 1 : 0); }
         if (category    !== undefined) { fields.push('category = ?');    vals.push(category || 'General'); }
         if (tags        !== undefined) { fields.push('tags = ?');        vals.push(JSON.stringify(Array.isArray(tags) ? tags : [])); }
-        if (rules       !== undefined) { fields.push('rules = ?');       vals.push(rules || ''); }
+        if (rules       !== undefined) { fields.push('rules = ?');       vals.push(JSON.stringify(Array.isArray(rules) ? rules : (rules ? [rules] : []))); }
         if (links       !== undefined) { fields.push('links = ?');       vals.push(JSON.stringify(Array.isArray(links) ? links : [])); }
         if (moderationTone !== undefined) { fields.push('moderation_tone = ?'); vals.push(moderationTone || 'thoughtful'); }
+        if (color       !== undefined) { fields.push('color = ?');       vals.push(color || ''); }
+        if (handle      !== undefined) { fields.push('handle = ?');      vals.push(handle || ''); }
+        if (theme       !== undefined) { fields.push('theme = ?');       vals.push(theme || ''); }
+        if (joinPolicy  !== undefined) { fields.push('join_policy = ?'); vals.push(joinPolicy || 'open'); }
+        if (somaAssist  !== undefined) { fields.push('soma_assist = ?'); vals.push(somaAssist ? 1 : 0); }
+        if (somaFeatures !== undefined) { fields.push('soma_features = ?'); vals.push(JSON.stringify(Array.isArray(somaFeatures) ? somaFeatures : [])); }
+        if (structure   !== undefined) { fields.push('structure = ?');   vals.push(structure || ''); }
+        if (verified    !== undefined) { fields.push('verified = ?');    vals.push(verified ? 1 : 0); }
         if (!fields.length) return this.getCommunity(id);
+        fields.push('updated_at = ?'); vals.push(Date.now());
         vals.push(id);
         this.db.prepare(`UPDATE communities SET ${fields.join(', ')} WHERE id = ?`).run(...vals);
         return this.getCommunity(id);
     }
     deleteCommunity(id) { this.db.prepare('DELETE FROM communities WHERE id = ?').run(id); }
-    joinCommunity(communityId, { userId, userName, userAvatar = '', role = 'member' }) {
-        this.db.prepare('INSERT OR IGNORE INTO community_members (community_id,user_id,user_name,user_avatar,role,joined_at) VALUES (?,?,?,?,?,?)').run(communityId, userId, userName, userAvatar, role, Date.now());
-        this.db.prepare('UPDATE communities SET member_count = (SELECT COUNT(*) FROM community_members WHERE community_id = ?) WHERE id = ?').run(communityId, communityId);
+    joinCommunity(communityId, { userId, userName, userAvatar = '', role = 'member', force = false }) {
+        const com = this.db.prepare('SELECT join_policy, creator_id FROM communities WHERE id = ?').get(communityId);
+        const policy = (com && com.join_policy) || 'open';
+        const status = (!force && role === 'member' && policy !== 'open' && (!com || com.creator_id !== userId)) ? 'pending' : 'active';
+        this.db.prepare('INSERT OR IGNORE INTO community_members (community_id,user_id,user_name,user_avatar,role,status,joined_at) VALUES (?,?,?,?,?,?,?)').run(communityId, userId, userName, userAvatar, role, status, Date.now());
+        this.db.prepare("UPDATE communities SET member_count = (SELECT COUNT(*) FROM community_members WHERE community_id = ? AND status = 'active') WHERE id = ?").run(communityId, communityId);
+        return { status };
     }
     leaveCommunity(communityId, userId) {
         this.db.prepare('DELETE FROM community_members WHERE community_id = ? AND user_id = ?').run(communityId, userId);

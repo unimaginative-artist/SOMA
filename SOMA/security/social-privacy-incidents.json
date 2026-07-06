@@ -1,0 +1,14 @@
+[
+  {
+    "id": "social-privacy-2026-06-27-3mpbve7eclk2r",
+    "detectedAt": 1782604147733,
+    "platform": "bluesky",
+    "queueId": "sq-1782577275035-tiyy",
+    "postUri": "at://did:plc:vaveioytrpxynt4kzbug57yq/app.bsky.feed.post/3mpbve7eclk2r",
+    "contentSha256": "1d9aa33e53878da34c9ee4aac73acb0fb3d498fa3c2247f78285bf05606547f8",
+    "contentStored": false,
+    "remoteDeleted": true,
+    "localCopiesRedacted": true,
+    "cause": "private prompt context echoed by generation model and passed an incomplete outbound safety gate"
+  }
+]

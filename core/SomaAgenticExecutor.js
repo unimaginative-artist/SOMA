@@ -31,13 +31,22 @@ import { getAgentsForRole } from './AgentCapabilityContracts.js';
 import { validateArtifactBatch } from './AgentArtifactValidator.js';
 import { recordCapabilityTruth, recordTruth } from './TruthLedger.js';
 import { resolveWithinRoot } from './PathSafety.js';
+import { compileMarketLabLedger } from '../server/finance/MarketStrategyCompiler.js';
+import { SimToLiveReconciler } from './signals/generator/SimToLiveReconciler.js';
+import compiledStrategyBacktester from '../server/finance/CompiledStrategyBacktester.js';
+import deepSeekGateway from '../server/core/DeepSeekGateway.js';
+import { ArchitectureReorganizationService } from './ArchitectureReorganizationService.js';
+import { ArchitectureCensusService } from './ArchitectureCensusService.js';
 
 const require = createRequire(import.meta.url);
 const { atomicWriteJson } = require('./AtomicJsonStore.cjs');
+const { compileEvidencePreflight, deriveGoalState } = require('./GoalLifecycle.cjs');
 const execFileAsync = promisify(execFile);
 const ROOT = process.cwd();
 const PULSE_SELF_MOD_ROOT = path.join(ROOT, 'data', 'code-lab', 'sandbox', 'pulse-self-mod');
 const DELEGATION_DIR = path.join(ROOT, 'data', 'agent-delegations');
+const MARKET_LAB_LEDGER_PATH = path.join(ROOT, 'data', 'market-lab', 'strategy-ledger.json');
+const SIM_TO_LIVE_REPORT_PATH = path.join(ROOT, 'data', 'trading', 'sim-to-live-report.json');
 
 function safeStageId(input = '') {
     return String(input || 'stage')
@@ -64,6 +73,8 @@ export class SomaAgenticExecutor {
 
         this._tools = null; // built lazily after initialize
         this._poseidon = new Poseidon({ threshold: 0.75 });
+        this._architectureReorganization = new ArchitectureReorganizationService({ root: ROOT });
+        this._architectureCensus = new ArchitectureCensusService({ root: ROOT });
     }
 
     initialize(deps = {}) {
@@ -151,6 +162,140 @@ export class SomaAgenticExecutor {
                 }
             },
 
+            // ── Market simulation suite ─────────────────────────────────
+
+            market_lab_status: {
+                description: 'Inspect SOMA Market Lab compiled strategy ledger. Use before making trading claims or selecting a paper strategy.',
+                args: '{"limit":5}',
+                execute: async ({ limit = 5 } = {}) => {
+                    try {
+                        const raw = await fs.readFile(MARKET_LAB_LEDGER_PATH, 'utf8').catch(() => '[]');
+                        const entries = JSON.parse(raw);
+                        const compiled = compileMarketLabLedger(Array.isArray(entries) ? entries : []);
+                        const ready = compiled.entries
+                            .filter(entry => entry.graduation?.canPromoteToPaper)
+                            .sort((a, b) => (b.prometheusScore || 0) - (a.prometheusScore || 0))
+                            .slice(0, Math.max(1, Math.min(20, Number(limit) || 5)))
+                            .map(entry => ({
+                                id: entry.id,
+                                symbol: entry.asset?.symbol || entry.symbol,
+                                strategyId: entry.strategy?.id || entry.strategyId,
+                                status: entry.graduation?.status || entry.status,
+                                score: entry.prometheusScore,
+                                winRate: entry.metrics?.winRate,
+                                profitFactor: entry.metrics?.profitFactor,
+                                averageDollarPnl: entry.paperAccount?.averageDollarPnl ?? entry.metrics?.averageDollarPnl,
+                                paperOnly: true
+                            }));
+                        return {
+                            success: true,
+                            summary: compiled.summary,
+                            ready,
+                            instruction: 'Only ready_for_paper entries may influence paper strategy selection. Never generalize a result across symbols.'
+                        };
+                    } catch (e) {
+                        return { error: `market_lab_status failed: ${e.message}` };
+                    }
+                }
+            },
+
+            market_lab_compile: {
+                description: 'Recompile SOMA Market Lab ledger into symbol-bound strategy contracts and graduation states. Use after market simulations complete.',
+                args: '{}',
+                execute: async () => {
+                    try {
+                        const raw = await fs.readFile(MARKET_LAB_LEDGER_PATH, 'utf8').catch(() => '[]');
+                        const entries = JSON.parse(raw);
+                        const compiled = compileMarketLabLedger(Array.isArray(entries) ? entries : []);
+                        await fs.mkdir(path.dirname(MARKET_LAB_LEDGER_PATH), { recursive: true });
+                        await fs.writeFile(MARKET_LAB_LEDGER_PATH, JSON.stringify(compiled.entries.slice(0, 500), null, 2), 'utf8');
+                        return {
+                            success: true,
+                            summary: compiled.summary,
+                            ledgerPath: path.relative(ROOT, MARKET_LAB_LEDGER_PATH).replace(/\\/g, '/'),
+                            instruction: 'Compiled entries remain paper-only. Live trading still requires separate human review.'
+                        };
+                    } catch (e) {
+                        return { error: `market_lab_compile failed: ${e.message}` };
+                    }
+                }
+            },
+
+            sim_to_live_status: {
+                description: 'Inspect the sim-to-live trading ladder. Use before claiming a strategy is ready for paper, incumbent, or live review.',
+                args: '{}',
+                execute: async () => {
+                    try {
+                        const raw = await fs.readFile(SIM_TO_LIVE_REPORT_PATH, 'utf8').catch(() => null);
+                        if (!raw) {
+                            return {
+                                success: true,
+                                ready: false,
+                                instruction: 'No sim-to-live report exists yet. Run sim_to_live_reconcile first.'
+                            };
+                        }
+                        const report = JSON.parse(raw);
+                        return {
+                            success: true,
+                            ready: true,
+                            generatedAt: report.generatedAt,
+                            summary: report.summary,
+                            selectedIncumbent: report.selectedIncumbent,
+                            paperQueue: Array.isArray(report.paperQueue) ? report.paperQueue.slice(0, 5) : [],
+                            instruction: report.instruction
+                        };
+                    } catch (e) {
+                        return { error: `sim_to_live_status failed: ${e.message}` };
+                    }
+                }
+            },
+
+            sim_to_live_reconcile: {
+                description: 'Run the sim-to-live reconciliation now. Simulation nominates strategies; exact paper evidence validates them; live still needs human approval.',
+                args: '{}',
+                execute: async () => {
+                    try {
+                        const report = await new SimToLiveReconciler({ reportPath: SIM_TO_LIVE_REPORT_PATH }).runReconciliation();
+                        return {
+                            success: true,
+                            summary: report.summary,
+                            selectedIncumbent: report.selectedIncumbent,
+                            reportPath: report.reportPath,
+                            instruction: report.instruction
+                        };
+                    } catch (e) {
+                        return { error: `sim_to_live_reconcile failed: ${e.message}` };
+                    }
+                }
+            },
+
+            sim_to_live_backtest: {
+                description: 'Backtest current sim-to-live paper candidates against local historical bars. Use before promoting any strategy from simulation.',
+                args: '{"limit":10,"timeframe":"5Min"}',
+                execute: async ({ limit = 10, timeframe = '5Min' } = {}) => {
+                    try {
+                        const report = await compiledStrategyBacktester.runFromSimToLiveReport(undefined, { limit, timeframe });
+                        return {
+                            success: true,
+                            summary: report.summary,
+                            results: report.results.map(row => ({
+                                key: row.key,
+                                status: row.status,
+                                timeframe: row.timeframe,
+                                verdict: row.verdict || null,
+                                trades: row.backtest?.trades ?? null,
+                                pnl: row.backtest?.totalPnl ?? null,
+                                winRate: row.backtest?.winRate ?? null,
+                                profitFactor: row.backtest?.profitFactor ?? null
+                            })),
+                            instruction: 'A positive backtest is not enough for live. Paper trading must still validate the exact strategy/symbol pair.'
+                        };
+                    } catch (e) {
+                        return { error: `sim_to_live_backtest failed: ${e.message}` };
+                    }
+                }
+            },
+
             // ── File system (sandboxed to SOMA root) ──────────────────────
 
             read_file: {
@@ -212,6 +357,22 @@ export class SomaAgenticExecutor {
                             .map(e => ({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' }))
                             .slice(0, 60);
                         return { files, path: directory, total: entries.length };
+                    } catch (e) {
+                        return { error: e.message };
+                    }
+                }
+            },
+
+
+            system_search: {
+                description: "Search the entire filesystem (all mounted volumes) for a file by name. Use this when you cannot find a file in your immediate workspace.",
+                args: '{"filename":"string to search for"}',
+                execute: async ({ filename }) => {
+                    try {
+                        const { promisify } = require('util');
+                        const execFileAsync = promisify(require('child_process').execFile);
+                        const { stdout } = await execFileAsync('powershell', ['-Command', `Get-ChildItem -Path C:\ -Filter *${filename}* -Recurse -ErrorAction SilentlyContinue | Select-Object -First 20 FullName`]);
+                        return { matches: stdout.split('\n').map(s => s.trim()).filter(Boolean) };
                     } catch (e) {
                         return { error: e.message };
                     }
@@ -620,6 +781,42 @@ export class SomaAgenticExecutor {
                 }
             },
 
+            architecture_census: {
+                description: 'Run a full architecture census: classify every source module under core/, arbiters/, server/, daemons/, cognitive/, src/ as active or candidate-unused (with stubbed tags) based on a codebase-wide reference scan. Writes data/architecture-census/latest.json — the required evidence base for architecture_reorg_plan. Run this FIRST before any reorganization.',
+                args: '{}',
+                execute: async () => {
+                    try {
+                        return await this._architectureCensus.run();
+                    } catch (error) {
+                        return { success: false, error: error.message };
+                    }
+                }
+            },
+
+            architecture_reorg_plan: {
+                description: 'Plan a reversible quarantine move for ONE census-confirmed unused source file. This performs census, reference, protected-path, and syntax checks but does not move anything.',
+                args: '{"source":"relative source file path listed as candidate-unused in data/architecture-census/latest.json"}',
+                execute: async ({ source }) => {
+                    try {
+                        return await this._architectureReorganization.plan({ source });
+                    } catch (error) {
+                        return { success: false, error: error.message };
+                    }
+                }
+            },
+
+            architecture_reorg_apply: {
+                description: 'Apply one exact unexpired architecture quarantine plan. Requires the plan path and confirmation token returned by architecture_reorg_plan. Never deletes files and automatically rolls back failed verification.',
+                args: '{"planPath":"data/architecture-reorganization/plans/<id>.json","confirmationToken":"token from the staged plan"}',
+                execute: async ({ planPath, confirmationToken }) => {
+                    try {
+                        return await this._architectureReorganization.apply({ planPath, confirmationToken });
+                    } catch (error) {
+                        return { success: false, error: error.message };
+                    }
+                }
+            },
+
             // ── Self-modification (Engineering Swarm) ─────────────────────
             // Full adversarial pipeline: debate → synthesis → syntax check → verify.
             // SOMA's one tool for actually changing her own source code.
@@ -677,7 +874,7 @@ export class SomaAgenticExecutor {
                         await fs.mkdir(dir, { recursive: true });
                         const file = path.join(dir, `${this._currentGoalId}.json`);
                         const compacted = (this._currentObservations || []).map(obs => this._compactObservation(obs));
-                        const evidenceTools = new Set(['write_file', 'run_tests', 'verify_syntax', 'pulse_stage_code', 'modify_code', 'spawn_agents', 'memory_store']);
+                        const evidenceTools = new Set(['write_file', 'run_tests', 'verify_syntax', 'pulse_stage_code', 'modify_code', 'architecture_census', 'architecture_reorg_plan', 'architecture_reorg_apply', 'spawn_agents', 'memory_store']);
                         atomicWriteJson(file, {
                             version: 2,
                             goalId:       this._currentGoalId,
@@ -746,7 +943,7 @@ export class SomaAgenticExecutor {
 
     _factSatisfies(requirement, fact) {
         if (!fact?.passed) return false;
-        const artifactTypes = new Set(['artifact_exists', 'sandbox_stage', 'code_modification', 'delegation_artifact', 'memory_receipt']);
+        const artifactTypes = new Set(['artifact_exists', 'sandbox_stage', 'code_modification', 'architecture_reorganization', 'delegation_artifact', 'memory_receipt']);
         if (requirement === 'inspection') return fact.type === 'inspection';
         if (requirement === 'executable') return ['tests', 'syntax', 'sandbox_stage'].includes(fact.type);
         if (requirement === 'artifact') return artifactTypes.has(fact.type);
@@ -767,7 +964,7 @@ export class SomaAgenticExecutor {
             const timely = !observedAt || observedAt >= goalStartedAt - 1000;
             if (!belongsToGoal || !timely) continue;
 
-            if (['list_files', 'search_code', 'read_file'].includes(obs.tool)) {
+            if (['list_files', 'search_code', 'read_file', 'system_search'].includes(obs.tool)) {
                 const hasResult = obs.tool === 'read_file'
                     ? typeof result.content === 'string' && result.content.length > 0
                     : (Array.isArray(result.files) && result.files.length >= 0) || (Array.isArray(result.matches) && result.matches.length >= 0);
@@ -792,6 +989,10 @@ export class SomaAgenticExecutor {
                 const fact = await this._artifactFact(goal, executionId, obs, 'code_modification', result.filepath || obs.args?.filepath, true);
                 if (fact) facts.push(fact);
             }
+            if (obs.tool === 'architecture_reorg_apply' && result.success) {
+                const fact = await this._artifactFact(goal, executionId, obs, 'architecture_reorganization', result.receiptPath, true);
+                if (fact) facts.push(fact);
+            }
             if (obs.tool === 'spawn_agents') {
                 const fact = await this._artifactFact(goal, executionId, obs, 'delegation_artifact', result.artifactPath, result.success === true && result.validation?.passed !== false);
                 if (fact) facts.push(fact);
@@ -810,6 +1011,7 @@ export class SomaAgenticExecutor {
         }
 
         const contract = goal.metadata?.goalContract || {};
+        const preflight = compileEvidencePreflight(goal);
         const criteria = goal.successCriteria || goal.metadata?.successCriteria || contract.successCriteria || [];
         const criterionCoverage = criteria.map((criterion, index) => {
             const requirements = this._criterionRequirements(criterion);
@@ -893,6 +1095,22 @@ export class SomaAgenticExecutor {
         };
     }
 
+    /**
+     * SELECTION GATE: Evaluates if a pending goal is actionable and priority-worthy
+     * before SOMA commits computational resources to it.
+     */
+    async _deliberateSelection(goal) {
+        if (Number(goal.priority ?? 50) < 20) {
+            return { approved: false, reason: `Priority too low for immediate execution (${goal.priority} < 20)` };
+        }
+        if (!String(goal.title || '').trim()) return { approved: false, reason: 'Goal title is missing' };
+        const preflight = compileEvidencePreflight(goal);
+        if (!preflight.evidenceRequired.length || !preflight.proof.length) {
+            return { approved: false, reason: 'Goal has no executable evidence contract' };
+        }
+        return { approved: true, preflight };
+    }
+
     async execute(goal) {
         if (!this.brain) return { done: false, error: 'No brain available', iterations: 0 };
 
@@ -908,6 +1126,13 @@ export class SomaAgenticExecutor {
 
         console.log(`[${this.name}] 🚀 Starting agentic execution: "${goal.title}"`);
 
+        // SELECTION GATE: Deliberate before execution
+        const deliberation = await this._deliberateSelection(goal);
+        if (!deliberation.approved) {
+            console.log(`[${this.name}] 🛑 Deliberation gate rejected goal "${goal.title}": ${deliberation.reason}`);
+            return { done: true, error: deliberation.reason, iterations: 0, deliberationRejected: true };
+        }
+
         // Prime context with relevant memories
         const priorMemories = await this._recallMemories(goal.title);
         const priorAutopsy = await this._loadGoalAutopsy(goal);
@@ -921,8 +1146,27 @@ export class SomaAgenticExecutor {
         const _progressFile = path.join(ROOT, 'data', 'goal-progress', `${goal.id}.json`);
         const _ledgerFile = path.join(ROOT, 'data', 'goal-progress', `${goal.id}.observations.jsonl`);
         const _evidenceFile = path.join(ROOT, 'data', 'goal-evidence', `${goal.id}.json`);
+        const _titleSlug = String(goal.title || goal.description || '')
+            .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 100);
+        const _titleIndexFile = path.join(ROOT, 'data', 'goal-progress', 'title-index.json');
         try {
-            const _raw = await fs.readFile(_progressFile, 'utf8');
+            let _raw;
+            try {
+                _raw = await fs.readFile(_progressFile, 'utf8');
+            } catch {
+                // GoalPlanner re-creates the same objective under a fresh UUID each
+                // cycle, so id-keyed progress never matched and every session
+                // restarted from step 0 — the "step-15 wall" (352 orphaned progress
+                // files by Jul 2026). Fall back to resuming by objective title.
+                if (!_titleSlug) throw new Error('no progress');
+                const index = JSON.parse(await fs.readFile(_titleIndexFile, 'utf8'));
+                const priorGoalId = index[_titleSlug]?.goalId;
+                const savedAt = index[_titleSlug]?.savedAt || 0;
+                if (!priorGoalId || priorGoalId === goal.id) throw new Error('no prior id');
+                if (Date.now() - savedAt > 7 * 24 * 3600 * 1000) throw new Error('prior progress too old');
+                _raw = await fs.readFile(path.join(ROOT, 'data', 'goal-progress', `${priorGoalId}.json`), 'utf8');
+                console.log(`[${this.name}] 🔗 Cross-UUID resume: "${goal.title}" continues progress from prior goal ${priorGoalId.slice(0, 8)}`);
+            }
             const _prior = JSON.parse(_raw);
             const priorEvidence = Array.isArray(_prior.evidenceObservations) ? _prior.evidenceObservations : [];
             const priorRecent = Array.isArray(_prior.recentObservations)
@@ -979,7 +1223,45 @@ ABSOLUTE RULES:
 
             let response;
             try {
-                response = await this._callDirectAPI(systemPrompt, userPrompt);
+                const source = String(goal.source || goal.metadata?.source || '').toLowerCase();
+                const humanRequested = ['user', 'discord', 'discord_admin'].includes(source) || Boolean(goal.metadata?.sourceChannelId);
+                const forceLocal = !humanRequested || goal.category === 'maintenance' || goal.source === 'autonomous-circuit-breaker' || goal.type === 'reflection';
+                
+                // 🌳 Tree of Thoughts / Inference-Time Search
+                // If goal is high complexity and Nemesis is available, generate 3 plans and evaluate
+                const shouldEvaluatePlans = this.system?.nemesis && goal.complexity === 'high';
+                
+                if (shouldEvaluatePlans) {
+                    console.log(`[${this.name}] 🌳 Generating multiple plans for Nemesis evaluation (Tree of Thoughts)`);
+                    const options = await Promise.all([
+                        this._callDirectAPI(systemPrompt, userPrompt, forceLocal, { actor: 'SomaAgenticExecutor', action: 'autonomous_goal_execution_opt1' }),
+                        this._callDirectAPI(systemPrompt, userPrompt, forceLocal, { actor: 'SomaAgenticExecutor', action: 'autonomous_goal_execution_opt2' }),
+                        this._callDirectAPI(systemPrompt, userPrompt, forceLocal, { actor: 'SomaAgenticExecutor', action: 'autonomous_goal_execution_opt3' })
+                    ]);
+                    
+                    let bestScore = -1;
+                    let bestResponse = null;
+                    for (const opt of options) {
+                        try {
+                            const score = typeof this.system.nemesis.evaluateSimulation === 'function' 
+                                ? await this.system.nemesis.evaluateSimulation(goal, opt.text || '')
+                                : 0.5; // fallback score
+                            if (score > bestScore) {
+                                bestScore = score;
+                                bestResponse = opt;
+                            }
+                        } catch (e) {
+                            console.warn(`[${this.name}] Nemesis simulation evaluation failed for an option:`, e.message);
+                        }
+                    }
+                    response = bestResponse || options[0];
+                    console.log(`[${this.name}] 🏆 Selected plan with score: ${bestScore}`);
+                } else {
+                    response = await this._callDirectAPI(systemPrompt, userPrompt, forceLocal, {
+                        actor: 'SomaAgenticExecutor',
+                        action: humanRequested ? 'human_goal_execution' : 'autonomous_goal_execution'
+                    });
+                }
             } catch (e) {
                 console.warn(`[${this.name}] Brain error at step ${iteration}:`, e.message);
                 observations.push({
@@ -1114,7 +1396,19 @@ Before declaring DONE, verify your own work using read_file or list_files.`
                             console.log(`[${this.name}] 🔄 Executing dynamic registry tool: ${toolCall.tool} (attempt ${attempt}/${maxAttempts})`);
                         }
 
+                        if (toolCall.tool === 'request_self_restart') {
+                            console.log(`[${this.name}] ⚠️ Gracefully saving executor state before Marionette restart...`);
+                            if (this._tools['save_progress']) {
+                                await this._tools['save_progress'].execute({});
+                            }
+                        }
+
                         toolResult = await tool.execute(toolCall.args);
+
+                        if (toolCall.tool === 'request_self_restart') {
+                            console.log(`[${this.name}] 🛑 Yielding executor loop to allow Marionette termination...`);
+                            return { done: false, error: null, iterations: iteration, status: 'restarting', restartRequested: true };
+                        }
 
                         if (toolResult && typeof toolResult === 'object' && toolResult.error) {
                             throw new Error(toolResult.error);
@@ -1212,7 +1506,7 @@ Before declaring DONE, verify your own work using read_file or list_files.`
             try {
                 await fs.mkdir(path.dirname(_progressFile), { recursive: true });
                 const compacted = observations.map(obs => this._compactObservation(obs));
-                const evidenceTools = new Set(['write_file', 'run_tests', 'verify_syntax', 'pulse_stage_code', 'modify_code', 'spawn_agents', 'memory_store']);
+                const evidenceTools = new Set(['write_file', 'run_tests', 'verify_syntax', 'pulse_stage_code', 'modify_code', 'architecture_census', 'architecture_reorg_plan', 'architecture_reorg_apply', 'spawn_agents', 'memory_store']);
                 atomicWriteJson(_progressFile, {
                     version: 2,
                     goalId: goal.id,
@@ -1225,6 +1519,15 @@ Before declaring DONE, verify your own work using read_file or list_files.`
                     evidenceObservations: compacted.filter(obs => evidenceTools.has(obs.tool)).slice(-24),
                     observationLedger: path.relative(ROOT, _ledgerFile).replace(/\\/g, '/')
                 });
+                // Title index enables cross-UUID resume when GoalPlanner re-creates
+                // the same objective under a fresh goal id.
+                if (_titleSlug) {
+                    let index = {};
+                    try { index = JSON.parse(await fs.readFile(_titleIndexFile, 'utf8')); } catch {}
+                    index[_titleSlug] = { goalId: goal.id, title: String(goal.title || '').slice(0, 200), savedAt: Date.now() };
+                    const entries = Object.entries(index).sort((a, b) => (b[1].savedAt || 0) - (a[1].savedAt || 0)).slice(0, 300);
+                    atomicWriteJson(_titleIndexFile, Object.fromEntries(entries));
+                }
             } catch (error) {
                 console.warn(`[${this.name}] Could not persist continuation checkpoint: ${error.message}`);
             }
@@ -1239,7 +1542,7 @@ Before declaring DONE, verify your own work using read_file or list_files.`
                 nextSteps: 'GoalPlanner must commit the verified completion before this checkpoint is removed.',
                 totalIterations: iteration,
                 recentObservations: compacted.slice(-12),
-                evidenceObservations: compacted.filter(obs => ['write_file', 'run_tests', 'verify_syntax', 'pulse_stage_code', 'modify_code', 'spawn_agents', 'memory_store'].includes(obs.tool)).slice(-24),
+                evidenceObservations: compacted.filter(obs => ['write_file', 'run_tests', 'verify_syntax', 'pulse_stage_code', 'modify_code', 'architecture_census', 'architecture_reorg_plan', 'architecture_reorg_apply', 'spawn_agents', 'memory_store'].includes(obs.tool)).slice(-24),
                 evidencePath,
                 observationLedger: path.relative(ROOT, _ledgerFile).replace(/\\/g, '/')
             });
@@ -1314,10 +1617,13 @@ Before declaring DONE, verify your own work using read_file or list_files.`
               ).join('\n')}\n`
             : '';
         const contract = goal.metadata?.goalContract || {};
+        const preflight = compileEvidencePreflight(goal);
         const successCriteria = goal.successCriteria || goal.metadata?.successCriteria || contract.successCriteria || [];
-        const contractBlock = successCriteria.length
-            ? `\nVERIFIABLE SUCCESS CRITERIA:\n${successCriteria.map((criterion, index) => `${index + 1}. ${criterion}`).join('\n')}\nEXPECTED ARTIFACT: ${goal.metadata?.expectedArtifact || 'use a goal-specific artifact path and report it'}\n`
-            : '';
+        const contractBlock = `\nEVIDENCE PREFLIGHT (${preflight.profile.toUpperCase()}):\n` +
+            `Required evidence fields: ${preflight.evidenceRequired.join(', ') || 'summary'}.\n` +
+            `Required physical proof: ${preflight.proof.join('; ')}.\n` +
+            `Expected artifact: ${goal.metadata?.expectedArtifact || preflight.filesExist.join(', ') || 'create a goal-specific artifact and report its path'}.\n` +
+            (successCriteria.length ? `Success criteria:\n${successCriteria.map((criterion, index) => `${index + 1}. ${criterion}`).join('\n')}\n` : '');
         const autopsyBlock = priorAutopsy
             ? `\nLAST FAILED ATTEMPT AUTOPSY:\n- Failed verification: ${priorAutopsy.failedVerification || priorAutopsy.reason || 'unknown'}\n- Attempted strategy: ${priorAutopsy.attemptedStrategy || 'unknown'}\n- Next strategy: ${priorAutopsy.nextStrategy || 'inspect verifier failure and produce missing proof'}\n- Do not repeat: ${(priorAutopsy.bannedRepeatActions || []).join(' | ')}\n`
             : '';
@@ -1330,7 +1636,7 @@ Before declaring DONE, verify your own work using read_file or list_files.`
 
 GOAL: ${goal.title}
 DESCRIPTION: ${goal.description || 'No additional description'}
-PROGRESS SO FAR: ${goal.metrics?.progress || 0}%
+LIFECYCLE STATE: ${deriveGoalState(goal)}
 ${memBlock}${autopsyBlock}${complexityBlock}${contractBlock}${obsBlock}
 AVAILABLE TOOLS:
 ${toolDocs}
@@ -1956,10 +2262,7 @@ What is your next step?`;
         const repair = await this.goalPlanner.createGoal({
             title: repairTitle,
             description: [
-                `The agentic executor made ${details.totalDoneBlocks || 2} DONE claims that Poseidon could not verify.`,
-                `Original goal: ${goal.title || 'unknown'}`,
-                `Rejected claim: ${details.claimedResult || 'none'}`,
-                `Falsification test: ${details.falsificationTest || 'missing'}`,
+                `Goal failed repeated verification checks due to insufficient physical evidence.`,
                 `Poseidon reason: ${details.verified?.reason || 'unknown'}`,
                 'Tighten the execution prompt, tool-use flow, or verification policy so future DONE claims include concrete checked evidence before completion.'
             ].join('\n'),
@@ -2002,39 +2305,38 @@ What is your next step?`;
     // Uses proper system + user message split so the format instruction lands.
     // ─────────────────────────────────────────────────────────────────────
 
-    async _callDirectAPI(systemPrompt, userPrompt) {
+    async _callDirectAPI(systemPrompt, userPrompt, forceLocal = false, usageContext = {}) {
         // Try DeepSeek first (same key as QuadBrain uses)
         const dsKey = this.brain?.deepseekApiKey || process.env.DEEPSEEK_API_KEY;
-        if (dsKey) {
+        const actor = usageContext.actor || 'SomaAgenticExecutor';
+        const action = usageContext.action || 'goal_execution';
+        const dailyCallLimit = Math.max(0, Number(process.env.SOMA_AGENTIC_DEEPSEEK_DAILY_CALL_LIMIT || 45));
+        if (dsKey && !forceLocal) {
             try {
-                const ctrl = new AbortController();
-                const timer = setTimeout(() => ctrl.abort(), 45000);
-                const res = await fetch('https://api.deepseek.com/v1/chat/completions', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${dsKey}` },
-                    body: JSON.stringify({
-                        model: 'deepseek-chat',
-                        messages: [
-                            { role: 'system', content: systemPrompt },
-                            { role: 'user',   content: userPrompt }
-                        ],
-                        temperature: 0.3, // low temp for precise format compliance
-                        max_tokens: 512
-                    }),
-                    signal: ctrl.signal
+                const completion = await deepSeekGateway.complete({
+                    apiKey: dsKey,
+                    model: 'deepseek-chat',
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: userPrompt }
+                    ],
+                    temperature: 0.3,
+                    maxTokens: 512,
+                    timeoutMs: 45_000,
+                    priority: action === 'human_goal_execution' ? 'human' : 'background',
+                    actor,
+                    action,
+                    dailyCallLimit,
                 });
-                clearTimeout(timer);
-                if (res.ok) {
-                    const data = await res.json();
-                    const text = data.choices?.[0]?.message?.content;
-                    if (text) return { text, provider: 'deepseek' };
-                }
+                const data = completion.data;
+                const text = data.choices?.[0]?.message?.content;
+                if (text) return { text, provider: 'deepseek', usage: data.usage || {} };
             } catch (e) {
                 console.warn(`[${this.name}] DeepSeek direct call failed: ${e.message}`);
             }
         }
 
-        // Fallback: Ollama (local, always available)
+        // Default for autonomous work and fallback for exhausted cloud budgets.
         try {
             const ollamaModel = this.brain?.ollamaModel || process.env.OLLAMA_MODEL || 'gemma3:4b';
             const ollamaEndpoint = this.brain?.ollamaEndpoint || 'http://localhost:11434';

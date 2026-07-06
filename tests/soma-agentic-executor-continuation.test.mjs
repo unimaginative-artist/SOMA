@@ -85,6 +85,199 @@ test('completion evidence validates a written artifact on disk', async () => {
   }
 });
 
+test('heartbeat completion verification accepts executable code evidence', async () => {
+  const heartbeat = new AutonomousHeartbeat({}, {});
+  const goal = {
+    id: 'code-evidence-goal',
+    title: 'Verify a code change with executable proof',
+    createdAt: Date.now() - 1000,
+    metadata: {}
+  };
+  const result = {
+    toolsUsed: ['verify_syntax', 'run_tests'],
+    completionEvidence: {
+      passed: true,
+      checks: [
+        { type: 'syntax', passed: true, receiptId: 'syntax-receipt' },
+        { type: 'tests', passed: true, receiptId: 'test-receipt' }
+      ]
+    },
+    observations: [
+      {
+        tool: 'verify_syntax',
+        goalId: goal.id,
+        observedAt: Date.now(),
+        args: { filePath: 'core/SomaAgenticExecutor.js' },
+        result: { valid: true, filePath: 'core/SomaAgenticExecutor.js' }
+      },
+      {
+        tool: 'run_tests',
+        goalId: goal.id,
+        observedAt: Date.now(),
+        args: { testFile: 'tests/soma-agentic-executor-continuation.test.mjs' },
+        result: { passed: true, testFile: 'tests/soma-agentic-executor-continuation.test.mjs' }
+      }
+    ]
+  };
+
+  const verification = await heartbeat._verifyGoalCompletion(goal, result);
+  assert.equal(verification.verified, true);
+  assert.equal(verification.evidence.runTests, true);
+  assert.equal(verification.evidence.verifySyntax, true);
+});
+
+test('heartbeat completion verification accepts sandbox and delegation evidence', async () => {
+  const suffix = `${process.pid}-${Date.now()}`;
+  const stageDir = path.join(ROOT, 'data', 'test-stage-proof', suffix);
+  const manifestPath = path.join(stageDir, 'pulse-self-mod-manifest.json');
+  const artifactPath = path.join(stageDir, 'delegation.json');
+  await fs.mkdir(stageDir, { recursive: true });
+  await fs.writeFile(manifestPath, JSON.stringify({ status: 'ready_for_promotion' }), 'utf8');
+  await fs.writeFile(artifactPath, JSON.stringify({ artifacts: [] }), 'utf8');
+
+  const heartbeat = new AutonomousHeartbeat({}, {});
+  const goal = {
+    id: 'sandbox-delegation-goal',
+    title: 'Verify sandbox and delegation proof',
+    createdAt: Date.now() - 1000,
+    metadata: {}
+  };
+
+  try {
+    const verification = await heartbeat._verifyGoalCompletion(goal, {
+      toolsUsed: ['pulse_stage_code', 'spawn_agents'],
+      completionEvidence: {
+        passed: true,
+        checks: [
+          { type: 'sandbox_stage', passed: true, receiptId: 'stage-receipt', path: manifestPath },
+          { type: 'delegation_artifact', passed: true, receiptId: 'delegation-receipt', path: artifactPath }
+        ]
+      },
+      observations: [
+        {
+          tool: 'pulse_stage_code',
+          goalId: goal.id,
+          observedAt: Date.now(),
+          args: { filepath: 'core/SomaAgenticExecutor.js' },
+          result: {
+            success: true,
+            manifestPath,
+            filepath: 'core/SomaAgenticExecutor.js',
+            syntax: { valid: true }
+          }
+        },
+        {
+          tool: 'spawn_agents',
+          goalId: goal.id,
+          observedAt: Date.now(),
+          result: {
+            success: true,
+            artifactPath,
+            validation: { passed: true }
+          }
+        }
+      ]
+    });
+    assert.equal(verification.verified, true);
+  } finally {
+    await fs.rm(stageDir, { recursive: true, force: true });
+  }
+});
+
+test('goal janitor defers stale goals and fails unverifiable verification loops', async () => {
+  const suffix = `${process.pid}-${Date.now()}`;
+  const dataDir = path.join(ROOT, 'data', 'test-goal-janitor', suffix);
+  await fs.mkdir(dataDir, { recursive: true });
+  const planner = new GoalPlannerArbiter({ dataDir });
+  const now = Date.now();
+  const staleGoal = {
+    id: `stale-${suffix}`,
+    title: 'Old autonomous idea with no work',
+    status: 'pending',
+    priority: 10,
+    metrics: { progress: 0 },
+    metadata: { source: 'autonomous' },
+    createdAt: now - 3 * 24 * 60 * 60 * 1000,
+    assignedTo: [],
+    tasks: [],
+    dependencies: [],
+    prerequisites: []
+  };
+  const failedLoop = {
+    id: `verification-loop-${suffix}`,
+    title: 'Verification failed with no continuation proof',
+    status: 'verification_failed',
+    priority: 50,
+    metrics: { progress: 75 },
+    metadata: {
+      source: 'autonomous',
+      lastTransition: { at: now - 60 * 60 * 1000 }
+    },
+    createdAt: now - 2 * 60 * 60 * 1000,
+    assignedTo: [],
+    tasks: [],
+    dependencies: [],
+    prerequisites: []
+  };
+  planner.goals.set(staleGoal.id, staleGoal);
+  planner.goals.set(failedLoop.id, failedLoop);
+  planner.activeGoals.add(staleGoal.id);
+  planner.activeGoals.add(failedLoop.id);
+
+  const heartbeat = new AutonomousHeartbeat({ goalPlanner: planner }, {});
+  try {
+    const result = await heartbeat._runGoalJanitor({ now, stalePendingMs: 60_000, verificationFailureGraceMs: 60_000 });
+    assert.equal(result.actions.length, 2);
+    assert.equal(staleGoal.status, 'deferred');
+    assert.equal(staleGoal.metadata.janitorState, 'stale');
+    assert.equal(failedLoop.status, 'failed');
+    assert.equal(failedLoop.metadata.janitorState, 'broken');
+    assert.equal(planner.activeGoals.has(staleGoal.id), false);
+    assert.equal(planner.activeGoals.has(failedLoop.id), false);
+  } finally {
+    clearInterval(planner.planningInterval);
+    clearInterval(planner.monitoringInterval);
+    clearInterval(planner.autoSaveInterval);
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('heartbeat writes durable execution receipts for agentic work', async () => {
+  const goal = {
+    id: `receipt-${process.pid}-${Date.now()}`,
+    title: 'Receipt fixture',
+    status: 'active',
+    metrics: { progress: 42 },
+    metadata: { source: 'discord_admin' }
+  };
+  const heartbeat = new AutonomousHeartbeat({}, {});
+  const receipt = await heartbeat._writeExecutionReceipt(goal, {
+    done: false,
+    state: 'incomplete_step_budget',
+    stopReason: 'max_iterations_reached',
+    toolsUsed: ['read_file'],
+    iterations: 1,
+    totalIterations: 1,
+    result: 'Read one file and saved continuation state.',
+    observations: [{
+      step: 1,
+      tool: 'read_file',
+      result: { content: 'hello' }
+    }]
+  }, { progress: 42, verificationNote: 'not complete yet' });
+
+  try {
+    assert.ok(receipt.path.startsWith('data/goal-receipts/'));
+    const parsed = JSON.parse(await fs.readFile(path.join(ROOT, receipt.path), 'utf8'));
+    assert.equal(parsed.goalId, goal.id);
+    assert.equal(parsed.done, false);
+    assert.equal(parsed.toolOutcomes.length, 1);
+    assert.equal(parsed.toolOutcomes[0].success, true);
+  } finally {
+    if (receipt?.path) await fs.rm(path.join(ROOT, receipt.path), { force: true });
+  }
+});
+
 test('filesystem lease prevents concurrent execution and validates release tokens', async () => {
   const root = path.join(ROOT, 'data', 'test-goal-leases', `${process.pid}-${Date.now()}`);
   const manager = new GoalExecutionLease({ root, defaultTtlMs: 60_000 });

@@ -110,6 +110,19 @@ parentPort.on('message', async (msg) => {
                 break;
             }
 
+            case 'update_models': {
+                if (!brain) throw new Error('Brain not ready yet');
+                if (msg.baseModel) brain.ollamaModel = msg.baseModel;
+                if (msg.lobeModels) Object.assign(brain.lobeModels, msg.lobeModels);
+                brain._ollamaModelCache = { models: null, ts: 0 };
+                parentPort.postMessage({
+                    id,
+                    type: 'result',
+                    result: { updated: true, baseModel: brain.ollamaModel, lobeModels: brain.lobeModels }
+                });
+                break;
+            }
+
             case 'ping': {
                 parentPort.postMessage({ id, type: 'result', result: { alive: true, ready: !!brain } });
                 break;

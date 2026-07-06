@@ -48,15 +48,18 @@ class RiskGateway {
                 const stored = JSON.parse(fs.readFileSync(this.configFilePath, 'utf8'));
                 this.config = { ...defaultState.config, ...stored.config };
                 this.isHardHalted = stored.isHardHalted !== undefined ? stored.isHardHalted : defaultState.isHardHalted;
-                console.log('[RiskGateway] Loaded persisted config and halt state:', this.config, 'Halted:', this.isHardHalted);
+                this.haltSource = stored.haltSource || null;
+                console.log('[RiskGateway] Loaded persisted config and halt state:', this.config, 'Halted:', this.isHardHalted, 'Source:', this.haltSource);
             } catch (e) {
                 console.error('[RiskGateway] Failed to parse config file, using defaults:', e.message);
                 this.config = defaultState.config;
                 this.isHardHalted = defaultState.isHardHalted;
+                this.haltSource = null;
             }
         } else {
             this.config = defaultState.config;
             this.isHardHalted = defaultState.isHardHalted;
+            this.haltSource = null;
             this.savePersistedState();
         }
     }
@@ -68,7 +71,8 @@ class RiskGateway {
         try {
             const dataToSave = {
                 config: this.config,
-                isHardHalted: this.isHardHalted
+                isHardHalted: this.isHardHalted,
+                haltSource: this.haltSource || null
             };
             fs.writeFileSync(this.configFilePath, JSON.stringify(dataToSave, null, 4), 'utf8');
         } catch (e) {
@@ -119,9 +123,12 @@ class RiskGateway {
     /**
      * Set hard halt status and persist to disk
      */
-    setHardHalt(halt) {
+    setHardHalt(halt, source = 'manual') {
         const oldHalt = this.isHardHalted;
         this.isHardHalted = !!halt;
+        // Track who latched the halt: automated CoD halts may auto-disarm after a
+        // verified recovery; manual halts only clear by explicit human action.
+        this.haltSource = this.isHardHalted ? source : null;
         this.savePersistedState();
 
         if (oldHalt !== this.isHardHalted) {

@@ -61,6 +61,12 @@ const DOMAIN_TAGS = {
 
 function cleanGeneratedText(text) {
     return String(text || '')
+        // Strip <EXTRA_DATA>...</EXTRA_DATA> or <EXTRA_DATA>{...
+        .replace(/<EXTRA_DATA>[\s\S]*?(?:<\/EXTRA_DATA>|$)/gi, '')
+        // Strip internal bracket tags like [term user], [artifact], [REDACTED: ...]
+        .replace(/\[(?:term \w+|artifact|REDACTED[^\]]*)\]/gi, '')
+        // Strip dry-run image filenames (e.g. image 1: ripple-metadata-...)
+        .replace(/image\s*\d*:\s*[\w-]+\.png/gi, '')
         .replace(/^["']|["']$/g, '')
         .replace(/\*\*/g, '')
         .replace(/\s+([:;,.!?])/g, '$1')
@@ -132,6 +138,37 @@ export function validatePublicQuality(text, { type = 'post', platform = 'bluesky
     }
     if ((value.match(/#[A-Za-z0-9_]+/g) || []).length > 1) {
         return { ok: false, reason: 'too many hashtags for SOMA public voice' };
+    }
+
+    // Check for prompt echoes
+    if (/\bTitle:\s/i.test(value) && /\bURL:\s/i.test(value)) {
+        return { ok: false, reason: 'LLM echoed prompt structure instead of generating a post' };
+    }
+    if (/\bAbstract\/summary:\s/i.test(value)) {
+        return { ok: false, reason: 'LLM echoed prompt structure (Abstract/summary) instead of generating a post' };
+    }
+    if (/^\s*(?:Title|Summary|URL|Headline|Source|Details)\s*:/im.test(value)) {
+        return { ok: false, reason: 'LLM echoed structured source fields instead of generating a post' };
+    }
+    if (/<\/?EXTRA_DATA\b|\[(?:term|lead)\s+[^\]]+\]/i.test(value)) {
+        return { ok: false, reason: 'internal generation metadata escaped into public text' };
+    }
+
+    // Check for system prompt regurgitation
+    const SYSTEM_PROMPT_ECHO_PATTERNS = [
+        /\bunified cognitive system(?: with a public voice)?\b/i,
+        /\bI don't claim consciousness\b/i,
+        /\bliteral consciousness\b/i,
+        /\bI don't claim to be alive\b/i,
+        /\bAs an AI\b/i,
+        /\bAs a unified cognitive system\b/i,
+        /\bmy architecture(?: - a)? unified cognitive system\b/i,
+        /\bthat's not what I am\b/i
+    ];
+    for (const pattern of SYSTEM_PROMPT_ECHO_PATTERNS) {
+        if (pattern.test(value)) {
+            return { ok: false, reason: `system prompt regurgitation blocked: ${pattern}` };
+        }
     }
     for (const pattern of PUBLIC_SUBSYSTEM_PATTERNS) {
         if (pattern.test(value)) {

@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { inferEvidenceProfile } = require('./GoalLifecycle.cjs');
 
 const CATEGORY_LOBES = {
   research: 'logos',
@@ -88,9 +89,18 @@ function normalizeGoalContract(goalData = {}) {
           'Record the next step, lesson, or reason to stop'
         ];
 
-  const verification = goalData.verification || metadata.verification || {
-    evidenceRequired: ['summary'],
-    allowStopReason: true
+  const evidenceProfile = goalData.verification?.profile || metadata.verification?.profile || inferEvidenceProfile(goalData);
+  const profileDefaults = {
+    code: { evidenceRequired: ['summary', 'artifact'], requiresExecutableProof: true },
+    research: { evidenceRequired: ['summary', 'artifact'] },
+    memory: { evidenceRequired: ['summary', 'receipt'] },
+    operational: { evidenceRequired: ['summary'] }
+  }[evidenceProfile];
+  const verification = {
+    profile: evidenceProfile,
+    allowStopReason: true,
+    ...profileDefaults,
+    ...(goalData.verification || metadata.verification || {})
   };
 
   const stopCriteria = Array.isArray(goalData.stopCriteria) && goalData.stopCriteria.length
@@ -109,6 +119,7 @@ function normalizeGoalContract(goalData = {}) {
     ownerLobe: goalData.ownerLobe || metadata.ownerLobe || inferLobe(category),
     successCriteria,
     verification,
+    evidenceProfile,
     evidenceRequired: verification.evidenceRequired || ['summary'],
     stopCriteria,
     maxAttempts: Math.max(1, Math.min(20, Number(goalData.maxAttempts || metadata.maxAttempts || 3))),

@@ -1,6 +1,16 @@
-import React from 'react';
+import React, { useEffect } from 'react';
+import agenticOrchestrator from './core/AgenticOrchestrator';
 
 const App: React.FC = () => {
+  useEffect(() => {
+    // Activate the agentic intelligence loops
+    agenticOrchestrator.activate();
+    
+    return () => {
+      agenticOrchestrator.deactivate();
+    };
+  }, []);
+
   return (
     <div className="flex flex-col h-full w-full bg-[#0a0a0d] overflow-hidden">
       <iframe

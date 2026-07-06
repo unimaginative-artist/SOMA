@@ -19,6 +19,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import toolRegistry from '../core/ToolRegistry.js';
 import costLedger from '../server/core/CostLedger.js';
+import deepSeekGateway from '../server/core/DeepSeekGateway.js';
 import { SOMA_VALUES_PROMPT } from '../core/SomaValues.js';
 import { OdinOrchestrator } from '../core/OdinOrchestrator.js';
 
@@ -79,8 +80,8 @@ export class SOMArbiterV2_QuadBrain extends BaseArbiterV4 {
       ]
     });
 
-    this.apiKey = process.env.GEMINI_API_KEY;
     this.deepseekApiKey = process.env.DEEPSEEK_API_KEY;
+    this.router = opts.router || null;
     this.ollamaEndpoint = process.env.OLLAMA_ENDPOINT || 'http://localhost:11434';
     this.ollamaModel = process.env.OLLAMA_MODEL || 'llama3.2:1b'; // Default: ultra-fast heartbeat
 
@@ -88,8 +89,8 @@ export class SOMArbiterV2_QuadBrain extends BaseArbiterV4 {
     // Falls back to generic Ollama models if the trained specialist isn't registered yet.
     this.lobeModels = {
       LOGOS:      process.env.OLLAMA_MODEL_LOGOS      || 'soma-logos-q4',
-      AURORA:     process.env.OLLAMA_MODEL_AURORA     || 'soma-aurora',
-      PROMETHEUS: process.env.OLLAMA_MODEL_PROMETHEUS || 'soma-prometheus',
+      AURORA:     process.env.OLLAMA_MODEL_AURORA     || 'soma-aurora-q4',
+      PROMETHEUS: process.env.OLLAMA_MODEL_PROMETHEUS || 'soma-prometheus-q4',
       THALAMUS:   process.env.OLLAMA_MODEL_THALAMUS   || 'soma-thalamus-q4',
     };
 
@@ -98,7 +99,6 @@ export class SOMArbiterV2_QuadBrain extends BaseArbiterV4 {
 
     // Provider health & performance tracking
     this.providerStats = {
-      gemini: { success: 0, failures: 0, recentResults: [] },
       deepseek: { success: 0, failures: 0, recentResults: [] },
       local_glm: { success: 0, failures: 0, recentResults: [] },
       local_qwen: { success: 0, failures: 0, recentResults: [] },
@@ -229,12 +229,7 @@ export class SOMArbiterV2_QuadBrain extends BaseArbiterV4 {
 
       const duration = Date.now() - startTime;
       
-      // CNS: Map local provider brains to their respective tiers for metrics
-      let brainLabel = response.brain || 'System';
-      if (response.provider === 'local') {
-          if (brainLabel === 'LOGOS') brainLabel = 'GLM_5.1';
-          if (brainLabel === 'AURORA') brainLabel = 'QWEN';
-      }
+      const brainLabel = response.brain || 'System';
 
       this._updateMetrics(duration, brainLabel);
       return { ...response, duration, sessionId, brain: brainLabel };
@@ -412,18 +407,19 @@ INTEGRATED RESPONSE:`;
     // ── 1. CLOUD ARCHITECT (DeepSeek) — Use for User Chat and Coding Tasks ──
     const isUserChat = !context.source || context.source === 'ct_terminal' || context.source === 'chat';
     const isPublicFacing = ['social_post', 'story_workspace', 'public_content'].includes(context.source);
+    const isTeacherTask = context.forceProvider === 'deepseek';
     const isCodingTask = (context.tools && context.tools.some(t => t.name.includes('file') || t.name.includes('shell'))) || 
                          prompt.toLowerCase().includes('code') || prompt.toLowerCase().includes('debug');
     
     // Force DeepSeek for high-value external interactions unless forceLocal is set
-    const canUseDeepSeek = hasUsableApiKey(this.deepseekApiKey) && !this._isCircuitOpen('deepseek') && !context.forceLocal;
+    const canUseDeepSeek = hasUsableApiKey(this.deepseekApiKey) && !this._isCircuitOpen('deepseek') && !context.forceLocal && !costLedger.isBlocked('deepseek-chat');
     if (canUseDeepSeek) {
-        if (isUserChat || isCodingTask || isPublicFacing) {
+        if (isUserChat || isCodingTask || isPublicFacing || isTeacherTask) {
             try {
                 // Regular chat: cap at 20s so local fallback gets a real shot within the 50s wall.
                 // Deep thinking requests use the full 45s (they have a 110s wall).
                 const dsTimeout = context.deepThinking ? 45000 : 20000;
-                const result = await this._callDeepSeek(prompt, temperature, maxTokens, systemPrompt, context.tools, history, dsTimeout, context.onToken || null, context.signal || null);
+                const result = await this._callDeepSeek(prompt, temperature, maxTokens, systemPrompt, context.tools, history, dsTimeout, context.onToken || null, context.signal || null, context);
                 this._recordProviderResult('deepseek', true);
                 const cleanText = (result.text || '').replace(/—/g, ': ');
                 return { ...result, text: cleanText, brain: 'DEEPSEEK' };
@@ -454,7 +450,7 @@ INTEGRATED RESPONSE:`;
         if (canUseDeepSeek) {
             try {
                 this.auditLogger.warn(`[${this.name}] ☁️ Local failed; escalating to DeepSeek fallback.`);
-                const result = await this._callDeepSeek(prompt, temperature, maxTokens, systemPrompt, context.tools, history, 45000, null, context.signal || null);
+                const result = await this._callDeepSeek(prompt, temperature, maxTokens, systemPrompt, context.tools, history, 45000, null, context.signal || null, context);
                 this._recordProviderResult('deepseek', true);
                 const cleanText = (result.text || '').replace(/—/g, ': ');
                 return { ...result, text: cleanText, brain: 'DEEPSEEK_FALLBACK', provider: 'deepseek', localFallbackReason: e.message };
@@ -470,29 +466,6 @@ INTEGRATED RESPONSE:`;
             degraded: true
         };
     }
-  }
-
-  async _callGemini(prompt, temperature, maxTokens) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${this.apiKey}`;
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature, maxOutputTokens: maxTokens }
-        })
-    });
-
-    if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.error?.message || `HTTP ${response.status}`);
-    }
-
-    const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error('Gemini returned empty response');
-    
-    return { text, provider: 'gemini' };
   }
 
   async _callOllama(prompt, model, temperature, maxTokens, systemPrompt, history = [], signal = null, images = []) {
@@ -538,7 +511,7 @@ INTEGRATED RESPONSE:`;
     const text = data.message?.content;
     if (!text) throw new Error('Ollama returned empty response');
 
-    return { text, provider: 'local' };
+    return { text, provider: 'local', model };
   }
 
   // Convert SOMA's simplified { param: 'string' } format to OpenAI JSON Schema
@@ -556,7 +529,7 @@ INTEGRATED RESPONSE:`;
     return { type: 'object', properties, ...(required.length ? { required } : {}) };
   }
 
-  async _callDeepSeek(prompt, temperature, maxTokens, systemPrompt, tools = null, history = [], timeoutMs = 45000, onToken = null, signal = null) {
+  async _callDeepSeek(prompt, temperature, maxTokens, systemPrompt, tools = null, history = [], timeoutMs = 45000, onToken = null, signal = null, usageContext = {}) {
     const messages = [];
     if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
     if (history?.length) history.forEach(h => messages.push({ role: h.role, content: h.content }));
@@ -573,65 +546,71 @@ INTEGRATED RESPONSE:`;
             }
           }))
         : undefined;
+    const source = String(usageContext.source || usageContext.action || 'chat');
+    const priority = ['chat', 'ct_terminal', 'discord', 'voice_chat', 'user'].includes(source) ? 'human' : 'background';
+    const actor = usageContext.actor || usageContext.source || 'QuadBrain';
+    const action = usageContext.action || usageContext.source || 'chat';
 
     // Streaming path: only when onToken provided and no tools (tools need full JSON back)
     if (onToken && !openAITools?.length) {
-        const fetchSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
-        const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.deepseekApiKey}` },
-            body: JSON.stringify(body),
-            signal: fetchSignal
+        const stream = await deepSeekGateway.openStream({
+            apiKey: this.deepseekApiKey,
+            messages,
+            maxTokens,
+            temperature,
+            priority,
+            actor,
+            action,
+            timeoutMs,
+            signal,
         });
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            throw new Error(err.error?.message || `HTTP ${response.status}`);
-        }
-        const reader = response.body.getReader();
+        const reader = stream.response.body.getReader();
         const decoder = new TextDecoder();
         let fullText = '';
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const chunk = decoder.decode(value, { stream: true });
-            for (const line of chunk.split('\n')) {
-                const trimmed = line.trim();
-                if (!trimmed.startsWith('data:')) continue;
-                const raw = trimmed.slice(5).trim();
-                if (raw === '[DONE]') continue;
-                try {
-                    const parsed = JSON.parse(raw);
-                    const token = parsed.choices?.[0]?.delta?.content || '';
-                    if (token) { fullText += token; onToken(token); }
-                } catch {}
+        let usage = {};
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                const chunk = decoder.decode(value, { stream: true });
+                for (const line of chunk.split('\n')) {
+                    const trimmed = line.trim();
+                    if (!trimmed.startsWith('data:')) continue;
+                    const raw = trimmed.slice(5).trim();
+                    if (raw === '[DONE]') continue;
+                    try {
+                        const parsed = JSON.parse(raw);
+                        if (parsed.usage) usage = parsed.usage;
+                        const token = parsed.choices?.[0]?.delta?.content || '';
+                        if (token) { fullText += token; onToken(token); }
+                    } catch {}
+                }
             }
+            if (!fullText) throw new Error('DeepSeek streaming returned empty content');
+            stream.finalize({ usage, outputText: fullText });
+            return { text: fullText, provider: 'deepseek', usage };
+        } catch (error) {
+            stream.release();
+            throw error;
         }
-        if (!fullText) throw new Error('DeepSeek streaming returned empty content');
-        return { text: fullText, provider: 'deepseek' };
     }
 
     // Function-calling loop — max 5 rounds so a runaway tool chain can't spin forever
     for (let round = 0; round < 5; round++) {
-        const body = { model: 'deepseek-chat', messages, temperature, max_tokens: maxTokens };
-        if (openAITools?.length) body.tools = openAITools;
-
-        const fetchSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
-        const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.deepseekApiKey}`
-            },
-            body: JSON.stringify(body),
-            signal: fetchSignal // hard cap — prevents indefinite hangs
+        const completion = await deepSeekGateway.complete({
+            apiKey: this.deepseekApiKey,
+            model: 'deepseek-chat',
+            messages,
+            tools: openAITools,
+            maxTokens,
+            temperature,
+            priority,
+            actor,
+            action,
+            timeoutMs,
+            signal,
         });
-
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            throw new Error(err.error?.message || `HTTP ${response.status}`);
-        }
-
-        const data = await response.json();
+        const data = completion.data;
         const choice = data.choices?.[0];
         const assistantMsg = choice?.message;
         if (!assistantMsg) throw new Error('DeepSeek returned empty response');
@@ -641,7 +620,6 @@ INTEGRATED RESPONSE:`;
             const text = assistantMsg.content;
             if (!text) throw new Error('DeepSeek returned empty content');
             const usage = data.usage || {};
-            try { costLedger.record({ model: body.model || 'deepseek-chat', inputTokens: usage.prompt_tokens || 0, outputTokens: usage.completion_tokens || 0, actor: 'QuadBrain', action: 'chat' }); } catch {}
             return { text, provider: 'deepseek', usage };
         }
 
@@ -699,6 +677,7 @@ INTEGRATED RESPONSE:`;
       stats: this.providerStats,
       lobes: Array.from(this.activeLobes),
       localModel: this.ollamaModel
+      ,lobeModels: { ...this.lobeModels }
     };
   }
 

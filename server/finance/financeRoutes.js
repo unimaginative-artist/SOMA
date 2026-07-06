@@ -838,7 +838,8 @@ router.post('/execute', async (req, res) => {
                 expectedPrice: estimatedPrice,
                 filledPrice: order.filled_avg_price,
                 orderId: order.id,
-                strategy: 'manual'
+                strategy: 'manual',
+                venue: alpacaService.isPaperTrading !== false ? 'alpaca_paper' : 'live'
             });
         }
 
@@ -919,7 +920,8 @@ router.get('/status', async (req, res) => {
 router.get('/slippage', (req, res) => {
     try {
         const stats = slippageTracker.getStats();
-        res.json({ success: true, ...stats });
+        const paperModelCalibration = slippageTracker.calibrationVsPaperModel();
+        res.json({ success: true, ...stats, paperModelCalibration });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }

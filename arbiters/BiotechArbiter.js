@@ -1140,106 +1140,20 @@ Safety boundary: no diagnosis, treatment, dosing, synthesis, or real-world exper
     }
 
     async _publishNegativeResultMemo({ target, strand, category, attempts, maxAttempts, physicsResult, moleculeProbe, sourceLedger }) {
-        const fs = await import('fs/promises');
-        const path = await import('path');
         const now = new Date().toISOString();
         const safeTarget = slugValue(target || 'unknown-target');
         const safeStrand = slugValue(strand || 'wildtype');
-        const title = `SOMA MedLab Negative Result: ${target} / ${strand}`;
-        const evidenceGrade = {
-            overall: 'negative result',
-            labels: [
-                { label: 'negative result', rationale: `Feature-based docking failed after ${attempts}/${maxAttempts} attempts.` },
-                { label: 'requires replication', rationale: 'A negative result should be repeated before being treated as a stable exclusion.' }
-            ]
-        };
-        const safetyReport = this._buildSafetyReport('');
-        const patientFrame = this._patientBenefitFrame(target, strand, category);
-        const replicationPlan = [
-            `Repeat ${target}/${strand} with a different molecular probe extraction strategy.`,
-            'Record whether failure repeats under fixed seed and alternative pocket assumptions.',
-            'Retire the target/strand only if repeated attempts fail and literature support is weak.'
-        ];
-        const metadata = this._metadataSections({
-            target,
-            strand,
-            category,
-            sourceLedger: sourceLedger || this._buildSourceLedger('N/A', [], 'local_in_silico_prior'),
-            evidenceGrade,
-            patientFrame,
-            replicationPlan,
-            safetyReport
-        });
-        const standardized = this._standardizeMedicalManuscript({
-            type: 'negative_result',
-            title,
-            rawText: [
-                `SOMA stopped this MedLab cycle because the physics screen did not meet the local binding threshold after ${attempts}/${maxAttempts} testing rounds.`,
-                `Molecule probe: ${moleculeProbe}`,
-                `Final affinity: ${physicsResult.affinity} ${physicsResult.unit}`,
-                `Confidence: ${physicsResult.confidence}`,
-                `Reason: ${physicsResult.reasoning}`
-            ].join('\n'),
-            mission: { target, strand, category, researchQuestion: `Did ${target}/${strand} produce a reproducible dry-lab binding signal?` },
-            sourceLedger: sourceLedger || this._buildSourceLedger('N/A', [], 'local_in_silico_prior'),
-            evidenceGrade,
-            patientFrame,
-            replicationPlan,
-            safetyReport,
-            results: `Negative dry-lab result after ${attempts}/${maxAttempts} attempts.`
-        });
-        const body = [
-            `# ${title}`,
-            '',
-            `> ${MEDICAL_FIREWALL_NOTICE}`,
-            '',
-            '## Result',
-            '',
-            `SOMA stopped this MedLab cycle because the physics screen did not meet the local binding threshold after ${attempts}/${maxAttempts} testing rounds.`,
-            '',
-            `- Molecule probe: ${moleculeProbe}`,
-            `- Final affinity: ${physicsResult.affinity} ${physicsResult.unit}`,
-            `- Confidence: ${physicsResult.confidence}`,
-            `- Reason: ${physicsResult.reasoning}`,
-            `- Created: ${now}`,
-            '',
-            metadata,
-            '',
-            '## Lesson',
-            '',
-            'This is useful because it prevents the lab from repeatedly chasing the same weak setup without stronger evidence or a changed modeling assumption.',
-            '',
-            '## Manuscript-Ready Negative Result',
-            '',
-            standardized.manuscript,
-            ''
-        ].join('\n');
+        
+        console.log(`🧬 [${this.name}] ❌ NEGATIVE RESULT DETECTED: ${target} / ${strand}`);
+        console.log(`🧬 [${this.name}] 🗑️ Bypassing folio generation to conserve vault memory. SOMA will only document successful breakthrough physics screens.`);
 
-        const reflectionsPath = path.join(process.cwd(), 'data', 'vault', 'reflections');
-        await fs.mkdir(reflectionsPath, { recursive: true });
-        const reflectionFilename = `folio.medlab.negative.${safeTarget}.${safeStrand}.${Date.now()}.md`;
-        const reflectionPath = path.join(reflectionsPath, reflectionFilename);
-        const frontmatter = [
-            '---',
-            `title: ${JSON.stringify(title)}`,
-            'type: folio',
-            'status: inbox',
-            'workbook: "SOMA MedLab"',
-            'segment: "Negative Results"',
-            'parent: "Negative Results"',
-            `createdAt: ${now}`,
-            `target: ${JSON.stringify(target || 'Unknown')}`,
-            `strand: ${JSON.stringify(strand || 'WildType')}`,
-            `manuscriptStandard: ${JSON.stringify(standardized.guideline.name)}`,
-            `manuscriptReadiness: ${JSON.stringify(standardized.quality.status)}`,
-            `manuscriptScore: ${standardized.quality.score}`,
-            'tags: [reflections, folio, medlab, negative-result, medical-manuscript]',
-            '---',
-            '',
-        ].join('\n');
-        await fs.writeFile(reflectionPath, `${frontmatter}${body}`, 'utf8');
-        console.log(`🧬 [${this.name}] 🧾 NEGATIVE RESULT ADDED TO REFLECTIONS: ${reflectionPath}`);
-        return { reflectionPath, reflectionFilename, evidenceGrade, safetyReport, manuscript: standardized };
+        // Return a mock object so the caller doesn't break, but no file is written
+        return { 
+            reflectionPath: null, 
+            reflectionFilename: null, 
+            skipped: true, 
+            reason: 'Negative folios are bypassed to save vault memory.' 
+        };
     }
 
     /** Manual trigger — called by POST /api/soma/biotech/run */

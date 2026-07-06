@@ -295,12 +295,53 @@ export class ASTIndexerService {
             });
           }
         },
+        TSInterfaceDeclaration(pathNode) {
+          const interfaceName = pathNode.node.id?.name;
+          if (interfaceName) {
+            const loc = getLineRange(pathNode.node);
+            symbols.push({
+              name: interfaceName,
+              type: 'interface',
+              startLine: loc.start,
+              endLine: loc.end,
+              content: getCodeFragment(pathNode.node)
+            });
+            scopeStack.push(interfaceName);
+          }
+        },
+        TSTypeAliasDeclaration(pathNode) {
+          const typeName = pathNode.node.id?.name;
+          if (typeName) {
+            const loc = getLineRange(pathNode.node);
+            symbols.push({
+              name: typeName,
+              type: 'type',
+              startLine: loc.start,
+              endLine: loc.end,
+              content: getCodeFragment(pathNode.node)
+            });
+            scopeStack.push(typeName);
+          }
+        },
+        TSTypeReference(pathNode) {
+          const typeName = pathNode.node.typeName?.name;
+          if (typeName) {
+            const caller = scopeStack[scopeStack.length - 1] || 'global';
+            callSites.push({
+              caller,
+              callee: typeName,
+              line: pathNode.node.loc?.start?.line || 0
+            });
+          }
+        },
         exit(pathNode) {
           if (
             pathNode.isClassMethod() ||
             pathNode.isFunctionDeclaration() ||
             pathNode.isFunctionExpression() ||
-            pathNode.isArrowFunctionExpression()
+            pathNode.isArrowFunctionExpression() ||
+            pathNode.isTSInterfaceDeclaration() ||
+            pathNode.isTSTypeAliasDeclaration()
           ) {
             scopeStack.pop();
           }
@@ -422,7 +463,16 @@ export class ASTIndexerService {
     };
   }
 
-  searchSymbols(query, limit = 50) {
+  searchSymbols(query, limit = 50, symbolType = null) {
+    if (symbolType) {
+      const rows = this.db.prepare(`
+        SELECT name, type, file_path, start_line, end_line 
+        FROM symbols 
+        WHERE name LIKE ? AND type = ?
+        LIMIT ?
+      `).all(`%${query}%`, symbolType, limit);
+      return rows;
+    }
     const rows = this.db.prepare(`
       SELECT name, type, file_path, start_line, end_line 
       FROM symbols 
@@ -430,6 +480,15 @@ export class ASTIndexerService {
       LIMIT ?
     `).all(`%${query}%`, limit);
     return rows;
+  }
+
+  traceTypeDependencies(typeName) {
+    const references = this.db.prepare(`
+      SELECT DISTINCT caller_name as caller, file_path as filePath, line_number as line 
+      FROM call_sites 
+      WHERE callee_name = ?
+    `).all(typeName);
+    return { success: true, typeName, references };
   }
 }
 

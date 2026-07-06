@@ -1,12 +1,13 @@
 {
   "users": {
     "barry": {
-      "userId": "usr-51e95cd8-4112-49a4-8b87-e80f99506be8",
+      "userId": "usr-31726551b908f398d102aab572c3774b9aea007ee856dc0910f2c337ec29c2c6",
       "handle": "barry",
       "displayName": "Barry",
       "passcodeHash": "d045d842463b64a8fbf3f9e7f10d47118938c18233d8709d5c984297ab188257",
       "createdAt": 1779373183881,
-      "updatedAt": 1779373205444
+      "updatedAt": 1782479668295,
+      "localOwner": true
     }
   }
 }

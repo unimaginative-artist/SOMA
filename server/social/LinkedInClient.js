@@ -9,6 +9,7 @@ import fs   from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import { assertPublicPost } from './SocialContentSafety.js';
 
 const __dirname    = path.dirname(fileURLToPath(import.meta.url));
 const WORKER       = path.join(__dirname, 'linkedin_worker.mjs');
@@ -33,8 +34,13 @@ function runWorker(task) {
         child.stdout.on('data', d => out += d);
         child.stderr.on('data', d => err += d);
 
-        child.on('error', reject);
+        let timeout;
+        child.on('error', error => {
+            clearTimeout(timeout);
+            reject(error);
+        });
         child.on('close', (code) => {
+            clearTimeout(timeout);
             try {
                 const parsed = JSON.parse(out);
                 if (!parsed.ok) reject(new Error(parsed.error || 'Worker error'));
@@ -47,7 +53,7 @@ function runWorker(task) {
         child.stdin.write(JSON.stringify(task));
         child.stdin.end();
 
-        setTimeout(() => {
+        timeout = setTimeout(() => {
             child.kill();
             reject(new Error('LinkedIn worker timed out after 45s'));
         }, 45_000);
@@ -70,6 +76,7 @@ export class LinkedInClient {
 
     /** Post a text update. Returns the created post data on success. */
     async post(text) {
+        assertPublicPost(text, { platform: 'linkedin', type: 'post' });
         if (!this.session?.liAt) throw new Error('LinkedIn not configured — run extract_x_session.py while logged into LinkedIn in Edge');
         return await runWorker({
             type:       'post',
@@ -98,6 +105,7 @@ export class LinkedInClient {
      * text: reply text (max 1250 chars)
      */
     async replyToPost(activityUrn, text) {
+        assertPublicPost(text, { platform: 'linkedin', type: 'reply' });
         if (!this.session?.liAt) throw new Error('LinkedIn not configured');
         return await runWorker({
             type:       'replyToPost',

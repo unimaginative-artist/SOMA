@@ -90,7 +90,7 @@ const AppsFeedWidget: React.FC<Props> = ({ data, onNavigate }) => {
   return (
     <div 
         className="w-full h-full min-h-0 flex flex-col p-5 bg-[#0A0A0A] relative overflow-hidden cursor-pointer group"
-        onClick={() => onNavigate && onNavigate('ecosystem')}
+        onClick={() => onNavigate && onNavigate('stage')}
     >
         {/* Header */}
         <div className="flex items-center justify-between mb-4 relative z-10 shrink-0">

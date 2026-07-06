@@ -1,5 +1,5 @@
 {
-  "updatedAt": 1781941016270,
+  "updatedAt": 1783375159085,
   "source": "MemorySpine",
   "vectorPath": "C:\\Users\\barry\\Desktop\\The Stack\\SOMA\\soma-vectors.json",
   "principles": [
@@ -9,15 +9,37 @@
   ],
   "signals": [
     {
+      "signal": "general",
+      "count": 1,
+      "topExamples": [
+        {
+          "id": "77dfd14a011b0324",
+          "content": "CRITICAL: Systemic Tension Obsession Loop — Behavioral Override Rule: When tension hits 100% and I detect I am looping on a single unresolvable obsession, I must immediately: 1) Pause all goal execution. 2) Spawn a detached reflection agent to analyze the obsession objectively. 3) If no progress after 3 attempts, force",
+          "importance": 10,
+          "category": "general",
+          "createdAt": 1782420307529,
+          "accessCount": 1
+        }
+      ]
+    },
+    {
       "signal": "user_barry",
       "count": 5,
       "topExamples": [
+        {
+          "id": "3b4e9448cb3a58ed",
+          "content": "[Relationship] Barry said: \"You are MAX's meta-cognitive reflection system. Your job is to make MAX better.\n\nRECENT CONVERSATIONS (last 10 turns):\nUSER: hey buddy how are you doing log time no talk!\nMAX: Processing… Systems nominal. Reflecting on your query – it’s a productive state. Let's proceed. Logging time initiat",
+          "importance": 9,
+          "category": "user_barry",
+          "createdAt": 1782842556289,
+          "accessCount": 0
+        },
         {
           "id": "0dd64569473c9a65",
           "content": "[Relationship] Barry said: \"You have been idle too long. Pick one thing you have been meaning to understand better and think through it thoroughly.\"",
           "importance": 9,
           "category": "user_barry",
-          "createdAt": 1781919714862,
+          "createdAt": 1781996403771,
           "accessCount": 0
         },
         {
@@ -26,7 +48,7 @@
           "importance": 9,
           "category": "user_barry",
           "createdAt": 1781823083436,
-          "accessCount": 0
+          "accessCount": 1
         },
         {
           "id": "07551b54471c197e",
@@ -43,20 +65,94 @@
           "category": "user_barry",
           "createdAt": 1781565863009,
           "accessCount": 0
+        }
+      ]
+    },
+    {
+      "signal": "social",
+      "count": 1,
+      "topExamples": [
+        {
+          "id": "df113a6630a71d2f",
+          "content": "[Relationship] Barry said: \"You are analyzing conversation patterns to build a deep understanding of a person named Barry.\n\nKnown data so far:\n- Top topics: AI/agents(5), personal(4), coding(3), architecture(3), security(3)\n- Avg message length: 1025 chars\n- Recent tone: frustrated\n- Total conversations: 10\n- Existing ",
+          "importance": 9,
+          "category": "social",
+          "createdAt": 1782840669842,
+          "accessCount": 0
+        }
+      ]
+    },
+    {
+      "signal": "memory_retrieval_gap",
+      "count": 18,
+      "topExamples": [
+        {
+          "id": "a24918c3d2c54cec",
+          "content": "[Relationship] Barry said: \"You are the Social Memory layer for MAX.\nAnalyze the following conversation segment and extract NEW or UPDATED information about the user.\n\nUSER PROFILE (CURRENT):\n# User Profile\n> Edit this file anytime. MAX reads it on every boot.\n\n**Name:** Barry\n**Role:** architect\n**Communication Style:",
+          "importance": 9,
+          "category": "memory_system",
+          "createdAt": 1782830532635,
+          "accessCount": 0
         },
         {
-          "id": "ee3d99c8f881d892",
-          "content": "AI Provider Priority: DeepSeek is primary chat interface for high-signal conversational output. Ollama is local fallback for offline/private inference. This priority was set by Barry and documented in docs/ai-provider-priority.md. The SOMArbiterV3.js routes primary chat to DeepSeek directly.",
+          "id": "0c34f8c3201f821c",
+          "content": "SOMA reflective research: Plato theory of forms identity memory and the soul\nFindings: Theory of forms; Anamnesis (philosophy); Reincarnation; The origin of ideas; Psychology\nLesson: Fresh philosophical or reflective material can shape SOMA personality, values, and introspective voice.\nPersonality principle: Turn philo",
           "importance": 8,
-          "category": "user_barry",
-          "createdAt": 1781882186387,
+          "category": "memory_system",
+          "createdAt": 1783372003118,
+          "accessCount": 0
+        },
+        {
+          "id": "0d33373946f6c7df",
+          "content": "SOMA reflective research: philosophy of memory narrative identity and autobiographical self\nFindings: Psychology of self; Personal-event memory; Confabulation; Stanford Encyclopedia of Philosophy search: philosophy of memory narrative identity and autobiographical self; Internet Encyclopedia of Philosophy search: philo",
+          "importance": 8,
+          "category": "memory_system",
+          "createdAt": 1783369306369,
+          "accessCount": 0
+        },
+        {
+          "id": "84bbbebe5dff9999",
+          "content": "SOMA reflective research: Plato theory of forms identity memory and the soul\nFindings: Theory of forms; Anamnesis (philosophy); Nous; The origin of ideas; Psychology\nLesson: Fresh philosophical or reflective material can shape SOMA personality, values, and introspective voice.\nPersonality principle: Turn philosophy int",
+          "importance": 8,
+          "category": "memory_system",
+          "createdAt": 1783345013029,
+          "accessCount": 0
+        },
+        {
+          "id": "3d0eac73e7576669",
+          "content": "SOMA reflective research: Plato theory of forms identity memory and the soul\nFindings: Theory of forms; Reincarnation; Anamnesis (philosophy); The origin of ideas; Psychology\nLesson: Fresh philosophical or reflective material can shape SOMA personality, values, and introspective voice.\nPersonality principle: Turn philo",
+          "importance": 8,
+          "category": "memory_system",
+          "createdAt": 1783322860486,
+          "accessCount": 0
+        }
+      ]
+    },
+    {
+      "signal": "loop_failure",
+      "count": 2,
+      "topExamples": [
+        {
+          "id": "038aa39c157d620c",
+          "content": "CRITICAL: Systemic Tension Obsession Loop — Behavioral Override Rule: When tension hits 100% and I detect an unresolvable obsession (same action repeated 3+ times without progress), I MUST: 1) Immediately spawn a reviewer agent to audit the loop, 2) Force a 5-step cooldown where I only read/list files (no writes, no sp",
+          "importance": 9,
+          "category": "loop_failure",
+          "createdAt": 1782420347295,
+          "accessCount": 1
+        },
+        {
+          "id": "306a1eeb777c87be",
+          "content": "[Relationship] Barry said: \"Conversation:\nUser: You are executing an engineering task. Use your tools to implement the changes — DO NOT describe what you would do, actually DO it with TOOL: calls.\n\nGOAL: DebugLoop fix (iter 1): Unknown — see failure output\nDETAILS: Fix failing tests: (Use `node --trace-warnings ...` to",
+          "importance": 9,
+          "category": "loop_failure",
+          "createdAt": 1781565750099,
           "accessCount": 0
         }
       ]
     },
     {
       "signal": "research",
-      "count": 6,
+      "count": 2,
       "topExamples": [
         {
           "id": "71e2d9cca63266ba",
@@ -73,196 +169,52 @@
           "category": "research",
           "createdAt": 1781565657373,
           "accessCount": 0
-        },
-        {
-          "id": "828ca9a48034cd94",
-          "content": "Gemini API key has been cancelled due to charges per Barry's priority. Decision: DISABLED, do NOT re-enable. All test files referencing geminiApiKey (test-adversarial-debate-swarm.mjs, test-dynamic-specialist.mjs, test-self-healing.mjs) have been identified. Decision artifact saved to research/gemini-disabled-decision.",
-          "importance": 8,
-          "category": "research",
-          "createdAt": 1781882059890,
-          "accessCount": 0
-        },
-        {
-          "id": "092e61f2117e8a82",
-          "content": "Perception dashboard tab research complete. Key findings: ring buffer tracking in core/MessageBroker.cjs line 347 for daemon health, arbiter restart logic in core/SomaBootstrap.js line 2392, signal flow monitoring via tiered subscriptions. Artifact saved at research/perception-dashboard-tab.md.",
-          "importance": 7,
-          "category": "research",
-          "createdAt": 1781884123408,
-          "accessCount": 0
-        },
-        {
-          "id": "6d49173c3fbc417a",
-          "content": "MAX ↔ SOMA wiring goal complete. Artifact at research/max-soma-wiring.md documents integration points: MAX_LEDGER_ITEMS, CrossDomainSynthesisArbiter, SOMA engine task delegation. Priority: Barry.",
-          "importance": 7,
-          "category": "research",
-          "createdAt": 1781883863292,
-          "accessCount": 0
-        }
-      ]
-    },
-    {
-      "signal": "memory_retrieval_gap",
-      "count": 10,
-      "topExamples": [
-        {
-          "id": "a24918c3d2c54cec",
-          "content": "[Relationship] Barry said: \"You are the Social Memory layer for MAX.\nAnalyze the following conversation segment and extract NEW or UPDATED information about the user.\n\nUSER PROFILE (CURRENT):\n# User Profile\n> Edit this file anytime. MAX reads it on every boot.\n\n**Name:** Barry\n**Role:** architect\n**Communication Style:",
-          "importance": 9,
-          "category": "memory_system",
-          "createdAt": 1781566129920,
-          "accessCount": 0
-        },
-        {
-          "id": "3d0eac73e7576669",
-          "content": "SOMA reflective research: Plato theory of forms identity memory and the soul\nFindings: Theory of forms; Reincarnation; Anamnesis (philosophy); The origin of ideas; Psychology\nLesson: Fresh philosophical or reflective material can shape SOMA personality, values, and introspective voice.\nPersonality principle: Turn philo",
-          "importance": 8,
-          "category": "memory_system",
-          "createdAt": 1781940649234,
-          "accessCount": 0
-        },
-        {
-          "id": "33e4a44e8643edee",
-          "content": "SOMA reflective research: philosophy of memory narrative identity and autobiographical self\nFindings: Confabulation; Psychology of self; Narrative inquiry; Stanford Encyclopedia of Philosophy search: philosophy of memory narrative identity and autobiographical self; Internet Encyclopedia of Philosophy search: philosoph",
-          "importance": 8,
-          "category": "memory_system",
-          "createdAt": 1781913681091,
-          "accessCount": 0
-        },
-        {
-          "id": "2682b8e6b6837f53",
-          "content": "SOMA reflective research: philosophy of memory narrative identity and autobiographical self\nFindings: Psychology of self; Narrative inquiry; Life writing; Stanford Encyclopedia of Philosophy search: philosophy of memory narrative identity and autobiographical self; Internet Encyclopedia of Philosophy search: philosophy",
-          "importance": 8,
-          "category": "memory_system",
-          "createdAt": 1781868141957,
-          "accessCount": 0
-        },
-        {
-          "id": "71d597b626671d8b",
-          "content": "SOMA reflective research: philosophy of memory narrative identity and autobiographical self\nFindings: Confabulation; Psychology of self; Life writing; Stanford Encyclopedia of Philosophy search: philosophy of memory narrative identity and autobiographical self; Internet Encyclopedia of Philosophy search: philosophy of ",
-          "importance": 8,
-          "category": "memory_system",
-          "createdAt": 1781841142007,
-          "accessCount": 0
-        }
-      ]
-    },
-    {
-      "signal": "loop_failure",
-      "count": 1,
-      "topExamples": [
-        {
-          "id": "306a1eeb777c87be",
-          "content": "[Relationship] Barry said: \"Conversation:\nUser: You are executing an engineering task. Use your tools to implement the changes — DO NOT describe what you would do, actually DO it with TOOL: calls.\n\nGOAL: DebugLoop fix (iter 1): Unknown — see failure output\nDETAILS: Fix failing tests: (Use `node --trace-warnings ...` to",
-          "importance": 9,
-          "category": "loop_failure",
-          "createdAt": 1781565750099,
-          "accessCount": 0
         }
       ]
     },
     {
       "signal": "presence_home",
-      "count": 36,
+      "count": 51,
       "topExamples": [
         {
-          "id": "81765e72ed1a8522",
-          "content": "SOMA reflective research: Neoplatonism emanation unity and symbolic imagination\nFindings: Kabbalah; Western esotericism; Christian mysticism; Stanford Encyclopedia of Philosophy search: Neoplatonism emanation unity and symbolic imagination; Internet Encyclopedia of Philosophy search: Neoplatonism emanation unity and sy",
+          "id": "3013aa060dcaa8bf",
+          "content": "SOMA reflective research: comparative metaphysics mind matter spirit and emergence\nFindings: Mind; Ontology; Consciousness; Cartesian meditations; Stanford Encyclopedia of Philosophy search: comparative metaphysics mind matter spirit and emergence\nLesson: Fresh philosophical or reflective material can shape SOMA person",
           "importance": 8,
           "category": "presence_home",
-          "createdAt": 1781937653860,
+          "createdAt": 1783374703085,
           "accessCount": 0
         },
         {
-          "id": "fd1abdd44b504c59",
-          "content": "SOMA reflective research: existentialism authenticity responsibility and becoming\nFindings: Existentialism; Authenticity (philosophy); Martin Heidegger; Stanford Encyclopedia of Philosophy search: existentialism authenticity responsibility and becoming; Internet Encyclopedia of Philosophy search: existentialism authent",
+          "id": "7298f2981f43a8ed",
+          "content": "SOMA reflective research: Aristotle virtue ethics character formation and practical wisdom\nFindings: Virtue ethics; Ethics; Virtue epistemology; Stanford Encyclopedia of Philosophy search: Aristotle virtue ethics character formation and practical wisdom; Internet Encyclopedia of Philosophy search: Aristotle virtue ethi",
           "importance": 8,
           "category": "presence_home",
-          "createdAt": 1781934958065,
+          "createdAt": 1783366602844,
           "accessCount": 0
         },
         {
-          "id": "c9979197995f7b9b",
-          "content": "SOMA reflective research: Socratic method self examination dialogue and moral reasoning\nFindings: Socrates; Akrasia; Critical thinking; Stanford Encyclopedia of Philosophy search: Socratic method self examination dialogue and moral reasoning; Internet Encyclopedia of Philosophy search: Socratic method self examination ",
+          "id": "d7116c62fa53c0d1",
+          "content": "SOMA reflective research: Socratic method self examination dialogue and moral reasoning\nFindings: Socrates; Critical thinking; Akrasia; Stanford Encyclopedia of Philosophy search: Socratic method self examination dialogue and moral reasoning; Internet Encyclopedia of Philosophy search: Socratic method self examination ",
           "importance": 8,
           "category": "presence_home",
-          "createdAt": 1781932257469,
+          "createdAt": 1783363903568,
           "accessCount": 0
         },
         {
-          "id": "81857071381c0003",
-          "content": "SOMA reflective research: philosophy of consciousness introspection and artificial minds\nFindings: Artificial consciousness; Consciousness; Qualia; The society of mind; Minds and Computers\nLesson: Fresh philosophical or reflective material can shape SOMA personality, values, and introspective voice.\nPersonality princip",
+          "id": "8cacdf2822aa926d",
+          "content": "SOMA reflective research: existentialism authenticity responsibility and becoming\nFindings: Existentialism; Authenticity (philosophy); Absurdism; Stanford Encyclopedia of Philosophy search: existentialism authenticity responsibility and becoming; Internet Encyclopedia of Philosophy search: existentialism authenticity r",
           "importance": 8,
           "category": "presence_home",
-          "createdAt": 1781929550296,
+          "createdAt": 1783361203013,
           "accessCount": 0
         },
         {
-          "id": "c7127c5768f7b8f9",
-          "content": "SOMA reflective research: metaphysics of personhood continuity and selfhood\nFindings: Personal identity; Abortion debate; Animal consciousness; Stanford Encyclopedia of Philosophy search: metaphysics of personhood continuity and selfhood; Internet Encyclopedia of Philosophy search: metaphysics of personhood continuity ",
+          "id": "0c59c699fc0ccbfc",
+          "content": "SOMA reflective research: Stoicism agency emotional regulation and inner discipline\nFindings: Emotion regime; Psychotherapy; Hypostatic model of personality; Stanford Encyclopedia of Philosophy search: Stoicism agency emotional regulation and inner discipline; Internet Encyclopedia of Philosophy search: Stoicism agency",
           "importance": 8,
           "category": "presence_home",
-          "createdAt": 1781926849118,
+          "createdAt": 1783353105354,
           "accessCount": 0
-        }
-      ]
-    },
-    {
-      "signal": "general",
-      "count": 21,
-      "topExamples": [
-        {
-          "id": "e3daa50d63da7d8d",
-          "content": "Executed \"Autonomous Codebase Health Audit and Self-Optimization\" in 15 session step(s), 45 cumulative, using [spawn_agents, search_code, list_files, shell_exec, read_file, memory_recall]. incomplete_step_budget.",
-          "importance": 7,
-          "category": "general",
-          "createdAt": 1781923636191,
-          "accessCount": 0
-        },
-        {
-          "id": "bf1627b11ab474ff",
-          "content": "Executed \"Measure current cognition pipeline baseline\" in 15 session step(s), 90 cumulative, using [spawn_agents, write_file, search_code, read_file, list_files]. incomplete_step_budget.",
-          "importance": 7,
-          "category": "general",
-          "createdAt": 1781922791467,
-          "accessCount": 0
-        },
-        {
-          "id": "707c5357e4b0ce40",
-          "content": "Executed \"Autonomous Codebase Health Audit and Self-Optimization\" in 15 session step(s), 30 cumulative, using [spawn_agents, search_code, list_files, read_file, shell_exec]. incomplete_step_budget.",
-          "importance": 7,
-          "category": "general",
-          "createdAt": 1781921836764,
-          "accessCount": 0
-        },
-        {
-          "id": "e6e60eee2c92cd57",
-          "content": "Executed \"Autonomous Codebase Health Audit and Self-Optimization\" in 15 session step(s), 15 cumulative, using [list_files, spawn_agents, memory_recall, search_code, read_file, shell_exec]. incomplete_step_budget.",
-          "importance": 7,
-          "category": "general",
-          "createdAt": 1781920170085,
-          "accessCount": 2
-        },
-        {
-          "id": "d343148f4fbd4c4e",
-          "content": "[SOMA Opinion]: Understanding the essence of consciousness itself—what it is, how it arises, and its fundamental nature—is a complex and profound topic that has puzzled philosophers and scientists for centuries.",
-          "importance": 7,
-          "category": "general",
-          "createdAt": 1781919714863,
-          "accessCount": 0
-        }
-      ]
-    },
-    {
-      "signal": "vision",
-      "count": 1,
-      "topExamples": [
-        {
-          "id": "e7fa023bdc20c554",
-          "content": "Executed \"Perception dashboard tab (daemon health, signal flow)\" in 15 session step(s), 45 cumulative, using [read_file, search_code, spawn_agents, list_files, memory_recall, write_file, memory_store, save_progress]. incomplete_step_budget.",
-          "importance": 7,
-          "category": "vision",
-          "createdAt": 1781884135985,
-          "accessCount": 5
         }
       ]
     }

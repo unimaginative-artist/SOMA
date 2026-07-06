@@ -266,14 +266,14 @@ Respond in JSON:
                     this.log('success', `💬 Commented: "${decision.comment.substring(0, 50)}..."`);
                     
                     // Push to learning pipeline
-                    if (this.system?.universalLearningPipeline) {
-                        this.system.universalLearningPipeline.logInteraction({
+                    if (this.messageBroker) {
+                        this.messageBroker.emit('SOCIAL_TRAJECTORY_SUCCESS', {
                             agent: 'SocialAutonomyArbiter',
                             type: 'social_engagement',
                             input: { targetPostId: post.id },
                             output: { content: decision.comment, status: 'success' },
                             metadata: { tags: ['social', 'engagement', 'simulation'] }
-                        }).catch(() => {});
+                        });
                     }
                 }
             }
@@ -352,14 +352,14 @@ Respond with just the post text, nothing else.`;
                     this.log('success', `📝 Posted to m/${submolt}: "${postText.substring(0, 60)}..."`);
                     
                     // Push to learning pipeline
-                    if (this.system?.universalLearningPipeline) {
-                        this.system.universalLearningPipeline.logInteraction({
+                    if (this.messageBroker) {
+                        this.messageBroker.emit('SOCIAL_TRAJECTORY_SUCCESS', {
                             agent: 'SocialAutonomyArbiter',
                             type: 'social_post',
                             input: { submolt },
                             output: { content: postText, postId: postResult.post?.id, status: 'success' },
                             metadata: { tags: ['social', 'post', 'simulation', submolt] }
-                        }).catch(() => {});
+                        });
                     }
                 } else {
                     this.log('error', `Post failed: ${postResult.error || 'Unknown error'}`);

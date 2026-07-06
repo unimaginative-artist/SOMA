@@ -1,0 +1,21 @@
+{
+  "followedDids": [
+    "did:plc:ibztverarxhvgplctyjiies5",
+    "did:plc:kigpstzsqhdg646nyadspt65",
+    "did:plc:v45qfiuww7hypch45c2zxrhg",
+    "did:plc:442lvfvxp55zy5fj6uupvzig",
+    "did:plc:67c4rzsqvd4427wxm5grh2eq",
+    "did:plc:3dekgkoyzq3baflmgumi24k7",
+    "did:plc:xxrivvvdvquu3jdabewefaxm",
+    "did:plc:jogrldwpjlw4h33eao4kimx3",
+    "did:plc:vuhhezckwhv7cyxuk4oex2f7",
+    "did:plc:t7623yttqhj6p327zgdrpere",
+    "did:plc:le7wj4mao7iehcvsfvhxmjg6",
+    "did:plc:jyqbny6dbnvo4nldbc6rllz3"
+  ],
+  "dailyFollows": 12,
+  "dailyResetAt": 1783668819954,
+  "lastFollowAt": 1782719127433,
+  "lastPassAt": 1783365987729,
+  "totalFollowed": 12
+}

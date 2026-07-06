@@ -1847,12 +1847,32 @@ export default function PortalBrowser({ workspace, policy = {}, onSettingsUpdate
   // Keep gmnNavRef current so the stable message handler always has fresh closures
   useEffect(() => { gmnNavRef.current = { openGmnSite, browseUrl }; });
 
-  // GMN postMessage bridge — receives click events from inside sandboxed GMN iframes
+  // GMN postMessage bridge — receives click events and RPCs from inside sandboxed GMN iframes
   useEffect(() => {
-    const handler = (e) => {
+    const handler = async (e) => {
       if (!e.data || typeof e.data !== 'object') return;
       if (e.data.type === 'gmn-navigate') gmnNavRef.current?.openGmnSite(e.data.href);
       else if (e.data.type === 'portal-navigate') gmnNavRef.current?.browseUrl(e.data.href);
+      else if (e.data.type === 'gmn-rpc') {
+        const { id, route, method, body } = e.data;
+        // Strictly allow-list only studio endpoints for now
+        if (route && route.startsWith('/api/studio/')) {
+          try {
+            const url = `http://127.0.0.1:3001${route}`;
+            const res = await fetch(url, {
+              method: method || 'GET',
+              headers: body ? { 'Content-Type': 'application/json' } : undefined,
+              body: body ? JSON.stringify(body) : undefined
+            });
+            const result = await res.json().catch(() => null);
+            e.source.postMessage({ type: 'gmn-rpc-response', id, result, status: res.status }, '*');
+          } catch (err) {
+            e.source.postMessage({ type: 'gmn-rpc-response', id, error: err.message, status: 500 }, '*');
+          }
+        } else {
+          e.source.postMessage({ type: 'gmn-rpc-response', id, error: 'Forbidden RPC Route', status: 403 }, '*');
+        }
+      }
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);

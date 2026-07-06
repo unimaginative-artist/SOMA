@@ -13,7 +13,7 @@ const { buildQualityReport, verifyGoal } = require('../core/GoalQualityGate.cjs'
 const { defaultLearningSpine } = require('../core/LearningSpine.cjs');
 const { ownerName } = require('../core/SomaOwner.cjs');
 const { atomicWriteJson, readJsonWithRecovery } = require('../core/AtomicJsonStore.cjs');
-const { STATUS, TERMINAL_STATUSES, isTerminal, transitionGoal } = require('../core/GoalLifecycle.cjs');
+const { STATUS, TERMINAL_STATUSES, isTerminal, transitionGoal, isHumanGoal, deriveGoalState } = require('../core/GoalLifecycle.cjs');
 
 // NEMESIS Phase 2.2: Reality checks for autonomous goal generation
 let PrometheusNemesis = null;
@@ -41,6 +41,7 @@ class GoalPlannerArbiter extends BaseArbiter {
     
     // Configuration
     this.maxActiveGoals = config.maxActiveGoals || 20;
+    this.humanReservedSlots = Math.min(this.maxActiveGoals, Math.max(1, Number(config.humanReservedSlots || process.env.SOMA_HUMAN_GOAL_SLOTS || 4)));
     this.maxCompletedHistory = config.maxCompletedHistory || 100;
     this.stalledThresholdDays = config.stalledThresholdDays || 7;
     this.planningIntervalHours = config.planningIntervalHours || 0.5; // every 30 min
@@ -77,6 +78,7 @@ class GoalPlannerArbiter extends BaseArbiter {
     this.planningInterval = null;
     this.monitoringInterval = null;
     this.autoSaveInterval = null;
+    this.canaryInterval = null;
 
     // Persistence
     this.dataDir = config.dataDir || path.join(process.cwd(), 'data');
@@ -131,6 +133,15 @@ class GoalPlannerArbiter extends BaseArbiter {
     this.autoSaveInterval = setInterval(() => {
       if (this._dirty) this._saveToDisk();
     }, 5 * 60 * 1000);
+    this.canaryInterval = setInterval(() => {
+      this.runLifecycleCanary().catch(error => {
+        this.logger.warn(`[${this.name}] Lifecycle canary failed: ${error.message}`);
+        messageBroker.publish('goal.canary.failed', {
+          checkedAt: Date.now(),
+          error: error.message
+        }).catch(() => {});
+      });
+    }, Math.max(15 * 60_000, Number(process.env.SOMA_GOAL_CANARY_INTERVAL_MS || 6 * 60 * 60_000)));
 
     this.logger.info(`[${this.name}] ✅ Goal planning system active (${this.activeGoals.size} goals restored)`);
   }
@@ -507,6 +518,7 @@ Rules:
       const alignment = await this._checkGoalAlignment(goalData, source);
       if (!alignment.ok) return alignment.response;
       alignmentReceipt = alignment.receipt;
+      const incomingHuman = isHumanGoal({ ...goalData, source, metadata: { ...(goalData.metadata || {}), source } });
 
       // Deduplication — reject if a similar active goal already exists (all non-user sources)
       if (source !== 'user') {
@@ -524,6 +536,13 @@ Rules:
       }
 
       // Check active goal limit — HARD CAP
+      const activeAutonomous = Array.from(this.activeGoals)
+        .map(id => this.goals.get(id))
+        .filter(goal => goal && !isHumanGoal(goal)).length;
+      const autonomousCapacity = Math.max(1, this.maxActiveGoals - this.humanReservedSlots);
+      if (!incomingHuman && activeAutonomous >= autonomousCapacity) {
+        return { success: false, error: `Autonomous goal capacity reached (${autonomousCapacity}); ${this.humanReservedSlots} slot(s) reserved for human requests.` };
+      }
       if (this.activeGoals.size >= this.maxActiveGoals) {
         // First sweep: terminal-status goals must never hold an active slot
         let evicted = 0;
@@ -540,7 +559,7 @@ Rules:
       }
       if (this.activeGoals.size >= this.maxActiveGoals) {
         this.logger.warn(`[${this.name}] Active goal limit reached (${this.activeGoals.size}/${this.maxActiveGoals}), deferring low-priority goals...`);
-        const deferred = await this.deferLowPriorityGoals(1);
+        const deferred = await this.deferLowPriorityGoals(1, { preserveHuman: incomingHuman });
         // If we couldn't free a slot, REJECT the new goal
         if (this.activeGoals.size >= this.maxActiveGoals) {
           this.logger.warn(`[${this.name}] ❌ Cannot create goal "${goalData.title}" — at hard cap (${this.activeGoals.size}/${this.maxActiveGoals})`);
@@ -578,7 +597,7 @@ Rules:
         tasks: [],
         
         metadata: {
-          source: source === 'user' ? 'user_requested' : 'autonomous',
+          source: incomingHuman ? (source === 'user' ? 'user_requested' : source) : 'autonomous',
           confidence: goalData.confidence || 1.0,
           rationale: goalData.rationale || '',
           quality,
@@ -614,7 +633,7 @@ Rules:
       
       // Update statistics
       this.stats.goalsCreated++;
-      if (source === 'user') {
+      if (incomingHuman) {
         this.stats.userRequestedGoals++;
       } else {
         this.stats.autonomousGoals++;
@@ -829,7 +848,9 @@ Rules:
       return { success: true, alreadyCompleted: true, goal, verification: goal.metadata?.lastVerification || null };
     }
 
-    const verification = verifyGoal(goal, result, { repoRoot: process.cwd() });
+    // verifyGoal performs Poseidon certification asynchronously. Omitting await
+    // stored a Promise as {}, then treated verification.passed as undefined.
+    const verification = await verifyGoal(goal, result, { repoRoot: process.cwd() });
     goal.metadata = goal.metadata || {};
     goal.metadata.lastVerification = verification;
     if (!verification.passed && !result.force) {
@@ -881,15 +902,20 @@ Rules:
     if (!completedTransition.success) return completedTransition;
     goal.metrics.progress = 100;
     goal.metadata.completionResult = result;
-    try {
-      goal.metadata.learningLesson = defaultLearningSpine.recordGoalOutcome(goal, result, verification);
-    } catch (err) {
-      this.logger.warn(`[${this.name}] Learning spine distillation failed: ${err.message}`);
+    const silentCanary = Boolean(goal.metadata?.lifecycleCanary && result.silent);
+    if (!silentCanary) {
+      try {
+        goal.metadata.learningLesson = defaultLearningSpine.recordGoalOutcome(goal, result, verification);
+      } catch (err) {
+        this.logger.warn(`[${this.name}] Learning spine distillation failed: ${err.message}`);
+      }
     }
     
     // Move to completed archive
-    this.completedGoals.unshift(goal);
-    this._completeParentIfChildrenVerified(goal);
+    if (!silentCanary) {
+      this.completedGoals.unshift(goal);
+      this._completeParentIfChildrenVerified(goal);
+    }
     
     // Trim completed history
     if (this.completedGoals.length > this.maxCompletedHistory) {
@@ -897,24 +923,30 @@ Rules:
     }
     
     // Update statistics
-    this.stats.goalsCompleted++;
-    this.updateAverageCompletionTime(goal);
+    if (!silentCanary) {
+      this.stats.goalsCompleted++;
+      this.updateAverageCompletionTime(goal);
+    }
     
     // Broadcast completion
-    await messageBroker.sendMessage({
-      from: this.name,
-      to: 'broadcast',
-      type: 'goal_completed',
-      payload: { goal, result }
-    });
+    if (!silentCanary) {
+      await messageBroker.sendMessage({
+        from: this.name,
+        to: 'broadcast',
+        type: 'goal_completed',
+        payload: { goal, result }
+      });
+    }
     
-    this.logger.info(`[${this.name}] ✅ Completed goal: ${goal.title}`);
-    this.logger.info(`[${this.name}]    Duration: ${((goal.completedAt - goal.startedAt) / 86400000).toFixed(1)} days`);
+    if (!silentCanary) {
+      this.logger.info(`[${this.name}] ✅ Completed goal: ${goal.title}`);
+      this.logger.info(`[${this.name}]    Duration: ${((goal.completedAt - goal.startedAt) / 86400000).toFixed(1)} days`);
+    }
 
     this._dirty = true;
-    this._saveToDisk();
+    if (!silentCanary) this._saveToDisk();
 
-    return { success: true, goal };
+    return { success: true, goal, verification };
   }
 
   async failGoal(goalId, reason = '') {
@@ -1240,11 +1272,12 @@ Rules:
     this.logger.info(`[${this.name}] Updated priorities for ${updated} goals`);
   }
 
-  async deferLowPriorityGoals(count = 1) {
+  async deferLowPriorityGoals(count = 1, options = {}) {
     // Prefer deferring pending goals first, then active goals — lowest priority first
     const goals = Array.from(this.activeGoals)
       .map(id => this.goals.get(id))
       .filter(g => g && (g.status === 'pending' || g.status === 'active'))
+      .filter(g => !(options.preserveHuman && isHumanGoal(g)))
       .sort((a, b) => {
         // Pending before active (cheaper to defer)
         if (a.status !== b.status) return a.status === 'pending' ? -1 : 1;
@@ -2091,17 +2124,18 @@ Rules:
       const goal = this.goals.get(goalId);
       if (!goal) continue;
 
-      const age      = now - (goal.startedAt || goal.createdAt || now);
+      const timeSinceUpdate = now - (goal.updatedAt || goal.startedAt || goal.createdAt || now);
       const progress = goal.metrics?.progress ?? 0;
 
-      if (age > limit && progress === 0) {
+      if (timeSinceUpdate > limit && progress < 100) {
         pruned.push(goal);
       }
     }
 
     for (const goal of pruned) {
-      this.logger.warn(`[${this.name}] 🗑️  Auto-pruning stale goal: "${goal.title}" (0% progress, ${Math.floor((now - goal.createdAt) / 86400000)}d old)`);
-      await this.cancelGoal(goal.id, `Auto-pruned: 0% progress after ${this.stalledThresholdDays} days`);
+      const progressPct = Math.round((goal.metrics?.progress ?? 0) * 100);
+      this.logger.warn(`[${this.name}] 🗑️ Auto-pruning stale goal: "${goal.title}" (${progressPct}% progress, ${Math.floor((now - goal.createdAt) / 86400000)}d old)`);
+      await this.cancelGoal(goal.id, `Auto-pruned: Stalled at ${progressPct}% progress for ${this.stalledThresholdDays} days`);
     }
 
     if (pruned.length > 0) {
@@ -2115,9 +2149,35 @@ Rules:
     // Check stalled goals every hour
     this.monitoringInterval = setInterval(async () => {
       await this.reviewStalledGoals();
+      await this._verifyHighProgressGoals();
     }, 60 * 60 * 1000);
     
     this.logger.info(`[${this.name}] Monitoring loop started (every 1h)`);
+  }
+
+  async _verifyHighProgressGoals() {
+    const highProgress = [];
+    const now = Date.now();
+    for (const goalId of this.activeGoals) {
+      const goal = this.goals.get(goalId);
+      const progress = goal?.metrics?.progress ?? 0;
+      const lastUpdate = goal.updatedAt || goal.startedAt || goal.createdAt || now;
+      // If stuck at >= 80% for more than 1 hour
+      if (progress >= 80 && progress < 100 && (now - lastUpdate) > 3600000) {
+        highProgress.push(goal);
+      }
+    }
+
+    if (highProgress.length > 0) {
+      this.logger.warn(`[${this.name}] 🔍 Found ${highProgress.length} goal(s) stuck near completion.`);
+      for (const goal of highProgress) {
+        this.logger.info(`[${this.name}]    -> Auto-verifying high-progress goal: "${goal.title}"`);
+        await this.completeGoal(goal.id, {
+          result: 'Auto-verified during high-progress sweep.',
+          summary: `Goal was stuck at ${goal.metrics.progress}% and uncommitted. Automatically verified to unblock pipeline.`
+        }).catch(err => this.logger.error(`[${this.name}] Failed to auto-verify goal ${goal.id}: ${err.message}`));
+      }
+    }
   }
 
   async reviewStalledGoals() {
@@ -2179,10 +2239,86 @@ Rules:
     }
   }
 
+  compactDeferredGoals(options = {}) {
+    const maxRetained = Math.max(1, Number(options.maxRetained || process.env.SOMA_MAX_DEFERRED_GOALS || 100));
+    const olderThanMs = Math.max(24 * 60 * 60_000, Number(options.olderThanMs || 30 * 24 * 60 * 60_000));
+    const now = Number(options.now || Date.now());
+    const deferred = Array.from(this.goals.values())
+      .filter(goal => goal.status === STATUS.DEFERRED && !this.activeGoals.has(goal.id))
+      .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+    const archive = deferred.filter((goal, index) => index >= maxRetained || now - Number(goal.createdAt || 0) >= olderThanMs);
+    if (!archive.length) return { archived: 0, retained: deferred.length, path: null };
+
+    const archiveDir = path.join(this.dataDir, 'goal-archives');
+    const archivePath = path.join(archiveDir, `deferred-${new Date(now).toISOString().slice(0, 7)}.jsonl`);
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.appendFileSync(archivePath, archive.map(goal => JSON.stringify({
+      archivedAt: now,
+      reason: 'deferred_retention_compaction',
+      goal
+    })).join('\n') + '\n', 'utf8');
+    for (const goal of archive) this.goals.delete(goal.id);
+    this._dirty = true;
+    return { archived: archive.length, retained: deferred.length - archive.length, path: archivePath };
+  }
+
+  async runLifecycleCanary() {
+    const now = Date.now();
+    const directory = path.join(this.dataDir, 'goal-canary');
+    const artifact = path.join(directory, 'artifact.json');
+    const reportPath = path.join(directory, 'latest.json');
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(artifact, JSON.stringify({ createdAt: now, nonce: crypto.randomUUID() }), 'utf8');
+    const relativeArtifact = path.relative(process.cwd(), artifact).replace(/\\/g, '/');
+    const id = `goal-lifecycle-canary-${now}`;
+    const goal = defaultLearningSpine.applyGoalContract({
+      id,
+      type: 'operational',
+      category: 'system_canary',
+      title: 'Goal lifecycle canary',
+      description: 'Verify local artifact completion without an LLM, network request, or external service.',
+      status: STATUS.ACTIVE,
+      metrics: { progress: 99 },
+      createdAt: now,
+      startedAt: now,
+      verification: { profile: 'operational', evidenceRequired: ['summary', 'artifact'], filesExist: [relativeArtifact] },
+      metadata: { lifecycleCanary: true }
+    });
+    this.goals.set(id, goal);
+    this.activeGoals.add(id);
+    try {
+      const completion = await this.completeGoal(id, {
+        summary: 'Local lifecycle canary artifact was written and read back.',
+        evidence: { artifact: relativeArtifact },
+        silent: true
+      });
+      const report = {
+        checkedAt: new Date().toISOString(),
+        passed: completion.success === true && completion.verification?.passed === true && goal.status === STATUS.COMPLETED,
+        verification: completion.verification || null,
+        error: completion.error || null
+      };
+      fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf8');
+      if (!report.passed) throw new Error(completion.error || 'Lifecycle canary did not reach verified completion');
+      return { ...report, path: reportPath };
+    } finally {
+      this.activeGoals.delete(id);
+      this.goals.delete(id);
+      this.completedGoals = this.completedGoals.filter(item => item.id !== id);
+      try { fs.unlinkSync(artifact); } catch {}
+    }
+  }
+
   getStatistics() {
     return {
       ...this.stats,
       activeGoals: this.activeGoals.size,
+      humanReservedSlots: this.humanReservedSlots,
+      lifecycleStates: Array.from(this.goals.values()).reduce((counts, goal) => {
+        const state = deriveGoalState(goal);
+        counts[state] = (counts[state] || 0) + 1;
+        return counts;
+      }, {}),
       completedGoals: this.completedGoals.length,
       failedGoals: this.failedGoals.length,
       successRate: this.stats.goalsCompleted / Math.max(1, this.stats.goalsCompleted + this.stats.goalsFailed),
@@ -2251,13 +2387,13 @@ Rules:
 
       const fmtGoal = (g, checked = false) => {
         const box = checked ? '[x]' : '[ ]';
-        const pct = g.metrics?.progress != null ? ` — ${g.metrics.progress.toFixed(0)}%` : '';
+        const state = ` · ${deriveGoalState(g)}`;
         const quality = g.metadata?.quality?.score != null ? ` · Q${g.metadata.quality.score}` : '';
         const verify = g.metadata?.lastVerification
           ? ` · verify ${g.metadata.lastVerification.passed ? 'pass' : 'fail'} ${g.metadata.lastVerification.score}%`
           : '';
         const desc = g.description ? `\n  > ${g.description.substring(0, 120)}` : '';
-        return `- ${box} **${g.title}** *(priority: ${g.priority}${quality}${verify})${pct}*${desc}`;
+        return `- ${box} **${g.title}** *(priority: ${g.priority}${quality}${verify}${state})*${desc}`;
       };
 
       // Prepend the owner's priority notes if PRIORITIES.md exists
@@ -2355,6 +2491,37 @@ Rules:
         this._dirty = true;
       }
 
+      // June 2026 ledgers may contain `{}` because async verifyGoal() was
+      // stored without await. Recover only that unmistakable corruption
+      // signature; never infer completion or weaken the goal contract.
+      let asyncVerificationRecoveries = 0;
+      for (const goal of this.goals.values()) {
+        const verification = goal?.metadata?.lastVerification;
+        const isEmptyObject = verification && typeof verification === 'object' &&
+          !Array.isArray(verification) && Object.keys(verification).length === 0;
+        if (!isEmptyObject) continue;
+        goal.metadata = { ...(goal.metadata || {}) };
+        delete goal.metadata.lastVerification;
+        goal.metadata.executionAttempts = 0;
+        goal.metadata.verificationRecovery = {
+          reason: 'async_verifier_promise_was_not_awaited',
+          recoveredAt: Date.now()
+        };
+        goal.metrics = { ...(goal.metrics || {}), progress: Math.min(Number(goal.metrics?.progress || 0), 65) };
+        if ([STATUS.VERIFICATION_FAILED, STATUS.BROKEN].includes(goal.status)) {
+          transitionGoal(goal, STATUS.PENDING, {
+            reason: 'recover_async_verification_serialization',
+            actor: this.name,
+            force: true
+          });
+        }
+        asyncVerificationRecoveries++;
+      }
+      if (asyncVerificationRecoveries > 0) {
+        this.logger.warn(`[${this.name}] Recovered ${asyncVerificationRecoveries} goal(s) from async verification serialization corruption`);
+        this._dirty = true;
+      }
+
       // A verification failure is terminal only when no resumable work exists.
       // Older executors persisted observations but marked the goal terminal,
       // causing every subsequent heartbeat to skip it forever.
@@ -2420,7 +2587,10 @@ Rules:
         const sorted = Array.from(this.activeGoals)
           .map(id => this.goals.get(id))
           .filter(Boolean)
-          .sort((a, b) => b.priority - a.priority); // highest priority first
+          .sort((a, b) => {
+            if (isHumanGoal(a) !== isHumanGoal(b)) return isHumanGoal(a) ? -1 : 1;
+            return b.priority - a.priority;
+          });
 
         const keep = new Set(sorted.slice(0, this.maxActiveGoals).map(g => g.id));
         const excess = sorted.slice(this.maxActiveGoals);
@@ -2475,6 +2645,11 @@ Rules:
         }
       }
 
+      const deferredCompaction = this.compactDeferredGoals();
+      if (deferredCompaction.archived > 0) {
+        this.logger.info(`[${this.name}] Archived ${deferredCompaction.archived} deferred goal(s) to ${deferredCompaction.path}`);
+      }
+
       // ═══ PRUNE OLD NON-ACTIVE GOALS FROM MAP ═══
       // Remove deferred/completed/failed goals older than 30 days to prevent unbounded Map growth
       const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
@@ -2505,6 +2680,7 @@ Rules:
         this.stats = { ...this.stats, ...snapshot.stats };
       }
 
+      if (this._dirty) this._saveToDisk();
       this.logger.info(`[${this.name}] 📂 Restored ${this.goals.size} goals (${this.activeGoals.size} active, ${this.completedGoals.length} completed)`);
     } catch (err) {
       this.logger.error(`[${this.name}] Failed to load goals: ${err.message} — starting fresh`);
@@ -2525,9 +2701,9 @@ Rules:
 
     const fmtGoal = (g, checked = false) => {
       const box = checked ? '[x]' : '[ ]';
-      const pct = g.metrics?.progress != null ? ` — ${g.metrics.progress.toFixed(0)}%` : '';
+      const state = ` · ${deriveGoalState(g)}`;
       const desc = g.description ? `\n  > ${g.description.substring(0, 120)}` : '';
-      return `- ${box} **${g.title}** *(priority: ${g.priority})${pct}*${desc}`;
+      return `- ${box} **${g.title}** *(priority: ${g.priority}${state})*${desc}`;
     };
 
     let md = `# SOMA's Plan\n\n*Last updated: ${ts}*\n\n`;
@@ -2798,6 +2974,9 @@ Rules:
     }
     if (this.autoSaveInterval) {
       clearInterval(this.autoSaveInterval);
+    }
+    if (this.canaryInterval) {
+      clearInterval(this.canaryInterval);
     }
 
     await super.shutdown();

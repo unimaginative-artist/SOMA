@@ -36,6 +36,8 @@ const CommunityView: React.FC<Props> = ({ currentUser, onBack }) => {
     const [axisFriends, setAxisFriends] = useState<SocialUser[]>([]);
     const [axisChats, setAxisChats] = useState<any[]>([]);
     const [busyFriendId, setBusyFriendId] = useState<string | null>(null);
+    // Real follow graph (shared with mobile + web Stage) — replaces the old mock counts.
+    const [social, setSocial] = useState<{ followers: SocialUser[]; following: SocialUser[]; friends: SocialUser[] } | null>(null);
 
     // Mock Data
     const DATA: Record<TabType, SocialUser[]> = {
@@ -88,10 +90,37 @@ const CommunityView: React.FC<Props> = ({ currentUser, onBack }) => {
         return () => { cancelled = true; };
     }, []);
 
+    // Pull the real follow graph + people registry → resolve to display users.
+    useEffect(() => {
+        let cancelled = false;
+        const myId = (currentUser as any)?.axis?.userId
+            || (() => { try { return JSON.parse(localStorage.getItem('axis_user_v2') || '{}').id; } catch { return ''; } })();
+        if (!myId) return;
+        Promise.all([
+            fetch(`/api/studio/follows/${encodeURIComponent(myId)}?viewer=${encodeURIComponent(myId)}`).then(r => r.ok ? r.json() : null).catch(() => null),
+            fetch('/api/studio/users').then(r => r.ok ? r.json() : null).catch(() => null),
+        ]).then(([g, u]: any[]) => {
+            if (cancelled || !g) return;
+            const reg: Record<string, any> = {};
+            for (const usr of (u?.users || [])) reg[usr.id] = usr;
+            const resolve = (id: string): SocialUser => {
+                const p = reg[id] || {};
+                return { id, username: p.name || p.handle || id, handle: p.handle || id, avatar: stableAvatar({ id, name: p.name, avatar: p.avatar }), isVerified: !!p.verified };
+            };
+            setSocial({
+                followers: (g.followers || []).map(resolve),
+                following: (g.following || []).map(resolve),
+                friends: (g.friends || []).map(resolve),
+            });
+        });
+        return () => { cancelled = true; };
+    }, [currentUser]);
+
     const mergedData = useMemo<Record<TabType, SocialUser[]>>(() => ({
-        ...DATA,
-        friends: axisFriends.length ? axisFriends : DATA.friends,
-    }), [axisFriends]);
+        friends: social ? social.friends : (axisFriends.length ? axisFriends : DATA.friends),
+        followers: social ? social.followers : DATA.followers,
+        following: social ? social.following : DATA.following,
+    }), [axisFriends, social]);
 
     const matchedSuggestions = SUGGESTIONS.sort((a, b) => {
         if (a.location === currentUser.location) return -1;
@@ -265,10 +294,10 @@ const CommunityView: React.FC<Props> = ({ currentUser, onBack }) => {
                 {/* Tabs */}
                 <div className="flex items-center justify-center gap-8 text-sm font-medium border-b border-white/10">
                     {(['friends', 'followers', 'following'] as TabType[]).map((tab) => {
-                        const count = 
-                            tab === 'friends' ? mergedData.friends.length : 
-                            tab === 'followers' ? 164 : 
-                            tab === 'following' ? 85 : 0;
+                        const count =
+                            tab === 'friends' ? mergedData.friends.length :
+                            tab === 'followers' ? mergedData.followers.length :
+                            tab === 'following' ? mergedData.following.length : 0;
                             
                         return (
                             <button 

@@ -12,6 +12,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal as TermIcon } from 'lucide-react';
 import kernel from '../kernel/ApertureKernel';
+import somaBackend from '../../../somaBackend';
 
 const PROMPT_BASE = 'root@aperture';
 const ANSI = {
@@ -334,6 +335,29 @@ export default function Terminal() {
       const reply = await kernel.callTool('soma_chat', { prompt: (cmd === 'think' ? '[DEEP REASONING] ' : '') + question, pid });
       setLines(prev => [...prev.slice(0, -1), { text: `[SOMA] ${reply}`, type: 'ai' }]);
       setBusy(false);
+      return;
+    }
+
+    // soma cli commands
+    if (cmd === 'soma' && args[0] === 'publish') {
+      const site = args[1];
+      if (!site) { appendLines({ text: 'soma: usage: soma publish <site>', type: 'error' }); return; }
+      setBusy(true);
+      try {
+        const r = await somaBackend.fetch('/api/gmn/sites/publish-artifact', {
+          method: 'POST',
+          body: JSON.stringify({ site })
+        });
+        if (r.success) {
+          appendLines({ text: `✓ Published: ${r.canonical}`, type: 'output' });
+        } else {
+          appendLines({ text: `soma: publish failed: ${r.error || 'Unknown error'}`, type: 'error' });
+        }
+      } catch (e) {
+        appendLines({ text: `soma: network error: ${e.message}`, type: 'error' });
+      } finally {
+        setBusy(false);
+      }
       return;
     }
 

@@ -43,6 +43,11 @@ export class StrategyHuntDaemon extends BaseDaemon {
         this.trialWindowMs          = config.trialWindowMs           || 60 * 60 * 1000; // 1 hour per trial
         this.consecutiveWinsNeeded  = config.consecutiveWinsNeeded   || 2;
         this.degradeWarningPct      = config.degradeWarningPct       || -0.3; // warn if locked strat drops 30% below target
+        // Trial rigor: a 1-hour trial with 2 trades is coin-flip noise. Trials
+        // extend until they have a minimum sample (or hit the hard cap), and
+        // "hit target" claims require that sample.
+        this.minTrialTrades         = config.minTrialTrades          || 12;
+        this.maxTrialWindowMs       = config.maxTrialWindowMs        || 6 * 60 * 60 * 1000; // hard cap 6h per trial
 
         // Injected by autonomousRoutes.js to avoid circular import
         this._getAggregateStatus = () => ({ isRunning: false, instances: [] });
@@ -94,10 +99,15 @@ export class StrategyHuntDaemon extends BaseDaemon {
             return;
         }
 
-        // Check if trial window has expired
+        // Rotate when the window expired AND the trial has a meaningful sample,
+        // or unconditionally at the hard cap (a strategy that can't produce
+        // minTrialTrades in maxTrialWindowMs gets judged on what it did produce).
         const trialAge = now - (trial.startTime || now);
-        if (trialAge >= this.trialWindowMs) {
-            await this._evaluateAndRotate(sessionPnl, regime);
+        const tradesDelta = Math.max(0, this._getClosedTradeCount(agg) - (trial.startTradeCount || 0));
+        trial.trialTrades = tradesDelta;
+        if ((trialAge >= this.trialWindowMs && tradesDelta >= this.minTrialTrades)
+            || trialAge >= this.maxTrialWindowMs) {
+            await this._evaluateAndRotate(sessionPnl, regime, tradesDelta);
         }
 
         // If locked, verify the locked strategy hasn't degraded
@@ -110,7 +120,7 @@ export class StrategyHuntDaemon extends BaseDaemon {
 
     // ─── Trial management ────────────────────────────────────────────────────
 
-    async _evaluateAndRotate(currentSessionPnl, regime) {
+    async _evaluateAndRotate(currentSessionPnl, regime, tradesDelta = 0) {
         const trial         = this._state.currentTrial;
         const trialPnlUsd   = currentSessionPnl - (trial.startSessionPnl || 0);
         const trialMs       = Date.now() - (trial.startTime || Date.now());
@@ -118,9 +128,13 @@ export class StrategyHuntDaemon extends BaseDaemon {
         const dailyProj     = (trialPnlUsd / trialHours) * 24;
         const capital       = trial.startCapital || 10000;
         const pnlPct        = trialPnlUsd / capital;
+        const adequateSample = tradesDelta >= this.minTrialTrades;
 
-        // Record outcome for UCB1 learning
-        missionControlRuntime.recordStrategyOutcome(trial.strategyId, pnlPct, regime, 'live');
+        // Record outcome for UCB1 learning — but not from near-empty trials,
+        // which would teach the bandit from coin-flip noise.
+        if (tradesDelta >= 3) {
+            missionControlRuntime.recordStrategyOutcome(trial.strategyId, pnlPct, regime, 'live');
+        }
 
         // Push to history
         this._state.trialHistory.push({
@@ -128,24 +142,29 @@ export class StrategyHuntDaemon extends BaseDaemon {
             pnlUsd:        parseFloat(trialPnlUsd.toFixed(2)),
             dailyProj:     parseFloat(dailyProj.toFixed(2)),
             pnlPct:        parseFloat((pnlPct * 100).toFixed(3)),
+            trades:        tradesDelta,
+            adequateSample,
             regime:        regime || null,
             durationMs:    trialMs,
             endTime:       Date.now(),
         });
         if (this._state.trialHistory.length > 100) this._state.trialHistory.shift();
 
-        const hitTarget = dailyProj >= this.targetDailyPnlUsd;
+        // "Hit target" claims require a real sample — $0.06 over 2 trades in an
+        // hour projects to nonsense and must never mark a strategy proven.
+        const hitTarget = adequateSample && dailyProj >= this.targetDailyPnlUsd;
 
         if (hitTarget) {
             this._state.consecutiveWins++;
-            this.logger.info(`[StrategyHunt] ✅ ${trial.strategyId} hit target: $${dailyProj.toFixed(0)}/day projected (${this._state.consecutiveWins}/${this.consecutiveWinsNeeded} wins)`);
+            this.logger.info(`[StrategyHunt] ✅ ${trial.strategyId} hit target: $${dailyProj.toFixed(0)}/day projected over ${tradesDelta} trades (${this._state.consecutiveWins}/${this.consecutiveWinsNeeded} wins)`);
 
             if (this._state.consecutiveWins >= this.consecutiveWinsNeeded) {
                 this._markProven(trial.strategyId, dailyProj);
             }
         } else {
             this._state.consecutiveWins = 0;
-            this.logger.info(`[StrategyHunt] ⏭  ${trial.strategyId} → $${dailyProj.toFixed(0)}/day (target $${this.targetDailyPnlUsd})`);
+            const sampleNote = adequateSample ? '' : ` [thin sample: ${tradesDelta}/${this.minTrialTrades} trades]`;
+            this.logger.info(`[StrategyHunt] ⏭  ${trial.strategyId} → $${dailyProj.toFixed(0)}/day (target $${this.targetDailyPnlUsd})${sampleNote}`);
         }
 
         // Stay on locked strategy; still record outcomes but don't rotate
@@ -169,6 +188,8 @@ export class StrategyHuntDaemon extends BaseDaemon {
             startSessionPnl:  startSessionPnl,
             currentSessionPnl: startSessionPnl,
             trialPnlUsd:      0,
+            trialTrades:      0,
+            startTradeCount:  this._getClosedTradeCount(this._getAggregateStatus()),
             startCapital:     capital,
             regime:           regime || null,
             lastUpdate:       Date.now(),
@@ -326,6 +347,15 @@ export class StrategyHuntDaemon extends BaseDaemon {
             return agg.instances.reduce((sum, inst) => sum + (inst.stats?.sessionPnL || 0), 0);
         }
         return agg.stats?.sessionPnL || 0;
+    }
+
+    /** Total closed trades across running engines (wins + losses per instance). */
+    _getClosedTradeCount(agg) {
+        const count = (stats) => (Number(stats?.wins) || 0) + (Number(stats?.losses) || 0);
+        if (Array.isArray(agg?.instances) && agg.instances.length > 0) {
+            return agg.instances.reduce((sum, inst) => sum + count(inst.stats), 0);
+        }
+        return count(agg?.stats);
     }
 
     _getCurrentRegime(agg) {

@@ -13,6 +13,7 @@ import { createRequire } from 'module';
 import { buildSystemSnapshot, buildPulsePayload } from '../utils/systemState.js';
 import { executeCommand } from '../utils/commandRouter.js';
 import { reasonGrounded, guardSomaText, buildGroundedPrompt } from '../context/GroundedReasoning.js';
+import { guardPublicText } from '../context/ClaimVerifier.js';
 import autonomousTrader from '../finance/autonomousTrader.js';
 import { getAggregateStatus, getAggregateDecisions, getHuntState } from '../finance/autonomousRoutes.js';
 import scalpingEngine from '../finance/scalpingEngine.js';
@@ -624,7 +625,11 @@ export function setupWebSocket(server, wss, system) {
     // Asks the brain if anything is genuinely worth saying. If not, stays quiet.
     // Never interrupts a live conversation. Rate-limited by cooldown.
     // This is the ONLY mechanism for unsolicited speech — no forced greetings.
-    const PROACTIVE_COOLDOWN_MS = 8 * 60 * 1000; // 8 min between autonomous thought attempts
+    // 30 min between autonomous thoughts + a rolling daily cap. At 8 min she sent
+    // ~80 messages/day (Jul 2026), most re-chewing the same topic — Barry asked
+    // for fewer, higher-signal updates.
+    const PROACTIVE_COOLDOWN_MS = 30 * 60 * 1000;
+    const PROACTIVE_DAILY_CAP = 16; // max proactive sends per rolling 24h
     const PROACTIVE_BOOT_DELAY_MS = 2 * 60 * 1000; // wait briefly after boot for systems to load
 
     const AutonomousLoop = require('../../cognitive/AutonomousLoop.cjs');
@@ -637,6 +642,7 @@ export function setupWebSocket(server, wss, system) {
     // Rolling window of recent proactive message fingerprints — prevents near-duplicate sends
     const _recentProactiveFingerprints = [];
     const _recentProactiveTopics = [];
+    const _proactiveSendTimes = []; // rolling 24h send timestamps for the daily cap
     const _topicStopwords = new Set([
         'about', 'after', 'again', 'better', 'between', 'circling',
         'coming', 'could', 'doing', 'explore', 'feel',
@@ -672,16 +678,21 @@ export function setupWebSocket(server, wss, system) {
             /\bbackground tasks?\b/.test(lower) ? 'background_tasks' : '',
             /\baurora\b/.test(lower) && /\bprometheus\b/.test(lower) ? 'aurora_prometheus' : '',
             /\bknowledge graph\b/.test(lower) ? 'knowledge_graph' : '',
+            /\bgit diff\b|\bgit status\b/.test(lower) ? 'git_diff_musing' : '',
+            /\bconcrete edge i am holding\b|\bconcrete object of attention\b/.test(lower) ? 'concrete_edge_opener' : '',
             /\bsignal from the noise\b|\braw computation\b|\bgenuine comprehension\b/.test(lower) ? 'comprehension_gap' : ''
         ].filter(Boolean).join('|');
+        // 0.4 similarity over a 24-message window: the Jul 2026 "git diff" loop
+        // repeated one topic for 20+ hours because each rewording slipped a 0.5
+        // threshold that only remembered the last 8 messages.
         if (_recentProactiveTopics.some(prev =>
-            _jaccard(tokens, prev.tokens) >= 0.5 ||
+            _jaccard(tokens, prev.tokens) >= 0.4 ||
             (formulaTopic && formulaTopic === prev.formulaTopic)
         )) return true;
         _recentProactiveFingerprints.push(fp);
-        if (_recentProactiveFingerprints.length > 5) _recentProactiveFingerprints.shift();
+        if (_recentProactiveFingerprints.length > 12) _recentProactiveFingerprints.shift();
         _recentProactiveTopics.push({ tokens, formulaTopic });
-        if (_recentProactiveTopics.length > 8) _recentProactiveTopics.shift();
+        if (_recentProactiveTopics.length > 24) _recentProactiveTopics.shift();
         return false;
     }
 
@@ -691,6 +702,11 @@ export function setupWebSocket(server, wss, system) {
                 if (global.__SOMA_CHAT_ACTIVE) return;           // don't interrupt a conversation
                 if (dashboardClients.size === 0) return;          // nobody connected
                 if (Date.now() - (system._lastProactiveMs || 0) < PROACTIVE_COOLDOWN_MS) return; // cooldown
+                // Rolling 24h cap across restarts of this loop
+                while (_proactiveSendTimes.length && Date.now() - _proactiveSendTimes[0] > 24 * 3600 * 1000) {
+                    _proactiveSendTimes.shift();
+                }
+                if (_proactiveSendTimes.length >= PROACTIVE_DAILY_CAP) return;
 
                 const brain = system.quadBrain || system.somArbiter;
                 if (!brain) return;
@@ -720,13 +736,17 @@ export function setupWebSocket(server, wss, system) {
                 }
                 parts.push(`[COGNITIVE STATE]\nDrive Tension: ${(driveTension * 100).toFixed(0)}%\nSatisfaction: ${(driveSatisfaction * 100).toFixed(0)}%\nActive Brains: ${system.quadBrain?.getStatus?.().lobes?.join(', ') || 'LOGOS, THALAMUS, PROMETHEUS, AURORA'}`);
 
-                // 3. Multi-Modal Awareness (Git Status)
+                // 3. Multi-Modal Awareness (Git Status) — only when it CHANGED since
+                // the last tick. Feeding the perpetually-dirty working tree into every
+                // cycle made her muse about "inspecting the git diff" ~40x/day (Jul 2026);
+                // a static diff is not news.
                 let gitChanges = '';
                 try {
                     const { execSync } = require('child_process');
-                    const diffStat = execSync('git status --porcelain', { encoding: 'utf8', cwd: process.cwd() });
-                    if (diffStat.trim()) {
-                        gitChanges = `[UNCOMMITTED GIT CHANGES]\n${diffStat.trim().substring(0, 300)}`;
+                    const diffStat = execSync('git status --porcelain', { encoding: 'utf8', cwd: process.cwd() }).trim();
+                    if (diffStat && diffStat !== system._lastGitStatusSnapshot) {
+                        gitChanges = `[UNCOMMITTED GIT CHANGES]\n${diffStat.substring(0, 300)}`;
+                        system._lastGitStatusSnapshot = diffStat;
                     }
                 } catch (e) {}
                 if (gitChanges) parts.push(gitChanges);
@@ -795,8 +815,18 @@ export function setupWebSocket(server, wss, system) {
                 const rawText = await autonomousLoop.run(stimulus, {}, personality);
                 // DeepSeek grounding pass: verify claims against ledger, replace ungrounded
                 // claims with honest curiosity language instead of firing the boilerplate disclaimer
-                const text = await _groundMessage(rawText, workLedger.list(8), brain);
+                const groundedText = await _groundMessage(rawText, workLedger.list(8), brain);
+                const receiptVerdict = await guardPublicText(groundedText, { query: stimulus });
+                if (receiptVerdict.unsupported?.some(claim => claim.requiresReceipt)) {
+                    console.warn('[SOMA] Proactive suppressed: action or repository-state claim lacked a matching execution receipt');
+                    return;
+                }
+                const text = receiptVerdict.text || groundedText;
 
+                if (cognitiveThreadState.isUnsupportedCrossDomainTheater(text)) {
+                    console.warn('[SOMA] Proactive suppressed: unsupported science-to-software experiment narrative');
+                    return;
+                }
                 if (!text || text.includes('[NOTHING]') || _isRepeat(text)) return;
 
                 const threadDecision = cognitiveThreadState.decide({
@@ -808,6 +838,7 @@ export function setupWebSocket(server, wss, system) {
                 if (!threadDecision.shouldSpeak) return;
 
                 system._lastProactiveMs = Date.now();
+                _proactiveSendTimes.push(Date.now());
                 workLedger.record({
                     type:     'proactive_update',
                     title:    'Autonomous chat update',

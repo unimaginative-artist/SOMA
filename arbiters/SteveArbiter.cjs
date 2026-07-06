@@ -231,10 +231,17 @@ class SteveArbiter extends BaseArbiter {
     const historyText = history.map(h => `${h.role.toUpperCase()}: ${h.content}`).join('\n');
 
     // Escalation check
-    if (context.escalateToMax && context.onPhase) {
+    if (context.escalateToMax && this.system?.maxAgentBridge) {
       checkAbort();
-      context.onPhase('max_consulted', { details: 'Escalating complex task to MAX...' });
-      await delay(500);
+      if (context.onPhase) context.onPhase('max_consulted', { details: 'Delegating complex task to MAX...' });
+      
+      try {
+        const goalText = `[Escalated by SOMA] The user requested: ${prompt}\n\nTask context:\n${JSON.stringify(history.slice(-3))}`;
+        const res = await this.system.maxAgentBridge.injectGoal(goalText, { priority: 0.9 });
+        return `I have escalated this task to MAX. He is now processing it in the background (Goal ID: ${res?.id || 'unknown'}). He will notify you when complete.`;
+      } catch (err) {
+        return `I tried to escalate this to MAX, but the bridge failed: ${err.message}`;
+      }
     }
 
     // 6. REAL GENERATION: If it's a normal chat, use SOMA's brain with Steve's persona
@@ -473,10 +480,25 @@ STYLE: Terse, direct, slightly impatient. No preamble. No bullet lists of questi
   async executeTool(toolName, parameters, context = {}) {
     try {
       this.logger.info(`[STEVE] Executing tool: ${toolName}`);
-      const result = await this.toolRegistry.executeTool(toolName, parameters, {
+            const result = await this.toolRegistry.executeTool(toolName, parameters, {
         ...context,
         executor: 'Steve'
       });
+
+      // Reality-Checked Tool Execution
+      try {
+        const { recordReality } = await import('../core/RealityLedger.js');
+        await recordReality(`Executed tool ${toolName}`, {
+            status: result.success ? 'VERIFIED_RESULT' : 'REJECTED',
+            proof: { 
+                stdout: result.data || result.output, 
+                stderr: result.error 
+            },
+            metadata: { toolName, parameters, duration: result.metadata?.duration }
+        });
+      } catch (e) {
+        this.logger.warn(`[STEVE] RealityLedger unavailable: ${e.message}`);
+      }
 
       // Log to learning pipeline
       if (this.learningPipeline) {

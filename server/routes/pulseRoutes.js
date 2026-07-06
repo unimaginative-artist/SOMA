@@ -4,6 +4,7 @@ import path from 'path';
 import { exec } from 'child_process';
 import { VirtualShell } from '../../arbiters/VirtualShell.js';
 import { guardSomaText } from '../context/GroundedReasoning.js';
+import identity from '../services/GMNIdentity.js';
 
 // Convert module.exports = function(context) { ... } to export default function(context) { ... }
 
@@ -425,6 +426,33 @@ Return ONLY valid JSON in this format:
   });
 
   // ═══════════════════════════════════════════════════════════
+  // SMART TERMINAL
+  // ═══════════════════════════════════════════════════════════
+
+  router.post('/terminal/translate', async (req, res) => {
+    const steveArbiter = context.steveArbiter;
+    if (!steveArbiter) return res.status(503).json({ error: 'SteveArbiter not initialized' });
+    try {
+      const { prompt } = req.body;
+      const sysMsg = "You are a shell command translator. Translate the natural language request into a single Windows PowerShell or shell command. Return ONLY the raw command. NO markdown formatting, NO explanation, NO backticks. If you cannot translate it, return an empty string.";
+      const result = await steveArbiter.processChat(
+        { role: 'user', content: prompt },
+        [{ role: 'system', content: sysMsg }],
+        { stream: false, autonomous: true }
+      );
+      
+      let cmd = result.response || '';
+      // Strip markdown code blocks if the LLM adds them despite instructions
+      cmd = cmd.replace(/^```[a-z]*\n?/im, '').replace(/```$/im, '').trim();
+      
+      res.json({ success: true, command: cmd });
+    } catch (error) {
+      console.error('[PulseRoutes] terminal translate error:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════
   // ANALYSIS & WORKFLOW (Forward to PulseArbiter)
   // ═══════════════════════════════════════════════════════════
 
@@ -462,6 +490,84 @@ Return ONLY valid JSON in this format:
   });
 
   // ═══════════════════════════════════════════════════════════
+  // AGENTIC LOOPS (Self-Healing & Learning)
+  // ═══════════════════════════════════════════════════════════
+
+  router.post('/arbiter/modify-code', async (req, res) => {
+    try {
+      const { filepath, request, context: modifyContext } = req.body;
+      const { nemesis } = context;
+
+      if (!filepath || !request) {
+        return res.status(400).json({ success: false, error: 'filepath and request are required' });
+      }
+
+      const resolvedPath = safeResolve(filepath);
+
+      // 1. Nemesis Code Gate (Critique)
+      if (nemesis && modifyContext?.healing) {
+        console.log(`[PulseRoutes] 🛡️ Routing auto-fix through NemesisArbiter for ${filepath}...`);
+        
+        try {
+          const evalResult = await nemesis.evaluate(resolvedPath, request, "Self-Healing Auto-Fix");
+          
+          if (evalResult && evalResult.score < 0.70) {
+            console.warn(`[PulseRoutes] ❌ Nemesis rejected the auto-fix (Score: ${evalResult.score}). Reason: ${evalResult.critique}`);
+            return res.status(406).json({ 
+              success: false, 
+              error: 'NemesisArbiter rejected the proposed fix for safety or quality reasons.',
+              critique: evalResult.critique
+            });
+          }
+          
+          console.log(`[PulseRoutes] ✅ Nemesis approved the auto-fix (Score: ${evalResult.score}).`);
+        } catch (evalError) {
+          console.warn(`[PulseRoutes] ⚠️ Nemesis evaluation failed, proceeding with caution:`, evalError.message);
+        }
+      }
+
+      // 2. Apply Fix
+      fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+      fs.writeFileSync(resolvedPath, request, 'utf8');
+
+      res.json({ success: true, path: resolvedPath });
+    } catch (error) {
+      console.error('[PulseRoutes] modify-code error:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  router.post('/learning/record', async (req, res) => {
+    try {
+      const { messageBroker } = context;
+      if (!messageBroker) {
+        return res.status(503).json({ success: false, error: 'MessageBroker not initialized' });
+      }
+
+      const { type, success, data, fix, source } = req.body;
+      
+      console.log(`[PulseRoutes] 🧠 Recording learning event from ${source || 'unknown'} (${type})`);
+
+      // Publish to Universal Learning Pipeline (DistillationArbiter listens to this)
+      messageBroker.publish('learning_ready', {
+        experiences: [{
+          action: type,
+          reward: success ? 1 : -1,
+          outcome: data || fix,
+          agent: source || 'SelfHealingEngine'
+        }],
+        outcomes: [success ? 'success' : 'failure'],
+        stats: { recordedAt: Date.now() }
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('[PulseRoutes] learning/record error:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════
   // AST CODEBASE INDEXING & BLAST RADIUS
   // ═══════════════════════════════════════════════════════════
 
@@ -478,14 +584,43 @@ Return ONLY valid JSON in this format:
     }
   });
 
+  router.get('/vector-search', async (req, res) => {
+    const vectorSearch = context.vectorSearch;
+    if (!vectorSearch || !vectorSearch.isReady) {
+      return res.status(503).json({ success: false, error: 'VectorSearchService not initialized or not ready' });
+    }
+    try {
+      const { query, limit } = req.query;
+      if (!query) return res.status(400).json({ success: false, error: 'Query required' });
+      const results = await vectorSearch.search(query, parseInt(limit) || 5);
+      res.json({ success: true, results });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   router.get('/ast/symbols', async (req, res) => {
     if (!astIndexer) {
       return res.status(503).json({ success: false, error: 'ASTIndexerService not initialized' });
     }
     try {
-      const { query, limit } = req.query;
-      const symbols = astIndexer.searchSymbols(query || '', parseInt(limit) || 50);
+      const { query, limit, type } = req.query;
+      const symbols = astIndexer.searchSymbols(query || '', parseInt(limit) || 50, type);
       res.json({ success: true, symbols });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  router.get('/ast/types/trace', async (req, res) => {
+    if (!astIndexer) {
+      return res.status(503).json({ success: false, error: 'ASTIndexerService not initialized' });
+    }
+    try {
+      const { typeName } = req.query;
+      if (!typeName) return res.status(400).json({ success: false, error: 'typeName required' });
+      const result = astIndexer.traceTypeDependencies(typeName);
+      res.json(result);
     } catch (error) {
       res.status(500).json({ success: false, error: error.message });
     }
@@ -505,6 +640,42 @@ Return ONLY valid JSON in this format:
       const result = astIndexer.computeBlastRadius(targetPaths);
       res.json(result);
     } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  router.post('/export-gmn', async (req, res) => {
+    try {
+      const { siteName, html } = req.body;
+      if (!siteName || !html) {
+        return res.status(400).json({ success: false, error: 'siteName and html are required' });
+      }
+
+      // Cryptographically sign the HTML using the Node's Ed25519 identity
+      const signature = identity.sign(html);
+      const publicKey = identity.getPublicKeyHex();
+      
+      const artifact = {
+        version: 1,
+        alg: 'ed25519',
+        siteName,
+        html,
+        signature,
+        publicKey,
+        createdAt: new Date().toISOString()
+      };
+
+      const exportDir = path.resolve(process.cwd(), 'data', 'pulse', 'exports');
+      if (!fs.existsSync(exportDir)) {
+        fs.mkdirSync(exportDir, { recursive: true });
+      }
+
+      const artifactPath = path.join(exportDir, `${siteName}.gmn-artifact`);
+      fs.writeFileSync(artifactPath, JSON.stringify(artifact, null, 2));
+
+      res.json({ success: true, artifactPath, signature });
+    } catch (error) {
+      console.error('[Pulse Export] Error:', error);
       res.status(500).json({ success: false, error: error.message });
     }
   });

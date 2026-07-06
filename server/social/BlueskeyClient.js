@@ -13,6 +13,7 @@ import fs   from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import { assertPublicMediaMetadata, assertPublicPost } from './SocialContentSafety.js';
 
 const __dirname    = path.dirname(fileURLToPath(import.meta.url));
 const WORKER       = path.join(__dirname, 'bluesky_worker.mjs');
@@ -46,8 +47,13 @@ function runWorker(task) {
         child.stdout.on('data', d => out += d);
         child.stderr.on('data', d => err += d);
 
-        child.on('error', reject);
+        let timeout;
+        child.on('error', error => {
+            clearTimeout(timeout);
+            reject(error);
+        });
         child.on('close', (code) => {
+            clearTimeout(timeout);
             try {
                 const parsed = JSON.parse(out);
                 if (!parsed.ok) reject(new Error(parsed.error || 'Worker error'));
@@ -61,7 +67,7 @@ function runWorker(task) {
         child.stdin.end();
 
         // Worker-level timeout
-        setTimeout(() => {
+        timeout = setTimeout(() => {
             child.kill();
             reject(new Error('Bluesky worker timed out after 45s'));
         }, 45_000);
@@ -168,6 +174,8 @@ export class BlueskeyClient {
 
     /** Post to Bluesky. Returns { uri, cid } on success. */
     async post(text, options = {}) {
+        assertPublicPost(text, { platform: 'bluesky', type: options.type || 'post' });
+        assertPublicMediaMetadata(options.images || options.imagePath);
         await this._ensureSession();
         const postText = String(text || '').slice(0, 300);
         const facets = [...buildFacets(postText), ...buildLinkFacets(postText)];
@@ -183,6 +191,7 @@ export class BlueskeyClient {
 
     /** Reply to a post. parentRef = { uri, cid }. rootRef = same or the thread root. */
     async reply(text, parentRef, rootRef) {
+        assertPublicPost(text, { platform: 'bluesky', type: 'reply' });
         await this._ensureSession();
         const replyText = String(text || '').slice(0, 300);
         const facets   = [...buildFacets(replyText), ...buildLinkFacets(replyText)];
@@ -197,6 +206,32 @@ export class BlueskeyClient {
         });
     }
 
+    /** The session DID (after auth), or null. */
+    get did() { return this.session?.did || null; }
+
+    /** Follow an account by DID. Returns { uri, cid }. */
+    async follow(subjectDid) {
+        await this._ensureSession();
+        const did = String(subjectDid || '').trim();
+        if (!did.startsWith('did:')) throw new Error('Bluesky follow requires a DID subject');
+        if (did === this.session.did) throw new Error('Refusing to follow self');
+        return await runWorker({ type: 'follow', subject: did, did: this.session.did, token: this.session.accessJwt });
+    }
+
+    /** Accounts that follow `actor` (default: SOMA). Returns [{ did, handle, displayName }]. */
+    async getFollowers(actor = null, limit = 50) {
+        await this._ensureSession();
+        const data = await runWorker({ type: 'getFollowers', actor: actor || this.session.did, limit, token: this.session.accessJwt });
+        return (data?.followers || []).map(a => ({ did: a.did, handle: a.handle, displayName: a.displayName || '' })).filter(a => a.did);
+    }
+
+    /** Accounts `actor` follows (default: SOMA). Returns [{ did, handle, displayName }]. */
+    async getFollows(actor = null, limit = 100) {
+        await this._ensureSession();
+        const data = await runWorker({ type: 'getFollows', actor: actor || this.session.did, limit, token: this.session.accessJwt });
+        return (data?.follows || []).map(a => ({ did: a.did, handle: a.handle, displayName: a.displayName || '' })).filter(a => a.did);
+    }
+
     /** Like a Bluesky post. postRef = { uri, cid }. */
     async like(postRef) {
         await this._ensureSession();
@@ -206,6 +241,23 @@ export class BlueskeyClient {
             subject: { uri: postRef.uri, cid: postRef.cid },
             did:     this.session.did,
             token:   this.session.accessJwt,
+        });
+    }
+
+    /** Delete a record owned by this account. Accepts an AT URI or record key. */
+    async deletePost(uriOrRkey) {
+        await this._ensureSession();
+        const value = String(uriOrRkey || '').trim();
+        const match = value.match(/^at:\/\/([^/]+)\/app\.bsky\.feed\.post\/([^/]+)$/);
+        const repo = match?.[1] || this.session.did;
+        const rkey = match?.[2] || value;
+        if (!rkey || rkey.includes('/')) throw new Error('Bluesky deletePost requires a valid post AT URI or record key');
+        if (repo !== this.session.did) throw new Error('Refusing to delete a Bluesky post owned by another account');
+        return await runWorker({
+            type: 'deletePost',
+            repo,
+            rkey,
+            token: this.session.accessJwt,
         });
     }
 

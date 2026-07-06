@@ -638,6 +638,15 @@ class SimulationArbiter extends BaseArbiter {
       success: this.currentDemonstration.success
     });
 
+    // Broadcast to Training Collector/Distillation
+    if (this.currentDemonstration.success && this.broker) {
+      this.broker.publish('SIMULATION_TRAJECTORY_SUCCESS', {
+          score: Math.floor(this.score),
+          stateActionPairs: this.currentDemonstration.stateActionPairs,
+          duration: this.currentDemonstration.endTime - this.currentDemonstration.startTime
+      });
+    }
+
     // Emit to broker for other arbiters to learn from
     if (this.broker) {
       this.broker.publish('simulation_demonstration', {

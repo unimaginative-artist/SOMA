@@ -20,6 +20,36 @@ const SecurityGatesPanel: React.FC<SecurityGatesPanelProps> = ({ isVisible, blue
   const [scans, setScans] = useState<SecurityScan[]>([]);
   const [isScanning, setIsScanning] = useState(false);
   const [overallScore, setOverallScore] = useState(0);
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExportGMN = async () => {
+    const htmlFile = blueprint.find((f: any) => f.path.endsWith('.html'));
+    if (!htmlFile) {
+      alert('No HTML file found in blueprint to export.');
+      return;
+    }
+    const siteName = window.prompt('Enter GMN Site Name (e.g. my-site):');
+    if (!siteName) return;
+
+    setIsExporting(true);
+    try {
+      const res = await fetch('/api/pulse/export-gmn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ siteName, html: htmlFile.content })
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert('Cryptographic signature generated! Artifact saved. You can now use `soma publish ' + siteName + '` in the terminal.');
+      } else {
+        alert('Failed to sign artifact: ' + data.error);
+      }
+    } catch (err) {
+      alert('Export failed: ' + String(err));
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const runSecurityScan = async () => {
     setIsScanning(true);
@@ -216,9 +246,18 @@ const SecurityGatesPanel: React.FC<SecurityGatesPanelProps> = ({ isVisible, blue
               Last scan: {new Date().toLocaleTimeString()}
             </div>
             {criticalIssues === 0 && highIssues === 0 ? (
-              <div className="flex items-center space-x-2 text-emerald-400">
-                <CheckCircle className="w-4 h-4" />
-                <span className="text-xs font-bold">APPROVED FOR DEPLOYMENT</span>
+              <div className="flex items-center space-x-4">
+                <div className="flex items-center space-x-2 text-emerald-400">
+                  <CheckCircle className="w-4 h-4" />
+                  <span className="text-xs font-bold">APPROVED FOR DEPLOYMENT</span>
+                </div>
+                <button
+                  onClick={handleExportGMN}
+                  disabled={isExporting}
+                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-bold transition-colors disabled:opacity-50"
+                >
+                  {isExporting ? 'SIGNING...' : 'EXPORT FOR GMN'}
+                </button>
               </div>
             ) : (
               <div className="flex items-center space-x-2 text-red-400">

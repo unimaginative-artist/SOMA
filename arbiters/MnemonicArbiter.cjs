@@ -325,6 +325,26 @@ class MnemonicArbiter extends BaseArbiter {
       return { success: false, error: 'State dumps should not be stored in semantic memory' };
     }
 
+        // Epistemic verification layer check
+    try {
+      const { epistemicLayer, CLAIM_TYPE } = await import('../core/EpistemicLayer.js');
+      // If it's a generated summary or inference, run it through the Epistemic Layer
+      if (metadata.source !== 'raw_extraction' && !metadata.skipEpistemic) {
+          const claim = await epistemicLayer.processClaim(content, {
+              type: metadata.claimType || CLAIM_TYPE.OBSERVATION,
+              metadata: metadata
+          });
+          
+          if (claim.status === 'REJECTED') {
+              this.log('warn', `?? Skipping memory storage: Epistemic failure (hallucination detected).`, { reason: claim.metadata?.rejectionReason });
+              return { success: false, error: 'Epistemic rejection: hallucinatory or invalid memory' };
+          }
+      }
+    } catch (e) {
+      // Graceful fail if epistemic layer is offline
+      this.log('warn', `?? Epistemic check failed: ${e.message}`);
+    }
+
     const id = this._generateId(content);
     const now = Date.now();
 
@@ -912,9 +932,9 @@ class MnemonicArbiter extends BaseArbiter {
         this.log('info', `Cleaned ${deleted.changes} old memories`);
       }
 
-      // Cap total memories at 5,000 — prune least-accessed entries older than 7 days
+      // Cap total memories at 4000 - prune least-accessed entries older than 7 days
       // when we exceed the ceiling. Preserves high-importance and recently-used memories.
-      const MEMORY_CAP = 5000;
+      const MEMORY_CAP = 4000;
       const totalCount = await new Promise(resolve => setImmediate(() => {
         resolve(this.db.prepare('SELECT COUNT(*) as c FROM memories').get().c);
       }));

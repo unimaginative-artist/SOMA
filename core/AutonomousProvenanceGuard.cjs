@@ -4,7 +4,7 @@ const CLAIM_RE = /\b(i\s+(ran|tested|found|observed|measured|verified|finished|c
 const NUMERIC_RE = /\b\d+(\.\d+)?\s*(%|permutations?|runs?|tests?|cases?)\b|\bp\s*[<=>≈~±]\s*0?\.\d+/i;
 const VAGUE_EVIDENCE_RE = /generated from|current internal signals|recent work ledger|none|n\/a|unknown|provenance guard|unsupported_empirical_claim/i;
 const INTERNAL_LEAK_RE = /\b(refine cluster|dinged|score\s*0\.\d+|quality gate|em-dash|contains em-dash|provenance guard|unsupported_empirical_claim|prompt|system message|internal scoring)\b/i;
-const ACTIVE_UNVERIFIED_RE = /\b(i\s*(am|'m)?\s*(running|pulling|cross-referencing|scraping|testing|measuring|verifying|executing)|going to\s+(pull|cross-reference|test|scrape|run|verify)|about to\s+(pull|cross-reference|test|scrape|run|verify))\b/i;
+const ACTIVE_UNVERIFIED_RE = /\b(i\s*(am|'m)?\s*(running|pulling|cross-referencing|scraping|testing|measuring|verifying|executing|watching|monitoring)|i\s+(need|want|intend|plan)\s+to\s+(inspect|check|watch|monitor|commit|pull|run|test|verify|trace|simulate|update|modify)|going to\s+(inspect|check|watch|monitor|commit|pull|cross-reference|test|scrape|run|verify)|about to\s+(inspect|check|watch|monitor|commit|pull|cross-reference|test|scrape|run|verify))\b/i;
 const STOPWORDS = new Set([
   'the','and','that','this','with','from','into','next','will','have','been','being','result',
   'test','testing','ran','found','working','planning','checking','verify','verified','evidence',

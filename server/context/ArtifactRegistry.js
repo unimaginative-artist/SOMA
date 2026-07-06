@@ -7,7 +7,9 @@ const REGISTRY_FILE = path.join(ROOT, 'SOMA', 'artifact-registry.json');
 const SOURCES = {
     reflections: path.join(ROOT, 'data', 'vault', 'reflections'),
     medicalLedger: path.join(ROOT, 'data', 'medical-lab', 'research-ledger.json'),
+    marketLabLedger: path.join(ROOT, 'data', 'market-lab', 'strategy-ledger.json'),
     marketEvidenceSummary: path.join(ROOT, 'data', 'market-evidence', 'evidence-summary.json'),
+    simToLiveReport: path.join(ROOT, 'data', 'trading', 'sim-to-live-report.json'),
     workLedger: path.join(ROOT, 'SOMA', 'autonomous-work-ledger.json'),
     stories: path.join(ROOT, 'SOMA', 'stories'),
     photos: path.join(ROOT, 'SOMA', 'photos'),
@@ -158,6 +160,41 @@ export async function listArtifacts({ query = '', limit = 24, includeCode = true
             summary: `${market.totalRecent || 0} recent records. Latest: ${market.latest?.symbol || 'unknown'} ${market.latest?.type || market.latest?.decision || 'recorded'}.`,
             tags: ['market', 'evidence', 'mission-control'],
             claimVerbs: ['tracked', 'tested', 'logged']
+        }));
+    }
+
+    const marketLab = await readJson(SOURCES.marketLabLedger, []);
+    if (Array.isArray(marketLab)) {
+        const byStatus = marketLab.reduce((acc, entry) => {
+            const status = entry.graduation?.status || entry.status || 'unknown';
+            acc[status] = (acc[status] || 0) + 1;
+            return acc;
+        }, {});
+        const bestReady = marketLab
+            .filter(entry => entry.graduation?.canPromoteToPaper || entry.status === 'ready_for_paper')
+            .sort((a, b) => (b.prometheusScore || 0) - (a.prometheusScore || 0))[0] || null;
+        items.push(artifact('market-strategy-compiler', 'market_strategy_compiler', 'Market Lab strategy compiler and graduation gate', {
+            source: 'market-lab',
+            status: 'active',
+            confidence: 0.9,
+            evidencePath: rel(SOURCES.marketLabLedger),
+            summary: `Compiled ${marketLab.length} Market Lab entries into symbol-bound paper strategy contracts. ready_for_paper=${byStatus.ready_for_paper || 0}; rejected_in_simulation=${byStatus.rejected_in_simulation || 0}; blocked_by_live_paper=${byStatus.blocked_by_live_paper || 0}. Best ready candidate: ${bestReady?.asset?.symbol || 'none'} / ${bestReady?.strategy?.id || 'none'}. Agent tools: market_lab_status, market_lab_compile.`,
+            tags: ['market', 'simulation', 'compiler', 'paper-trading', 'mission-control'],
+            claimVerbs: ['compiled', 'tested', 'gated', 'blocked']
+        }));
+    }
+
+    const simToLive = await readJson(SOURCES.simToLiveReport, null);
+    if (simToLive) {
+        items.push(artifact('sim-to-live-reconciliation', 'market_strategy_reconciliation', 'Sim-to-live trading ladder', {
+            source: 'mission-control',
+            status: 'active',
+            confidence: 0.88,
+            evidencePath: rel(SOURCES.simToLiveReport),
+            updatedAt: simToLive.generatedAt,
+            summary: `Sim entries=${simToLive.summary?.simEntries || 0}; sim ready=${simToLive.summary?.simReadyForPaper || 0}; paper queue=${simToLive.summary?.paperQueue || 0}; paper incumbents=${simToLive.summary?.paperIncumbents || 0}; live candidates=${simToLive.summary?.liveCandidates || 0}; quarantined=${simToLive.summary?.quarantined || 0}. Selected incumbent: ${simToLive.selectedIncumbent?.strategyId || 'none'} / ${simToLive.selectedIncumbent?.symbol || 'none'}. Agent tools: sim_to_live_status, sim_to_live_reconcile.`,
+            tags: ['market', 'trading', 'sim-to-live', 'paper-trading', 'mission-control'],
+            claimVerbs: ['reconciled', 'tested', 'promoted', 'quarantined']
         }));
     }
 

@@ -6,6 +6,8 @@ import test from 'node:test';
 import sharp from 'sharp';
 
 import somaArtDirector, { computePerceptualHash, perceptualHashDistance } from '../server/social/SomaArtDirector.js';
+import { assessImagePostMatch } from '../server/social/SocialImageLibrary.js';
+import { shouldAutoGenerateBlueskyImage } from '../daemons/SocialSchedulerDaemon.js';
 
 test('compiles old cyberpunk prompts into subject-first direction', () => {
     const prepared = somaArtDirector.prepare({
@@ -69,4 +71,41 @@ test('perceptual hash recognizes the same composition after re-encoding', async 
     const distance = perceptualHashDistance(await computePerceptualHash(first), await computePerceptualHash(second));
     assert.ok(distance <= 4, `expected near-identical hashes, got distance ${distance}`);
     fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('autonomous image reuse requires provenance for the exact post', () => {
+    const post = { id: 'sq-new', type: 'soma_identity', text: 'Attention filters weak inputs before they reach memory.' };
+    const stale = {
+        filename: 'ripple-metadata-dry-run.png',
+        alt: 'A generic SOMA architecture image about attention and memory.',
+        tags: ['soma', 'soma-identity'],
+        metadata: { sourcePostId: 'sq-old', sourcePostType: 'soma_identity' },
+    };
+    const exact = {
+        ...stale,
+        metadata: { sourcePostId: 'sq-new', sourcePostType: 'soma_identity' },
+    };
+    assert.equal(assessImagePostMatch(stale, post).exactPost, false);
+    assert.equal(assessImagePostMatch(exact, post).exactPost, true);
+});
+
+test('linked technical posts can use images while medical and finance remain conservative', () => {
+    assert.equal(shouldAutoGenerateBlueskyImage({
+        platform: 'bluesky',
+        type: 'ai_paper',
+        text: 'A new method tests memory routing under load. https://example.com/paper',
+        images: [],
+    }), true);
+    assert.equal(shouldAutoGenerateBlueskyImage({
+        platform: 'bluesky',
+        type: 'medical_research',
+        text: 'A clinical study reports an association. Not medical advice. https://example.com/study',
+        images: [],
+    }), false);
+    assert.equal(shouldAutoGenerateBlueskyImage({
+        platform: 'bluesky',
+        type: 'finance_brief',
+        text: 'A stock moved after earnings. Observation, not financial advice.',
+        images: [],
+    }), false);
 });

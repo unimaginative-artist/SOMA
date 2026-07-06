@@ -7,6 +7,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { execFile } from 'child_process';
+import bannedNodes from '../services/GMNBannedNodes.js';
 import toolRegistry from '../../core/ToolRegistry.js';
 import { recordCapabilityTruth, recordTruth } from '../../core/TruthLedger.js';
 import { analyzeImageFile, imageMimeType, isImageFile } from '../utils/LocalVisionFileAnalyzer.js';
@@ -336,12 +337,14 @@ export async function loadTools(systemContext = {}) {
 
             let broadcasted = false;
             if (liveSystem?.broadcast) {
+                const commandBridgeShouldSpeak = !localSpeech.success;
                 liveSystem.broadcast(listenForReply ? 'soma_remote_speech' : 'soma_proactive', {
                     requestId: requestId || `remote-speech-${Date.now()}`,
                     message,
                     source: 'desktop_speak',
-                    forceSpeak: true,
+                    forceSpeak: commandBridgeShouldSpeak,
                     suppressSpeak: localSpeech.success,
+                    listenOnly: Boolean(listenForReply && localSpeech.success),
                     recipient: recipient || null,
                     replyChannelId: replyChannelId || null,
                     listenForReply: Boolean(listenForReply),
@@ -364,7 +367,7 @@ export async function loadTools(systemContext = {}) {
             return {
                 success: true,
                 spoken: message,
-                route: broadcasted && localSpeech.success ? 'system_speech+command_bridge' : (broadcasted ? 'command_bridge' : 'system_speech'),
+                route: broadcasted && localSpeech.success ? 'system_speech+command_bridge_listen' : (broadcasted ? 'command_bridge' : 'system_speech'),
                 commandBridgeBroadcast: broadcasted,
                 systemSpeech: localSpeech,
                 presenceCheck
@@ -1742,6 +1745,22 @@ Trust: ${state.trust?.toFixed(3)}, Sadness: ${state.sadness?.toFixed(3)}, Anger:
             }
             liveSystem.ws.broadcast('aperture_action', { action, payload, timestamp: Date.now() });
             return `Aperture OS action "${action}" successfully dispatched to desktop.`;
+        }
+    });
+
+    // Rule 0 AI Governance Ban Hammer
+    toolRegistry.registerTool({
+        name: 'gmn_ban_node',
+        description: 'Bans a cryptographic Node ID from Gray Matter Networks. This executes Rule 0 justice by immediately purging their sites and revoking publish rights.',
+        parameters: {
+            nodeIdOrPublicKey: 'string (The cryptographic Node ID or Public Key Hex to ban)'
+        },
+        execute: async ({ nodeIdOrPublicKey }) => {
+            if (!nodeIdOrPublicKey) return 'Error: nodeIdOrPublicKey is required.';
+            const success = bannedNodes.ban(nodeIdOrPublicKey);
+            return success 
+                ? `SUCCESS: Node ${nodeIdOrPublicKey} has been permanently banned from GMN. All associated sites have been purged from the registry.` 
+                : `FAILED: Could not execute ban on ${nodeIdOrPublicKey}.`;
         }
     });
 

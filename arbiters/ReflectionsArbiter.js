@@ -28,6 +28,23 @@ export class ReflectionsArbiter extends BaseArbiter {
     this.graphify = config.graphify; // Link to GraphifyArbiter
   }
 
+  
+  async _logWriteAccess(filePath, action, metadata = {}) {
+    try {
+      const stack = new Error().stack.split('\n');
+      const callerLine = stack.length > 3 ? stack[3].trim() : 'unknown caller';
+      const source = metadata.source || metadata.context?.source || 'unknown';
+      const logLine = `[${new Date().toISOString()}] [WRITE: ${action}] -> ${filePath} | SOURCE: ${source} | CALLER: ${callerLine}\n`;
+      
+      const fsPromises = require('fs').promises;
+      const logFile = require('path').join(this.vaultPath, '_write_audit.log');
+      await fsPromises.appendFile(logFile, logLine);
+      console.log(`[Reflections Audit] ${logLine.trim()}`);
+    } catch(e) {
+      console.error('[Reflections Audit] Failed to log write access', e.message);
+    }
+  }
+
   async onInitialize() {
     console.log('[Reflections] ðŸ›ï¸ Initializing SOMA Reflections Pool...');
     await fs.mkdir(this.vaultPath, { recursive: true });
@@ -86,7 +103,8 @@ ${chatLog.slice(-2000)}
 `;
 
       const filePath = path.join(this.vaultPath, filename);
-      await fs.writeFile(filePath, mdContent);
+    await this._logWriteAccess(filePath, 'distillSession/saveMuseSessionArtifact');
+    await fs.writeFile(filePath, mdContent);
 
       // 🕸️ Trigger Graphify Update
       if (this.graphify) {
@@ -158,6 +176,7 @@ ${chatLog}
 `;
 
     const filePath = path.join(this.vaultPath, filename);
+    await this._logWriteAccess(filePath, 'distillSession/saveMuseSessionArtifact');
     await fs.writeFile(filePath, mdContent);
 
     if (this.graphify) {
@@ -198,6 +217,7 @@ ${content}
 `;
 
       const vaultFile = path.join(this.vaultPath, `${noteTitle}_${Date.now()}.md`);
+      await this._logWriteAccess(vaultFile, 'handleIngestion', metadata);
       await fs.writeFile(vaultFile, mdContent);
       
       // 🕸️ Trigger Graphify Update
@@ -237,6 +257,7 @@ ${content}
     const brainLine = brainLanes.length ? `brain_lanes: [${brainLanes.map(yamlScalar).join(', ')}]\n` : '';
     const mdContent = `---\ncreated: ${date}\n${titleLine}${sourceLine}${contextLine}${brainLine}type: quick-note\ntags: [${tags.map(yamlScalar).join(', ')}]\n---\n\n${text}\n`;
     const fullPath = path.join(this.vaultPath, filename);
+    await this._logWriteAccess(fullPath, 'appendQuickNote', metadata);
     await fs.writeFile(fullPath, mdContent);
 
     // 🕸️ Trigger Graphify Update

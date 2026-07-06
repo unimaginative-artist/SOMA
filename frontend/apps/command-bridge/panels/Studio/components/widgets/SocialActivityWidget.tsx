@@ -62,7 +62,7 @@ const SocialActivityWidget: React.FC<Props> = ({ data }) => {
   const platforms = cockpit?.platforms || {};
   const queue = cockpit?.queue || {};
   const openSocial = () => {
-    window.dispatchEvent(new CustomEvent('app:navigate', { detail: { view: 'ecosystem', context: { section: 'stage-social' } } }));
+    window.dispatchEvent(new CustomEvent('app:navigate', { detail: { view: 'stage', context: { section: 'stage-social' } } }));
   };
   const openAxis = () => {
     window.dispatchEvent(new CustomEvent('commandbridge:navigate', { detail: { module: 'axis' } }));

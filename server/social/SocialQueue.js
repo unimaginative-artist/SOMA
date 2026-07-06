@@ -7,7 +7,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { assertPublicPost } from './SocialContentSafety.js';
+import { assertPublicMediaMetadata, assertPublicPost, validatePublicPost } from './SocialContentSafety.js';
 import socialImageLibrary from './SocialImageLibrary.js';
 
 const QUEUE_FILE = path.join(process.cwd(), 'SOMA', 'social-queue.json');
@@ -57,6 +57,7 @@ export class SocialQueue {
         assertPublicPost(text, { type, platform });
         const items = load();
         const normalizedImages = normalizeImages(images || (imagePath ? [{ path: imagePath, alt: imageAlt }] : []));
+        assertPublicMediaMetadata(normalizedImages);
         const h     = hash(text, normalizedImages);
         if (items.some(i => i.contentHash === h)) return false;
         const cooldownMs = type === 'finance_brief' ? 48 * 3600_000 : 24 * 3600_000;
@@ -99,6 +100,21 @@ export class SocialQueue {
     getReady() {
         const now   = Date.now();
         const items = load();
+        let changed = false;
+        for (const item of items) {
+            if (item.postedAt || item.failed || item.scheduledFor > now) continue;
+            const verdict = validatePublicPost(item.text, item);
+            if (verdict.ok) continue;
+            if (verdict.code === 'privacy_leak') {
+                item.text = '[REDACTED: outbound privacy gate]';
+                item.privacyQuarantined = true;
+            }
+            item.failed = true;
+            item.failedAt = Date.now();
+            item.error = `Unsafe public post blocked before dispatch: ${verdict.reason}`;
+            changed = true;
+        }
+        if (changed) save(items);
         return items.filter(i => !i.postedAt && !i.failed && i.scheduledFor <= now);
     }
 

@@ -200,6 +200,7 @@ class MarketDataService {
      * @param {number} limit - Number of bars to fetch (default: 100)
      */
     async getBars(symbol, timeframe = '1Min', limit = 100) {
+        timeframe = this._normalizeTimeframe(timeframe);
         const cacheKey = `${symbol}_${timeframe}`;
         const cached = this.candleCache.get(cacheKey);
 
@@ -254,6 +255,7 @@ class MarketDataService {
     // ╚══════════════════════════════════════════════════════════════╝
 
     async getStockBars(symbol, timeframe, limit) {
+        timeframe = this._normalizeTimeframe(timeframe);
         // Try Alpaca first if connected and circuit is closed
         if (alpacaService.isConnected && this._isProviderAvailable(PROVIDERS.ALPACA)) {
             try {
@@ -380,6 +382,7 @@ class MarketDataService {
     // ╚══════════════════════════════════════════════════════════════╝
 
     async getCryptoBars(symbol, timeframe, limit) {
+        timeframe = this._normalizeTimeframe(timeframe);
         const binanceSymbol = symbol.toUpperCase().replace('-', '').replace('USD', 'USDT');
         const binanceInterval = this.convertToBinanceInterval(timeframe);
 
@@ -717,14 +720,25 @@ class MarketDataService {
     // ║  Helpers                                                   ║
     // ╚══════════════════════════════════════════════════════════════╝
 
+    /**
+     * Canonical timeframes are '1Min','5Min','15Min','1H','1D'. Callers that pass
+     * Alpaca-style names ('1Day','1Hour') used to fall through the interval maps
+     * and silently fetch 1-minute bars — which fed the regime detector and
+     * backtester near-flat "daily" data. Normalize before any map lookup.
+     */
+    _normalizeTimeframe(timeframe) {
+        const aliases = { '1Day': '1D', '1day': '1D', '1Hour': '1H', '1hour': '1H' };
+        return aliases[timeframe] || timeframe;
+    }
+
     convertToAlpacaTimeframe(timeframe) {
         const map = { '1Min': '1Min', '5Min': '5Min', '15Min': '15Min', '1H': '1Hour', '1D': '1Day' };
-        return map[timeframe] || '1Min';
+        return map[this._normalizeTimeframe(timeframe)] || '1Min';
     }
 
     convertToBinanceInterval(timeframe) {
         const map = { '1Min': '1m', '5Min': '5m', '15Min': '15m', '1H': '1h', '1D': '1d' };
-        return map[timeframe] || '1m';
+        return map[this._normalizeTimeframe(timeframe)] || '1m';
     }
 
     /**

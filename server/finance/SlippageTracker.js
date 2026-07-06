@@ -6,6 +6,8 @@
  * Provides aggregate stats for the dashboard.
  */
 
+import paperExecutionSimulator from './PaperExecutionSimulator.js';
+
 class SlippageTracker {
     constructor() {
         this.trades = [];       // All recorded trades
@@ -25,7 +27,7 @@ class SlippageTracker {
      * @param {string} [trade.strategy] - Which strategy placed this trade
      */
     record(trade) {
-        const { symbol, side, qty, expectedPrice, filledPrice, orderId, strategy } = trade;
+        const { symbol, side, qty, expectedPrice, filledPrice, orderId, strategy, venue } = trade;
 
         if (!expectedPrice || !filledPrice) return; // Can't compute without both prices
 
@@ -50,7 +52,8 @@ class SlippageTracker {
             slippageDollars,
             isAdverse,
             orderId,
-            strategy: strategy || 'manual'
+            strategy: strategy || 'manual',
+            venue: venue || 'unknown'
         };
 
         this.trades.push(record);
@@ -99,6 +102,39 @@ class SlippageTracker {
             adverseRate: (adverseCount / this.trades.length * 100).toFixed(1) + '%',
             highSlippageCount,
             recentTrades: this.trades.slice(-10).reverse()
+        };
+    }
+
+    /**
+     * Compare real live fills against the paper engine's cost model. This is how
+     * we find out whether paper was lying BEFORE it costs real money: if live
+     * slippage runs consistently above what the paper model charges, every paper
+     * stat (and the promotion decision built on it) was too optimistic.
+     */
+    calibrationVsPaperModel() {
+        const live = this.trades.filter(t => t.venue === 'live');
+        if (live.length === 0) {
+            return { liveTrades: 0, message: 'No live fills recorded yet — populates once Tiny Live starts.' };
+        }
+        const realizedAvgBps = live.reduce((sum, t) => sum + t.slippageBps, 0) / live.length;
+        let predictedSumBps = 0;
+        for (const t of live) {
+            const est = paperExecutionSimulator.estimateCostPct({ referencePrice: t.expectedPrice, qty: t.qty });
+            // Compare fill-price slippage only (fees are charged separately, not in the fill)
+            predictedSumBps += (est.halfSpreadPct + est.impactPct) * 10000;
+        }
+        const predictedAvgBps = predictedSumBps / live.length;
+        const gapBps = realizedAvgBps - predictedAvgBps;
+        return {
+            liveTrades: live.length,
+            realizedAvgSlippageBps: Math.round(realizedAvgBps),
+            paperModelPredictedBps: Math.round(predictedAvgBps),
+            gapBps: Math.round(gapBps),
+            verdict: Math.abs(gapBps) <= 5
+                ? 'paper_model_accurate'
+                : gapBps > 0
+                    ? 'paper_model_too_optimistic — recalibrate baseSpreadBps up before trusting paper stats'
+                    : 'paper_model_conservative — live fills are better than paper assumed'
         };
     }
 

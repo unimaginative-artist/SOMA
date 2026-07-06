@@ -25,6 +25,7 @@ import calendarGuard from './CalendarGuard.js';
 import multiTimeframeFilter from './MultiTimeframeFilter.js';
 import correlationGuard from './CorrelationGuard.js';
 import optionsIVSignal from './OptionsIVSignal.js';
+import tradingPerformanceGuard, { normalizeStrategyId } from './TradingPerformanceGuard.js';
 import messageBroker from '../../core/MessageBroker.js';
 // Flush hook wired by routes.js after both modules load (avoids circular import)
 // autonomousTrader → performanceRoutes → scalpingEngine was a potential cycle
@@ -100,6 +101,7 @@ class AutonomousTrader {
             takeProfitPct: 0.06,
             trailingStopPct: 0.03,
         };
+        this._performanceGuardVerdict = null;
     }
 
     /**
@@ -152,7 +154,7 @@ class AutonomousTrader {
             'MICRO_CHALLENGE':     { minConfidence: 0.55, maxPositionPct: 0.05, takeProfitPct: 0.02, stopLossPct: 0.01, analysisIntervalMs: 30000 },
             'CONSERVATIVE':        { minConfidence: 0.80, maxPositionPct: 0.05, takeProfitPct: 0.04, stopLossPct: 0.01, cooldownMs: 300000 },
             'HIGH_PROBABILITY':    { minConfidence: 0.85, maxPositionPct: 0.05, takeProfitPct: 0.05, stopLossPct: 0.01, cooldownMs: 300000 },
-            'BTC_NATIVE':          { minConfidence: 0.60, maxPositionPct: 0.15, takeProfitPct: 0.08, stopLossPct: 0.03, cooldownMs: 180000 },
+            'BTC_NATIVE':          { minConfidence: 0.75, maxPositionPct: 0.15, takeProfitPct: 0.08, stopLossPct: 0.03, cooldownMs: 180000 },
             'STOCKS_EARNINGS':     { minConfidence: 0.70, maxPositionPct: 0.08, takeProfitPct: 0.10, stopLossPct: 0.03, cooldownMs: 240000 },
             'STOCKS_SWING':        { minConfidence: 0.65, maxPositionPct: 0.10, takeProfitPct: 0.08, stopLossPct: 0.02, analysisIntervalMs: 300000 },
             'STOCKS_MEME':         { minConfidence: 0.50, maxPositionPct: 0.05, takeProfitPct: 0.20, stopLossPct: 0.05, cooldownMs: 60000 },
@@ -166,8 +168,37 @@ class AutonomousTrader {
             console.log(`[AutonomousTrader] 🎛️ Preset "${preset}" applied:`, PRESET_CONFIGS[preset]);
         }
 
-        // UCB1: let mission control select the best strategy profile to try this session
-        const ucbPreset = preset || missionControlRuntime.selectTradingStrategy();
+        const runtimeStatus = missionControlRuntime.getStatus?.() || {};
+        const runtimeSelectionMode = String(config?.strategySelectionMode || runtimeStatus.strategySelectionMode || 'auto').toLowerCase();
+        const runtimeStrategyId = runtimeStatus.activeStrategy?.strategyId || null;
+        const selectedPreset = runtimeSelectionMode === 'auto'
+            ? (runtimeStrategyId || missionControlRuntime.selectTradingStrategy())
+            : (preset || runtimeStrategyId || missionControlRuntime.selectTradingStrategy());
+
+        const startupGuard = tradingPerformanceGuard.evaluate({
+            symbol,
+            strategyId: selectedPreset || this.config.strategyId || 'standard_portfolio'
+        });
+        this._performanceGuardVerdict = startupGuard;
+        // Paper is the learning sandbox: quarantine is advisory there (the verdict is
+        // still recorded for UCB1/learning), and only hard-blocks real-money sessions.
+        // A hard paper block deadlocks: pair stats can never improve while trading is off.
+        const paperIntent = config.paperMode === true || config.forcePaper === true
+            || (runtimeStatus.activeTier || 'paper') === 'paper';
+        if (!startupGuard.allowed && !config.allowQuarantinedStrategy && !paperIntent) {
+            return {
+                success: false,
+                error: `Trading blocked by performance guard: ${startupGuard.reasons.join('; ')}`,
+                performanceGuard: startupGuard
+            };
+        }
+        if (!startupGuard.allowed && paperIntent) {
+            console.warn(`[AutonomousTrader] ⚠️ Performance guard quarantine (advisory in paper): ${startupGuard.reasons.join('; ')}`);
+        }
+
+        // Let Mission Control choose the current sim-to-live strategy unless a
+        // human explicitly supplied a manual preset override.
+        const ucbPreset = selectedPreset;
         this._runtimeProfile = missionControlRuntime.getActiveExecutionProfile({
             symbol,
             preset: ucbPreset,
@@ -545,6 +576,27 @@ class AutonomousTrader {
                     });
                     return;
                 }
+            }
+
+            // 11. Calculate position size (Kelly + Alpha-Decay + Regime-Aware)
+            const performanceGuard = tradingPerformanceGuard.evaluate({
+                symbol: this.symbol,
+                strategyId: this._getActiveStrategyId()
+            });
+            this._performanceGuardVerdict = performanceGuard;
+            if (!performanceGuard.allowed && !this.config.allowQuarantinedStrategy && !this.paperMode) {
+                this._lastBlockReason = `Performance guard quarantined ${performanceGuard.strategyId}/${this.symbol}: ${performanceGuard.reasons.join('; ')}`;
+                this._stats.tradesSkipped++;
+                this._stats.totalDecisions++;
+                this._logDecision('PERFORMANCE_GUARD', 'BLOCKED', this._lastBlockReason, performanceGuard);
+                this._recordRuntimeLifecycle('performance_guard', 'blocked', performanceGuard);
+                return;
+            }
+            if (!performanceGuard.allowed && this.paperMode) {
+                // Advisory in paper: keep trading so the pair's stats can actually change,
+                // but leave the verdict on record for learning and promotion gating.
+                this._logDecision('PERFORMANCE_GUARD', 'ADVISORY', `Quarantine advisory (paper learning continues): ${performanceGuard.reasons.join('; ')}`, performanceGuard);
+                this._recordRuntimeLifecycle('performance_guard', 'advisory', performanceGuard);
             }
 
             // 11. Calculate position size (Kelly + Alpha-Decay + Regime-Aware)
@@ -1029,6 +1081,20 @@ class AutonomousTrader {
             let maxPct = this.config.maxPositionPct;
             if (regime === 'VOLATILE') maxPct *= 0.5;
             if (regime === 'TRENDING_BULL' || regime === 'TRENDING_BEAR') maxPct *= 1.2;
+            if (regime === 'RANGING' || regime?.includes?.('RANGING')) {
+                if (this.preset === 'BTC_NATIVE') {
+                    if (!this.paperMode) {
+                        console.warn(`[AutonomousTrader] 🛑 Skipping BTC_NATIVE trade — strategy underperforms in RANGING regime.`);
+                        return { qty: 0, reason: 'BTC_NATIVE filtered out in RANGING regime (prevents spread bleed)' };
+                    }
+                    // Paper: a hard block here froze BTC/SOL for 10 straight days (Jun 2026)
+                    // and starved the promotion-ladder trade-count gates. Zero trades = zero
+                    // learning signal — trade small in chop instead of not at all.
+                    maxPct *= 0.25;
+                } else {
+                    maxPct *= 0.8; // Reduce exposure for all other strategies in chop
+                }
+            }
 
             // ── Gross Exposure Cap ────────────────────────────────────────────
             // Block new positions if total portfolio exposure is at 80% of equity
@@ -1291,6 +1357,7 @@ class AutonomousTrader {
             try {
                 const abArm = abTestFramework.assignArm();
                 this._abTestArmAtEntry.set(this.symbol, abArm);
+                const attribution = this._tradeAttribution();
                 const tradeId = tradeLogger.logTradeEntry({
                     orderId: order.id,
                     symbol: this.symbol,
@@ -1300,9 +1367,10 @@ class AutonomousTrader {
                     filledPrice: order.filled_avg_price || null,
                     expectedPrice: currentPrice,
                     slippagePct: null,
-                    strategy: this.preset || 'autonomous',
+                    strategy: attribution.strategyId,
+                    attribution,
                     regime: this._lastSignal?.regime || null,
-                    signalScores: this._signalScoresAtEntry.get(this.symbol) || null
+                    signalScores: this._signalScoresWithAttribution(this.symbol)
                 });
                 this._recordRuntimeLifecycle('trade_journaled', 'open', { tradeId, orderId: order.id, side, qty: sizing.qty });
             } catch (logErr) {
@@ -1404,6 +1472,7 @@ class AutonomousTrader {
                 try {
                     const abArm = abTestFramework.assignArm();
                     this._abTestArmAtEntry.set(this.symbol, abArm);
+                    const attribution = this._tradeAttribution();
                     tradeId = tradeLogger.logTradeEntry({
                         orderId: mockOrder.id,
                         symbol: this.symbol,
@@ -1413,14 +1482,15 @@ class AutonomousTrader {
                         filledPrice: fillPrice,
                         expectedPrice: currentPrice,
                         slippagePct: fill.slippagePct,
-                        strategy: this.preset || this._runtimeProfile?.activeStrategy?.strategyName || 'SOMA_LEARNED',
+                        strategy: attribution.strategyId,
+                        attribution,
                         regime: this._lastSignal?.regime || null,
-                        signalScores: this._signalScoresAtEntry.get(this.symbol) || null
+                        signalScores: this._signalScoresWithAttribution(this.symbol)
                     });
                 } catch (logErr) {
                     console.warn('[AutonomousTrader] Paper SQLite entry failed:', logErr.message);
                 }
-                this._paperPortfolio.positions[this.symbol] = { side: 'long', qty: filledQty, entryPrice: fillPrice, tradeId, fees: fill.fee, openedAt: Date.now() };
+                this._paperPortfolio.positions[this.symbol] = { side: 'long', qty: filledQty, entryPrice: fillPrice, tradeId, fees: fill.fee, openedAt: Date.now(), attribution: this._tradeAttribution() };
                 this._recordRuntimeLifecycle('paper_order_fill', 'open', {
                     tradeId,
                     orderId: mockOrder.id,
@@ -1485,6 +1555,7 @@ class AutonomousTrader {
                 try {
                     const abArm = abTestFramework.assignArm();
                     this._abTestArmAtEntry.set(this.symbol, abArm);
+                    const attribution = this._tradeAttribution();
                     tradeId = tradeLogger.logTradeEntry({
                         orderId: mockOrder.id,
                         symbol: this.symbol,
@@ -1494,14 +1565,15 @@ class AutonomousTrader {
                         filledPrice: fillPrice,
                         expectedPrice: currentPrice,
                         slippagePct: fill.slippagePct,
-                        strategy: this.preset || this._runtimeProfile?.activeStrategy?.strategyName || 'SOMA_LEARNED',
+                        strategy: attribution.strategyId,
+                        attribution,
                         regime: this._lastSignal?.regime || null,
-                        signalScores: this._signalScoresAtEntry.get(this.symbol) || null
+                        signalScores: this._signalScoresWithAttribution(this.symbol)
                     });
                 } catch (logErr) {
                     console.warn('[AutonomousTrader] Paper SQLite entry failed:', logErr.message);
                 }
-                this._paperPortfolio.positions[this.symbol] = { side: 'short', qty: filledQty, entryPrice: fillPrice, tradeId, fees: fill.fee, openedAt: Date.now() };
+                this._paperPortfolio.positions[this.symbol] = { side: 'short', qty: filledQty, entryPrice: fillPrice, tradeId, fees: fill.fee, openedAt: Date.now(), attribution: this._tradeAttribution() };
                 this._recordRuntimeLifecycle('paper_order_fill', 'open', {
                     tradeId,
                     orderId: mockOrder.id,
@@ -1869,6 +1941,7 @@ class AutonomousTrader {
 
                     // Update SQLite with real fill
                     try {
+                        const attribution = this._tradeAttribution();
                         tradeLogger.logTradeEntry({
                             orderId,
                             symbol: this.symbol,
@@ -1878,8 +1951,10 @@ class AutonomousTrader {
                             filledPrice: fillPrice,
                             expectedPrice,
                             slippagePct: parseFloat(slippagePct.toFixed(4)),
-                            strategy: this.preset || 'autonomous',
-                            regime: this._lastSignal?.regime || null
+                            strategy: attribution.strategyId,
+                            attribution,
+                            regime: this._lastSignal?.regime || null,
+                            signalScores: this._signalScoresWithAttribution(this.symbol)
                         });
                     } catch (e) { /* non-critical */ }
 
@@ -1967,13 +2042,47 @@ class AutonomousTrader {
             const evidence = marketEvidenceStore.append('autonomous_decision', decision, {
                 source: 'AutonomousTrader',
                 symbol: this.symbol,
-                strategyId: this.preset || data.strategy || null,
+                strategyId: data.strategy || this._getActiveStrategyId(),
                 parentEvidenceIds: data.evidenceIds || data.parentEvidenceIds || []
             });
             decision.evidenceId = evidence.evidenceId;
         } catch {
             // Evidence logging must never block trading decisions.
         }
+    }
+
+    _getActiveStrategyId() {
+        return normalizeStrategyId(
+            this.preset
+            || this._runtimeProfile?.activeStrategy?.strategyId
+            || this._runtimeProfile?.preset
+            || this.config.strategyId
+            || 'standard_portfolio'
+        );
+    }
+
+    _tradeAttribution() {
+        const active = this._runtimeProfile?.activeStrategy || {};
+        const strategyId = this._getActiveStrategyId();
+        return {
+            strategyId,
+            strategySource: active.source || (this.preset ? 'manual_override' : 'mission_control'),
+            strategyState: active.state || null,
+            strategyAction: active.action || null,
+            candidateId: active.candidateId || active.sourceEntryId || null,
+            candidateKey: active.candidateKey || (strategyId && this.symbol ? `${strategyId}:${this.symbol}` : null),
+            compiledStrategyId: active.compiledStrategyId || active.compiledStrategy?.id || null,
+            runtimeSymbol: active.symbol || this.symbol,
+            selectedAt: active.learnedAt || null
+        };
+    }
+
+    _signalScoresWithAttribution(symbol = this.symbol) {
+        const scores = this._signalScoresAtEntry.get(symbol) || {};
+        return {
+            ...(scores && typeof scores === 'object' ? scores : { rawSignalScores: scores }),
+            attribution: this._tradeAttribution()
+        };
     }
 
     /**
@@ -2029,6 +2138,10 @@ class AutonomousTrader {
             activeTradeConfig: this._activeTradeConfig,
             missionControlRuntime: missionControlRuntime.getStatus(),
             runtimeProfile: this._runtimeProfile,
+            performanceGuard: this._performanceGuardVerdict || tradingPerformanceGuard.evaluate({
+                symbol: this.symbol,
+                strategyId: this._getActiveStrategyId()
+            }),
             guardrailsState: global.SOMA_TRADING?.guardrails?.getStatus() || null
         };
     }

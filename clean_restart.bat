@@ -3,6 +3,7 @@ echo ===================================================
 echo   SOMA CLEAN RESTART PROTOCOL
 echo ===================================================
 echo.
+set SOMA_LOAD_TRADING=true
 
 echo [0/4] Pausing Marionette supervisor (auto-resumes in 4 min) so it does not
 echo       race this restart...
@@ -14,8 +15,9 @@ powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 8080,8081 -State
 
 echo [1b/4] Killing SOMA Node.js processes (sparing Claude Code)...
 powershell -NoProfile -Command "$killed=0; Get-WmiObject Win32_Process -Filter \"name='node.exe'\" | Where-Object { $_.CommandLine -match 'launcher_ULTRA|start-production|soma' -and $_.CommandLine -notmatch 'claude' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA 0; $killed++ }; Write-Host \"   - Killed $killed SOMA node process(es).\""
-REM Also kill anything on port 3001 just in case
-powershell -NoProfile -Command "$p=(Get-NetTCPConnection -LocalPort 3001 -State Listen -EA 0).OwningProcess; if($p){Stop-Process -Id $p -Force -EA 0; Write-Host '   - Killed port 3001 owner.'}"
+REM Reliably reclaim port 3001 — kill the owner and WAIT until the port is actually
+REM free before relaunching (the old kill raced the new node and lost the bind).
+powershell -NoProfile -Command "for($i=0;$i -lt 12;$i++){ $p=(Get-NetTCPConnection -LocalPort 3001 -State Listen -EA 0 ^| Select-Object -First 1).OwningProcess; if(-not $p){ if($i -gt 0){ Write-Host '   - Port 3001 free.' }; break }; Stop-Process -Id $p -Force -EA 0; Start-Sleep -Milliseconds 600 }; if((Get-NetTCPConnection -LocalPort 3001 -State Listen -EA 0)){ Write-Host '   - WARNING: port 3001 still held after retries.' } else { Write-Host '   - Killed port 3001 owner; port free.' }"
 
 echo [2/4] Killing lingering Electron processes...
 taskkill /F /IM electron.exe /T 2>nul

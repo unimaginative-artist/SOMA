@@ -1310,6 +1310,20 @@ export class SomaBootstrap {
         this.system.messageBroker.registerArbiter('GoalPlannerArbiter', { instance: this.system.goalPlanner });
         console.log('   ✅ GoalPlannerArbiter ready');
 
+        // Oculus Browser (SomaBrowserArbiter)
+        const { SomaBrowserArbiter } = await import('../arbiters/SomaBrowserArbiter.js');
+        this.system.oculusBrowser = new SomaBrowserArbiter(this.system);
+        this.system.messageBroker.registerArbiter('OculusBrowser', { instance: this.system.oculusBrowser });
+        console.log('   ✅ SomaBrowserArbiter ready');
+
+        // Red Team (AdversarialSelfCorrectionArbiter)
+        const { AdversarialSelfCorrectionArbiter } = await import('../arbiters/AdversarialSelfCorrectionArbiter.js');
+        this.system.redTeam = new AdversarialSelfCorrectionArbiter({ name: 'RedTeamArbiter', system: this.system, quadBrain: this.system.quadBrain });
+        await this.system.redTeam.initialize();
+        this.system.messageBroker.registerArbiter('RedTeamArbiter', { instance: this.system.redTeam });
+        console.log('   ✅ AdversarialSelfCorrectionArbiter (Red Team) ready');
+
+
         // ── Wire Black's alerts → GoalPlanner ───────────────────────────────
         // Black monitors system health and emits alerts. Here we turn those
         // alerts into real goals so SOMA acts on her own warnings instead of
@@ -2434,7 +2448,29 @@ export class SomaBootstrap {
                 console.warn(`   ⚠️  Maxwell Attention Engine skipped: ${err.message}`);
             }
 
-            // 3. EngineeringSwarmArbiter — full research/plan/debate/synthesis cycle
+                        // 2.5. MaxApprovalShim \u2014 routes verification to MAX
+            try {
+                // system.maxBridge was referenced by the shim, SelfModificationPipeline,
+                // and the agentic executor but never assigned \u2014 so the shim rejected
+                // EVERY self-modification with "MaxAgentBridge unavailable". Wire the
+                // singleton here so all three consumers share one authenticated bridge.
+                if (!this.system.maxBridge) {
+                    const { default: maxBridgeSingleton } = await import('./MaxAgentBridge.js');
+                    this.system.maxBridge = maxBridgeSingleton;
+                }
+                const { MaxApprovalShim } = await import('../arbiters/MaxApprovalShim.js');
+                this.system.maxApprovalShim = new MaxApprovalShim({
+                    name: 'MaxApprovalShim',
+                    logger: console
+                });
+                this.system.maxApprovalShim.system = this.system;
+                await this.system.maxApprovalShim.initialize({ maxAgentBridge: this.system.maxBridge });
+                console.log('   \u2705 MaxApprovalShim online (MAX delegation gate)');
+            } catch (err) {
+                console.warn(`   \u26A0\uFE0F  MaxApprovalShim skipped: ${err.message}`);
+            }
+
+            // 3. EngineeringSwarmArbiter ?" full research/plan/debate/synthesis cycle
             try {
                 const { EngineeringSwarmArbiter } = await import('../arbiters/EngineeringSwarmArbiter.js');
                 this.system.engineeringSwarm = new EngineeringSwarmArbiter({

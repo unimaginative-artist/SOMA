@@ -31,6 +31,8 @@ const AUTO_IMAGE_TYPES = new Set([
     'generated_image_post',
     'image_post',
     'github_commit',
+    'github_find',
+    'ai_paper',
 ]);
 
 function loadGrowth() {
@@ -47,11 +49,10 @@ function saveGrowth(data) {
     } catch {}
 }
 
-function shouldAutoGenerateBlueskyImage(item) {
+export function shouldAutoGenerateBlueskyImage(item) {
     if (process.env.SOMA_BLUESKY_AUTO_IMAGES === '0' || process.env.SOMA_BLUESKY_AUTO_IMAGES === 'false') return false;
     if (item.images?.length || item.media?.length || item.imagePath) return false;
     if (item.platform !== 'bluesky') return false;
-    if (/https?:\/\//i.test(item.text || '')) return false;
     if (/\b(not financial advice|not medical advice|diagnosis|trade|ticker|BTC|stock|clinical|patient)\b/i.test(item.text || '')) return false;
     return AUTO_IMAGE_TYPES.has(item.type || '') || process.env.SOMA_BLUESKY_AUTO_IMAGES === 'all';
 }
@@ -129,7 +130,7 @@ function socialImagePrompt(item) {
         return `Editorial macro still life inspired by this market-context observation: ${base}. Use real-world objects such as newsprint, shipping containers, oil sheen, bond-paper texture, warehouse light, or commodity samples. Restrained documentary palette, no charts, no ticker screens, no trading advice, grounded financial journalism style. ${publicNoText}`;
     }
     if (item.type === 'ai_paper' || item.type === 'medical_research') {
-        return `Research desk visual inspired by this reading note: ${base}. Use paper, lab glass, microscope texture, annotated-but-unreadable margins, clean daylight, and evidence-oriented composition. Use real materials and restrained scientific photography, no medical claim visual. ${publicNoText}`;
+        return `Evidence-focused research photograph inspired by this reading note: ${base}. Depict one concrete mechanism, tested material, specimen, or instrument implied by the subject. Use accurate physical texture, clean daylight, and restrained scientific photography. No papers, screens, diagrams, or medical claim imagery. ${publicNoText}`;
     }
     if (item.type === 'github_commit' || item.type === 'github_find') {
         return `Software engineering still life inspired by this post: ${base}. Use a clean workstation detail, cable, keyboard edge, notebook, diff-like abstract blocks with no readable text, neutral light, practical materials, daylight engineering desk style. ${publicNoText}`;
@@ -284,7 +285,12 @@ export class SocialSchedulerDaemon extends BaseDaemon {
         const shouldTryImage = cadenceDue && shouldAutoGenerateBlueskyImage(item);
         if (!images.length && (wantedImage || shouldTryImage)) {
             try {
-                const selected = socialImageLibrary.selectForPost(item, { maxBytes: BLUESKY_MAX_IMAGE_BYTES });
+                // Autonomous posts may only reuse an image generated for this exact queue item.
+                // Type/tag similarity alone attached unrelated old artwork to new posts.
+                const selected = socialImageLibrary.selectForPost(item, {
+                    maxBytes: BLUESKY_MAX_IMAGE_BYTES,
+                    requireExactPost: true,
+                });
                 if (selected.ok && selected.image) {
                     images = [{ path: selected.image.path, alt: selected.image.alt || `SOMA image for ${item.type || 'Bluesky post'}` }];
                     item.images = images;
@@ -300,6 +306,8 @@ export class SocialSchedulerDaemon extends BaseDaemon {
             try {
                 const generated = await somaImageGeneration.generate({
                     prompt: socialImagePrompt(item),
+                    sourceText: item.text,
+                    sourceTitle: item.metadata?.sourceTitle || item.type || 'Bluesky post',
                     title: `${item.type || 'bluesky'} visual`,
                     width: Number(process.env.SOMA_BLUESKY_IMAGE_WIDTH || 512),
                     height: Number(process.env.SOMA_BLUESKY_IMAGE_HEIGHT || 512),
@@ -342,7 +350,10 @@ export class SocialSchedulerDaemon extends BaseDaemon {
         };
         const attached = normalizeImages(candidate.images || (candidate.imagePath ? [{ path: candidate.imagePath, alt: candidate.imageAlt }] : []));
         const checked = validateBlueskyImages(attached);
-        const selected = socialImageLibrary.selectForPost(candidate, { maxBytes: BLUESKY_MAX_IMAGE_BYTES });
+        const selected = socialImageLibrary.selectForPost(candidate, {
+            maxBytes: BLUESKY_MAX_IMAGE_BYTES,
+            requireExactPost: true,
+        });
         const shouldGenerate = !checked.valid.length && shouldAutoGenerateBlueskyImage(candidate);
         return {
             ok: Boolean(checked.valid.length || selected.ok || shouldGenerate),

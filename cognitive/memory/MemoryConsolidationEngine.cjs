@@ -75,10 +75,8 @@ class MemoryConsolidationEngine {
       targets,
       decay: {
         // High salience = slower decay (memories last longer)
-        // 0.15 base decay - (salience * 0.1)
-        // Salience 1.0 -> 0.05 decay (very slow)
-        // Salience 0.5 -> 0.10 decay (moderate)
-        episodic: Math.max(0.01, 0.15 - boundedSalience * 0.1),
+        // 0.25 base decay - (salience * 0.15) (TIGHTENED FOR MEMORY PRESSURE)
+        episodic: Math.max(0.05, 0.25 - boundedSalience * 0.15),
         semantic: 0 // Semantic facts usually don't decay the same way
       }
     };

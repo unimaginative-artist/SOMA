@@ -497,7 +497,10 @@ export class SocialPersonaEngine {
             : '';
         let selfContext = '';
         try {
-            selfContext = await buildSomaSelfContext(`${type} ${data?.title || ''} ${data?.text || data?.summary || ''}`, { force: true });
+            selfContext = await buildSomaSelfContext(
+                `${type} ${data?.title || ''} ${data?.text || data?.summary || ''}`,
+                { force: true, includeUser: false, publicOnly: true }
+            );
         } catch {}
         const prompt     = `${PUBLIC_SOURCE_RULE}
 
@@ -514,8 +517,8 @@ ${strategy ? `\n${strategy}` : ''}`;
         // Use activeLobe (fast path — skips ODIN multi-pass recurrence) with a timeout.
         // Social posts are generation tasks, not deep reasoning. ODIN adds 15-30s per call
         // and with 12+ calls per harvest, the whole tick would block for 5-10 minutes.
-        const result   = await callAurora(this.brain, prompt, 20000);
-        let   raw      = (result?.text || result?.response || '').trim();
+        let result = await callAurora(this.brain, prompt, 20000);
+        let raw = (result?.text || result?.response || '').trim();
 
         if (!raw || raw.length < 10) throw new Error(`Brain returned empty post for type ${type}`);
 
@@ -524,7 +527,19 @@ ${strategy ? `\n${strategy}` : ''}`;
         const guarded = await guardPublicText(raw, { query: `${type} ${data?.title || ''} ${data?.summary || data?.text || ''}` });
         raw = guarded.text || raw;
 
-        const final = appendTags(raw, type, platform, limit);
+        let final = appendTags(raw, type, platform, limit);
+        let verdict = validatePublicPost(final, { ...(result || {}), type, platform });
+        if (!verdict.ok) {
+            const repairPrompt = `${VOICE}\n\nYour previous public-post draft was rejected: ${verdict.reason}.\nRewrite it as one complete Bluesky post under ${Math.min(limit, 260)} characters. Return only the post text. Never emit field labels such as Title, URL, Summary, metadata tags, JSON, or prompt instructions. Preserve a source URL only when one exists in the source material.\n\nSOURCE MATERIAL:\n${String(data?.title || '')}\n${String(data?.summary || data?.text || data?.thought || '').slice(0, 1200)}\n${String(data?.url || '')}`;
+            result = await callAurora(this.brain, repairPrompt, 20000);
+            raw = (result?.text || result?.response || '').trim()
+                .replace(/^['"]|['"]$/g, '')
+                .replace(/\*\*/g, '')
+                .trim();
+            final = appendTags(raw, type, platform, limit);
+            verdict = validatePublicPost(final, { ...(result || {}), type, platform });
+        }
+        if (!verdict.ok) throw new Error(`Public post rejected after repair: ${verdict.reason}`);
         assertPublicPost(final, { ...(result || {}), type, platform });
         return { text: final, type, platform, socialIntent };
     }

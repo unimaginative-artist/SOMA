@@ -30,19 +30,19 @@
       "key": "home"
     },
     "me": {
-      "attempts": 1,
+      "attempts": 5,
       "heardReplies": 0,
       "answered": 0,
       "noReplies": 0,
       "failures": 0,
-      "confidence": 0.48,
+      "confidence": 0.3999999999999999,
       "lastOutcome": "attempted",
-      "lastSummary": "Hey Me, what to do and what you need!",
-      "lastInteractionAt": 1781732005007,
+      "lastSummary": "Hey Me, whats in the images! I will bet you a new computer that you cant do it & will hallucinate again!",
+      "lastInteractionAt": 1782319815021,
       "suppressedUntil": null,
       "displayName": "Me",
       "key": "me"
     }
   },
-  "updatedAt": 1781732005008
+  "updatedAt": 1782319815022
 }

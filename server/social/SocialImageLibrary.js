@@ -99,6 +99,48 @@ function intentTagsForPost(post = {}) {
     return tags;
 }
 
+function normalizedPostTerms(value = '') {
+    const stopwords = new Set([
+        'about', 'after', 'again', 'also', 'and', 'are', 'because', 'before', 'bluesky', 'for', 'from',
+        'have', 'image', 'into', 'its', 'more', 'not', 'post', 'soma', 'that', 'the', 'their', 'this',
+        'through', 'was', 'were', 'with', 'would',
+    ]);
+    return new Set(String(value || '').toLowerCase()
+        .replace(/https?:\/\/\S+/g, ' ')
+        .split(/[^a-z0-9-]+/)
+        .filter(term => term.length >= 4 && !stopwords.has(term)));
+}
+
+export function assessImagePostMatch(image = {}, post = {}) {
+    const metadata = image.metadata || {};
+    const artDirector = image.artDirector || metadata.artDirector || {};
+    const sourcePostId = String(metadata.sourcePostId || artDirector.sourcePostId || '');
+    const sourcePostType = String(metadata.sourcePostType || artDirector.sourcePostType || '').toLowerCase();
+    const postId = String(post.id || '');
+    const postType = String(post.type || '').toLowerCase();
+    const exactPost = Boolean(postId && sourcePostId && postId === sourcePostId);
+
+    const imageTerms = normalizedPostTerms([
+        image.alt,
+        image.filename,
+        ...(normalizeTags(image.tags)),
+        ...(metadata.visualSubject?.terms || []),
+        ...(artDirector.visualSubject?.terms || []),
+    ].flat().join(' '));
+    const postTerms = normalizedPostTerms(`${post.type || ''} ${post.text || post.caption || ''}`);
+    const overlap = [...postTerms].filter(term => imageTerms.has(term));
+    const sameType = Boolean(postType && sourcePostType && postType === sourcePostType);
+
+    return {
+        exactPost,
+        sameType,
+        overlap,
+        semanticallyRelated: exactPost || (sameType && overlap.length >= 2),
+        sourcePostId: sourcePostId || null,
+        sourcePostType: sourcePostType || null,
+    };
+}
+
 function isPublicCandidate(image, maxBytes) {
     const filePath = repairMovedPath(image?.path || '');
     if (!filePath || !fs.existsSync(filePath)) return false;
@@ -190,11 +232,13 @@ export class SocialImageLibrary {
 
     selectForPost(post = {}, options = {}) {
         const maxBytes = Number(options.maxBytes || DEFAULT_PUBLIC_IMAGE_BYTES);
+        const requireExactPost = Boolean(options.requireExactPost);
         const ledger = this.repairPaths();
         const wantedTags = intentTagsForPost(post);
         const candidates = (ledger.images || [])
             .filter(image => isPublicCandidate(image, maxBytes))
             .map(image => {
+                const match = assessImagePostMatch(image, post);
                 const imageTags = new Set(normalizeTags(image.tags).map(tag => tag.toLowerCase()));
                 const tagScore = [...wantedTags].reduce((score, tag) => score + (imageTags.has(tag) ? 3 : 0), 0);
                 const ageScore = Math.min(5, Math.max(0, (Date.now() - Number(image.lastUsedAt || 0)) / 86_400_000));
@@ -205,9 +249,11 @@ export class SocialImageLibrary {
                         path: repairMovedPath(image.path),
                         size: readImageSize(repairMovedPath(image.path)) || image.size,
                     },
-                    score: tagScore + ageScore + recencyScore,
+                    match,
+                    score: (match.exactPost ? 100 : 0) + (match.sameType ? 8 : 0) + (match.overlap.length * 4) + tagScore + ageScore + recencyScore,
                 };
             })
+            .filter(candidate => !requireExactPost || candidate.match.exactPost)
             .sort((a, b) => b.score - a.score || (a.image.lastUsedAt || 0) - (b.image.lastUsedAt || 0));
 
         const selected = candidates[0]?.image || null;
@@ -218,6 +264,8 @@ export class SocialImageLibrary {
             repaired: ledger.repaired,
             maxBytes,
             wantedTags: [...wantedTags],
+            requireExactPost,
+            selectedMatch: candidates[0]?.match || null,
         };
     }
 

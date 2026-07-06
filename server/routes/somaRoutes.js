@@ -11,6 +11,7 @@ import { calibrator }  from '../../core/ConfidenceCalibrator.js';
 import { scrapeMarketData, getCachedMarketData } from '../scrapers/MarketDataScraper.js';
 import citationGuard from '../finance/FinancialCitationGuard.js';
 import missionControlRuntime from '../finance/MissionControlRuntime.js';
+import { compileMarketLabEntry, compileMarketLabLedger } from '../finance/MarketStrategyCompiler.js';
 import simulationLearningEngine from '../finance/SimulationLearningEngine.js';
 import retrainingPipeline from '../finance/RetrainingPipeline.js';
 import profModeEngine from '../../core/ProfessionalModeEngine.js';
@@ -28,6 +29,7 @@ import { describeContracts } from '../../core/AgentCapabilityContracts.js';
 import { readTruthLedger } from '../../core/TruthLedger.js';
 import resourceJobScheduler from '../../core/ResourceJobScheduler.js';
 import { getLastCapabilityAudit, runCapabilityAudit } from '../../core/CapabilityAuditRunner.js';
+import deepSeekGateway from '../core/DeepSeekGateway.js';
 const require = createRequire(import.meta.url);
 const { defaultLearningSpine } = require('../../core/LearningSpine.cjs');
 const presenceAwareness = require('../../core/PresenceAwarenessState.cjs');
@@ -109,6 +111,60 @@ function detectDuplicateInstalls() {
     });
 }
 
+function readRecentGoalReceipts(limit = 12) {
+    const dir = path.join(process.cwd(), 'data', 'goal-receipts');
+    try {
+        if (!fs.existsSync(dir)) return [];
+        return fs.readdirSync(dir)
+            .filter(name => name.endsWith('.json'))
+            .map(name => {
+                const file = path.join(dir, name);
+                const stat = fs.statSync(file);
+                return { name, file, mtimeMs: stat.mtimeMs };
+            })
+            .sort((a, b) => b.mtimeMs - a.mtimeMs)
+            .slice(0, limit)
+            .map(item => {
+                try {
+                    const parsed = JSON.parse(fs.readFileSync(item.file, 'utf8'));
+                    return {
+                        id: parsed.id || item.name.replace(/\.json$/, ''),
+                        goalId: parsed.goalId,
+                        title: parsed.title,
+                        state: parsed.state,
+                        done: parsed.done === true,
+                        progress: parsed.progress,
+                        toolsUsed: parsed.toolsUsed || [],
+                        receiptPath: path.relative(process.cwd(), item.file).replace(/\\/g, '/'),
+                        writtenAt: parsed.writtenAt || item.mtimeMs
+                    };
+                } catch {
+                    return null;
+                }
+            })
+            .filter(Boolean);
+    } catch {
+        return [];
+    }
+}
+
+function writePromotionReceipt(receipt = {}) {
+    const dir = path.join(process.cwd(), 'data', 'code-lab', 'promotion-receipts');
+    const id = receipt.id || `${Date.now()}-${String(receipt.file || receipt.goalId || 'promotion').replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 80)}`;
+    const file = path.join(dir, `${id}.json`);
+    try {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({
+            id,
+            writtenAt: Date.now(),
+            ...receipt
+        }, null, 2), 'utf8');
+        return path.relative(process.cwd(), file).replace(/\\/g, '/');
+    } catch {
+        return null;
+    }
+}
+
 async function buildAgenticProofStatus(system) {
     const desktop = path.join(process.env.USERPROFILE || 'C:\\Users\\barry', 'Desktop');
     const canonical = {
@@ -180,7 +236,8 @@ async function buildAgenticProofStatus(system) {
         promotion: {
             truthLedgerRequired: true,
             sandboxRoot: 'data/code-lab/sandbox/pulse-self-mod'
-        }
+        },
+        executionReceipts: readRecentGoalReceipts(12)
     };
 }
 
@@ -697,6 +754,47 @@ Write a closing thought â€" 1-2 sentences. Something genuine that shows you a
         }
     });
 
+    router.get('/capabilities/verified', async (req, res) => {
+        try {
+            const proof = await buildAgenticProofStatus(system);
+            res.json({
+                success: true,
+                generatedAt: proof.generatedAt,
+                state: proof.state,
+                capabilities: [
+                    {
+                        id: 'marionette_watchdog',
+                        verified: proof.watchdog?.bridgeOk === true,
+                        evidence: proof.watchdog
+                    },
+                    {
+                        id: 'max_bridge',
+                        verified: proof.watchdog?.max?.ok === true,
+                        evidence: proof.watchdog?.max
+                    },
+                    {
+                        id: 'agentic_workers',
+                        verified: proof.contracts?.some(agent => agent.online) === true,
+                        evidence: proof.contracts
+                    },
+                    {
+                        id: 'self_mod_sandbox',
+                        verified: fs.existsSync(path.join(process.cwd(), 'data', 'code-lab', 'sandbox', 'pulse-self-mod')),
+                        evidence: proof.promotion
+                    },
+                    {
+                        id: 'execution_receipts',
+                        verified: proof.executionReceipts?.length > 0,
+                        evidence: proof.executionReceipts
+                    }
+                ],
+                warnings: proof.warnings || []
+            });
+        } catch (error) {
+            res.status(500).json({ success: false, error: error.message });
+        }
+    });
+
     router.post('/agentic-proof/audit', async (req, res) => {
         try {
             res.json({ success: true, audit: await runCapabilityAudit(system, { force: req.body?.force === true }) });
@@ -1076,22 +1174,21 @@ ${memoryContext || "No specific memories found for this query."}
 
             // Stream from DeepSeek
             let dsRes;
+            let gatewayStream = null;
             try {
-                dsRes = await fetch('https://api.deepseek.com/v1/chat/completions', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}`
-                    },
-                    body: JSON.stringify({
-                        model: 'deepseek-chat',
-                        messages,
-                        stream: true,
-                        max_tokens: 500,
-                        temperature: 0.75
-                    }),
-                    signal: abortController.signal
+                gatewayStream = await deepSeekGateway.openStream({
+                    apiKey,
+                    model: 'deepseek-chat',
+                    messages,
+                    maxTokens: 500,
+                    temperature: 0.75,
+                    timeoutMs: 45_000,
+                    signal: abortController.signal,
+                    priority: 'human',
+                    actor: 'VoiceStream',
+                    action: 'voice_chat',
                 });
+                dsRes = gatewayStream.response;
             } catch (err) {
                 if (fallbackTriggered) return;
                 clearTimeout(circuitBreakerTimeout);
@@ -1112,10 +1209,12 @@ ${memoryContext || "No specific memories found for this query."}
 
             let buffer = '';
             let fullText = '';
+            let streamUsage = {};
             let reader;
             try {
                 reader = dsRes.body.getReader();
             } catch (readerErr) {
+                gatewayStream?.release();
                 if (fallbackTriggered) return;
                 clearTimeout(circuitBreakerTimeout);
                 fallbackTriggered = true;
@@ -1138,6 +1237,7 @@ ${memoryContext || "No specific memories found for this query."}
                         if (raw === '[DONE]') continue;
                         try {
                             const parsed = JSON.parse(raw);
+                            if (parsed.usage) streamUsage = parsed.usage;
                             const token = parsed.choices?.[0]?.delta?.content || '';
                             if (!token) continue;
 
@@ -1163,6 +1263,7 @@ ${memoryContext || "No specific memories found for this query."}
                 if (tail.length > 2) sendEvent({ sentence: tail });
 
                 sendEvent({ done: true, fullText });
+                gatewayStream?.finalize({ usage: streamUsage, outputText: fullText });
 
                 // Persist voice conversation to long-term memory
                 if (system.mnemonicArbiter?.remember && fullText.trim()) {
@@ -1172,6 +1273,7 @@ ${memoryContext || "No specific memories found for this query."}
                     ).catch(() => {});
                 }
             } catch (streamErr) {
+                gatewayStream?.release();
                 if (fallbackTriggered) return;
                 clearTimeout(circuitBreakerTimeout);
                 fallbackTriggered = true;
@@ -2122,15 +2224,20 @@ ${personaContext}${characterContext}`.trim()
                 const _deepCtrl = new AbortController();
                 const _deepTimer = setTimeout(() => _deepCtrl.abort(), 30000);
                 try {
-                    const dsRes = await fetch('https://api.deepseek.com/v1/chat/completions', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-                        body: JSON.stringify({ model: 'deepseek-reasoner', messages, temperature: 0.7, max_tokens: 2048 }),
-                        signal: _deepCtrl.signal
+                    const completion = await deepSeekGateway.complete({
+                        apiKey,
+                        model: 'deepseek-reasoner',
+                        messages,
+                        temperature: 0.7,
+                        maxTokens: 2048,
+                        timeoutMs: 30_000,
+                        signal: _deepCtrl.signal,
+                        priority: 'human',
+                        actor: 'SomaChat',
+                        action: 'deep_thinking',
                     });
                     clearTimeout(_deepTimer);
-                    if (!dsRes.ok) return new Promise(() => {});
-                    const data = await dsRes.json();
+                    const data = completion.data;
                     const text = data.choices?.[0]?.message?.content || '';
                     if (!text) return new Promise(() => {});
                     console.log(`[SOMA] Deep think DeepSeek responded (${text.length} chars)`);
@@ -4556,11 +4663,12 @@ ${personaContext}${characterContext}`.trim()
         }
 
         promoted = tier === 1;
+        let promotedGoal = null;
 
         // ── 4. Promote to GoalPlanner if passed ──────────────────────────────
         if (promoted && gp?.createGoal) {
             try {
-                await gp.createGoal({
+                promotedGoal = await gp.createGoal({
                     title:       `[VALIDATED] ${area || file}`,
                     category:    'engineering',
                     description: intent || `Pre-validated improvement to ${file}`,
@@ -4580,6 +4688,24 @@ ${personaContext}${characterContext}`.trim()
                 console.warn('[validate] GoalPlanner inject failed:', e.message);
             }
         }
+
+        const promotionReceipt = writePromotionReceipt({
+            source: 'swarm_validate',
+            file,
+            area,
+            intent,
+            promoted,
+            score: parseFloat(score.toFixed(3)),
+            tier,
+            syntaxPassed,
+            syntaxError,
+            riskScore,
+            nemesisVerdict,
+            goalId: promotedGoal?.goalId || promotedGoal?.goal?.id || null,
+            reason: promoted
+                ? 'Validation cleared promotion gate and was queued to GoalPlanner.'
+                : 'Validation did not clear promotion gate; retained as training signal only.'
+        });
 
         // ── 5. Write training signal regardless of outcome ───────────────────
         // Every result — pass, borderline, fail — is data for lobe fine-tuning.
@@ -4609,6 +4735,7 @@ ${personaContext}${characterContext}`.trim()
             promoted,
             nemesisVerdict,
             nemesisApproved,
+            promotionReceipt,
             trainingSignal: true,
             message: promoted
                 ? `✓ Promoted — injected into SOMA's goal queue (score ${(score * 100).toFixed(0)}%)`
@@ -4651,6 +4778,7 @@ ${personaContext}${characterContext}`.trim()
             const curatorStatus = system.knowledgeCurator?.getStatus?.() || {};
             const trainer = system.ollamaTrainer || system.ollamaAutoTrainer;
             const trainerStatus = trainer?.getStatus?.() || null;
+            const brainStatus = system.quadBrain?.getStatus?.() || {};
             const countLines = (file) => {
                 try {
                     if (!fs.existsSync(file)) return 0;
@@ -4696,7 +4824,9 @@ ${personaContext}${characterContext}`.trim()
                     threshold,
                     ready,
                     progressPct: Math.min(100, Math.round(Math.max(mdEntries, seedRows) / threshold * 100)),
-                    activeModel: process.env[`OLLAMA_MODEL_${lobe.toUpperCase()}`] || null,
+                    activeModel: process.env[`OLLAMA_MODEL_${lobe.toUpperCase()}`] ||
+                        trainerStatus?.promotions?.[lobe.toUpperCase()]?.activeModel ||
+                        brainStatus?.lobeModels?.[lobe.toUpperCase()] || null,
                     latestFinalDataset: latestFinal[lobe],
                     qualityPolicy: 'Only verified/training_approved distilled lessons are exported to lobe seed JSONL.',
                 }];
@@ -4717,7 +4847,9 @@ ${personaContext}${characterContext}`.trim()
                 sourceBadges: ['memory', 'artifact_registry', 'learning_spine', 'reflection_distiller', 'knowledge_curator', 'current_files'],
                 nextActions: [
                     'Run node scripts/build-lobe-datasets.mjs to rebuild FINAL lobe datasets.',
-                    'Use POST /api/soma/training/approve-lora with { lobe } to start a lobe LoRA job when ready.'
+                    'Eligible lobes train autonomously one at a time; POST /api/soma/training/approve-lora remains available for an explicit run.',
+                    'Use POST /api/soma/training/local-rollout to advance or stop a measured canary.',
+                    'Use POST /api/soma/training/rollback-lora to restore the recorded prior model.'
                 ]
             });
         } catch (e) {
@@ -5048,21 +5180,28 @@ ${personaContext}${characterContext}`.trim()
     };
 
     const summarizeMarketLabLedger = (entries) => {
+        const compiler = compileMarketLabLedger(entries);
         const byStatus = entries.reduce((acc, entry) => {
-            const key = entry.status || 'candidate';
+            const key = entry.graduation?.status || entry.status || 'candidate';
             acc[key] = (acc[key] || 0) + 1;
             return acc;
         }, {});
         const activeStrategyIds = activeMarketStrategyIds();
         const currentEntries = entries.filter(entry => activeStrategyIds.has(entry.strategy?.id));
-        const sorted = [...(currentEntries.length ? currentEntries : entries)].sort((a, b) => (b.prometheusScore || 0) - (a.prometheusScore || 0));
+        const promotionPool = (currentEntries.length ? currentEntries : entries)
+            .filter(entry => entry.graduation?.canPromoteToPaper || entry.status === 'ready_for_paper');
+        const sorted = [...(promotionPool.length ? promotionPool : (currentEntries.length ? currentEntries : entries))]
+            .sort((a, b) => (b.prometheusScore || 0) - (a.prometheusScore || 0));
         return {
             total: entries.length,
             byStatus,
-            promoted: byStatus.promoted || 0,
+            promoted: byStatus.ready_for_paper || byStatus.promoted || 0,
+            readyForPaper: compiler.summary.readyForPaper,
+            blockedByLivePaper: compiler.summary.blockedByLivePaper,
             candidates: byStatus.candidate || 0,
-            rejected: byStatus.rejected || 0,
+            rejected: (byStatus.rejected || 0) + (byStatus.rejected_in_simulation || 0),
             best: sorted[0] || null,
+            compiler: compiler.summary,
             lastUpdated: entries[0]?.updatedAt || entries[0]?.createdAt || null,
             paperOnly: true,
         };
@@ -5421,17 +5560,19 @@ ${personaContext}${characterContext}`.trim()
     };
 
     const recordMarketLabEntry = (entry) => {
+        entry = compileMarketLabEntry(entry);
         const entries = readMarketLabLedger();
         entries.unshift(entry);
         writeMarketLabLedger(entries);
         try {
             system.strategyOptimizer?.recordOutcome?.('market_simulation', entry.strategy.id, {
-                success: entry.status === 'promoted' || entry.status === 'candidate',
+                success: entry.graduation?.canPromoteToPaper === true,
                 reward: entry.prometheusScore - entry.thalamusRisk * 0.35,
                 context: {
                     strategy: entry.strategy.id,
                     symbol: entry.asset.symbol,
                     assetClass: entry.asset.assetClass,
+                    graduation: entry.graduation?.status,
                     paperOnly: true,
                 },
             });
@@ -5465,7 +5606,7 @@ ${personaContext}${characterContext}`.trim()
             if (tradeLogger) {
                 tradeLogger.logLearningEvent({
                     eventType: 'SIMULATION_RESULT',
-                    description: `Market Lab sim: ${entry.strategy.id} on ${entry.asset.symbol} — WR ${((entry.metrics?.winRate || 0) * 100).toFixed(1)}%, Sharpe ${(entry.metrics?.sharpe || 0).toFixed(2)}, status: ${entry.status}`,
+                    description: `Market Lab sim: ${entry.strategy.id} on ${entry.asset.symbol} - WR ${((entry.metrics?.winRate || 0) * 100).toFixed(1)}%, Sharpe ${(entry.metrics?.sharpe || 0).toFixed(2)}, graduation: ${entry.graduation?.status || entry.status}`,
                     strategy: entry.strategy.id,
                     metricName: 'prometheusScore',
                     oldValue: 0,
@@ -5483,7 +5624,8 @@ ${personaContext}${characterContext}`.trim()
     const pickMarketLabTarget = ({ mode = 'balanced' } = {}) => {
         const entries = readMarketLabLedger();
         const ranked = entries
-            .filter(entry => entry.status === 'promoted' || entry.status === 'candidate')
+            .map(entry => entry.compiledStrategy && entry.graduation ? entry : compileMarketLabEntry(entry))
+            .filter(entry => entry.graduation?.canPromoteToPaper)
             .sort((a, b) => (b.prometheusScore || 0) - (a.prometheusScore || 0));
         const exploreRate = mode === 'explore' ? 0.8 : mode === 'exploit' ? 0.18 : 0.38;
         const shouldExplore = ranked.length < 4 || Math.random() < exploreRate;
@@ -5557,7 +5699,8 @@ ${personaContext}${characterContext}`.trim()
             }
 
             const ranked = [...cycleRuns].sort((a, b) => (b.prometheusScore || 0) - (a.prometheusScore || 0));
-            const best = ranked[0] || null;
+            const readyRanked = ranked.filter(entry => entry.graduation?.canPromoteToPaper);
+            const best = readyRanked[0] || ranked[0] || null;
             const previous = system.__marketLabAutopilot || {};
             system.__marketLabAutopilot = {
                 ...previous,
@@ -7198,6 +7341,7 @@ ${personaContext}${characterContext}`.trim()
         try {
             const entries = readMarketLabLedger()
                 .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
+            const compiler = compileMarketLabLedger(entries);
             const optimizerStats = system.strategyOptimizer?.getDomainStats?.('market_simulation') || null;
             res.json({
                 success: true,
@@ -7211,6 +7355,7 @@ ${personaContext}${characterContext}`.trim()
                 strategies: MARKET_STRATEGIES,
                 ledger: entries.slice(0, 30),
                 summary: summarizeMarketLabLedger(entries),
+                compiler: compiler.summary,
                 autopilot: system.__marketLabAutopilot || null,
                 optimizerStats,
             });
@@ -7230,9 +7375,96 @@ ${personaContext}${characterContext}`.trim()
                 minTrades: 80,
                 maxDrawdown: 0.18,
                 minProfitFactor: 1.25,
-                policy: 'promote to paper playbook only; live execution requires separate human review',
+                compilerPolicy: 'compile exact symbol+strategy only; contradictory paper evidence blocks graduation',
+                policy: 'ready_for_paper only; live execution requires separate human review',
             },
         });
+    });
+
+    router.post('/training/preflight', async (req, res) => {
+        const trainer = system.ollamaTrainer || system.ollamaAutoTrainer;
+        if (!trainer?.trainingPreflight) return res.status(503).json({ success: false, error: 'OllamaAutoTrainer not available' });
+        try {
+            const result = await trainer.trainingPreflight();
+            res.status(result.ok ? 200 : 409).json({ success: result.ok, preflight: result });
+        } catch (error) {
+            res.status(500).json({ success: false, error: error.message });
+        }
+    });
+
+    router.post('/training/rollback-lora', async (req, res) => {
+        const trainer = system.ollamaTrainer || system.ollamaAutoTrainer;
+        if (!trainer?.rollbackLobe) return res.status(503).json({ success: false, error: 'OllamaAutoTrainer not available' });
+        const lobe = String(req.body?.lobe || '').toLowerCase();
+        if (!['logos', 'aurora', 'prometheus', 'thalamus'].includes(lobe)) {
+            return res.status(400).json({ success: false, error: 'Invalid lobe' });
+        }
+        const result = await trainer.rollbackLobe(lobe);
+        res.status(result.success ? 200 : 409).json(result);
+    });
+
+    router.post('/training/local-rollout', async (req, res) => {
+        const trainer = system.ollamaTrainer || system.ollamaAutoTrainer;
+        if (!trainer?.setLobeRollout) return res.status(503).json({ success: false, error: 'OllamaAutoTrainer not available' });
+        const result = await trainer.setLobeRollout(req.body?.lobe, req.body?.percent);
+        res.status(result.success ? 200 : 400).json(result);
+    });
+
+    router.get('/market-lab/compiler/status', (req, res) => {
+        try {
+            const entries = readMarketLabLedger()
+                .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
+            const compiled = compileMarketLabLedger(entries);
+            res.json({
+                success: true,
+                paperOnly: true,
+                summary: compiled.summary,
+                readyForPaper: compiled.entries
+                    .filter(entry => entry.graduation?.canPromoteToPaper)
+                    .slice(0, 12),
+                blockedByLivePaper: compiled.entries
+                    .filter(entry => entry.status === 'blocked_by_live_paper')
+                    .slice(0, 12),
+                rejectedInSimulation: compiled.entries
+                    .filter(entry => entry.status === 'rejected_in_simulation')
+                    .slice(0, 12),
+            });
+        } catch (e) {
+            res.status(500).json({ success: false, error: e.message });
+        }
+    });
+
+    router.post('/market-lab/compile', (req, res) => {
+        try {
+            const entries = readMarketLabLedger()
+                .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
+            const compiled = compileMarketLabLedger(entries);
+            writeMarketLabLedger(compiled.entries);
+            try { missionControlRuntime.hydrateFromMarketLab(); } catch {}
+            system.auditLedger?.append({
+                actor: 'MarketStrategyCompiler',
+                action: 'compile_market_lab_ledger',
+                metadata: {
+                    total: compiled.summary.total,
+                    readyForPaper: compiled.summary.readyForPaper,
+                    blockedByLivePaper: compiled.summary.blockedByLivePaper,
+                    rejectedInSimulation: compiled.summary.rejectedInSimulation,
+                }
+            });
+            res.json({
+                success: true,
+                paperOnly: true,
+                summary: compiled.summary,
+                readyForPaper: compiled.entries
+                    .filter(entry => entry.graduation?.canPromoteToPaper)
+                    .slice(0, 12),
+                blockedByLivePaper: compiled.entries
+                    .filter(entry => entry.status === 'blocked_by_live_paper')
+                    .slice(0, 12),
+            });
+        } catch (e) {
+            res.status(500).json({ success: false, error: e.message });
+        }
     });
 
     router.post('/market-lab/run', async (req, res) => {
@@ -7299,26 +7531,29 @@ ${personaContext}${characterContext}`.trim()
                 }
             }
             const ranked = runs.sort((a, b) => b.prometheusScore - a.prometheusScore);
-            if (ranked[0]) {
+            const readyRanked = ranked.filter(entry => entry.graduation?.canPromoteToPaper);
+            const best = readyRanked[0] || ranked[0] || null;
+            if (best) {
                 knowledgeSpine.ingest({
                     domain: 'finance',
                     sourceType: 'market_lab_autopilot',
-                    title: `Market Lab autopilot best: ${ranked[0].strategy?.name || ranked[0].strategyId || 'strategy'} on ${ranked[0].asset?.symbol || ranked[0].symbol || 'asset'}`,
+                    title: `Market Lab autopilot best: ${best.strategy?.name || best.strategyId || 'strategy'} on ${best.asset?.symbol || best.symbol || 'asset'}`,
                     targetWorkbook: 'Mission Control Research',
                     targetSegment: 'Market Evidence',
-                    confidence: ranked[0].prometheusScore || 0.55,
+                    confidence: best.prometheusScore || 0.55,
                     metadata: {
                         executed: runs.length,
-                        promoted: ranked.filter(entry => entry.status === 'promoted').length,
-                        rejected: ranked.filter(entry => entry.status === 'rejected').length,
+                        readyForPaper: readyRanked.length,
+                        blockedByLivePaper: ranked.filter(entry => entry.status === 'blocked_by_live_paper').length,
+                        rejected: ranked.filter(entry => entry.status === 'rejected_in_simulation' || entry.status === 'rejected').length,
                         paperOnly: true
                     },
                     units: ranked.slice(0, 5).map(entry => ({
-                        kind: entry.status === 'rejected' ? 'risk' : 'signal',
-                        text: `${entry.strategy?.name || entry.strategyId || 'Strategy'} on ${entry.asset?.symbol || entry.symbol || 'asset'} ranked ${entry.status}; score ${entry.prometheusScore ?? 'n/a'}, win rate ${entry.metrics?.winRate ?? 'n/a'}, drawdown ${entry.metrics?.maxDrawdown ?? 'n/a'}.`,
+                        kind: entry.graduation?.canPromoteToPaper ? 'signal' : 'risk',
+                        text: `${entry.strategy?.name || entry.strategyId || 'Strategy'} on ${entry.asset?.symbol || entry.symbol || 'asset'} ranked ${entry.graduation?.status || entry.status}; score ${entry.prometheusScore ?? 'n/a'}, win rate ${entry.metrics?.winRate ?? 'n/a'}, drawdown ${entry.metrics?.maxDrawdown ?? 'n/a'}.`,
                         confidence: entry.prometheusScore || 0.5
                     })),
-                    content: `Autopilot ran ${runs.length} paper strategy simulations. Best result: ${ranked[0].summary || ranked[0].status}.`
+                    content: `Autopilot ran ${runs.length} paper strategy simulations. Best result: ${best.summary || best.graduation?.status || best.status}.`
                 }).catch(error => console.warn('[KnowledgeSpine] Market Lab autopilot mirror failed:', error.message));
             }
             try { missionControlRuntime.hydrateFromMarketLab(); } catch {}
@@ -7329,10 +7564,11 @@ ${personaContext}${characterContext}`.trim()
                 success: true,
                 paperOnly: true,
                 executed: runs.length,
-                best: ranked[0] || null,
-                promoted: ranked.filter(entry => entry.status === 'promoted'),
+                best,
+                readyForPaper: readyRanked,
+                blockedByLivePaper: ranked.filter(entry => entry.status === 'blocked_by_live_paper'),
                 candidates: ranked.filter(entry => entry.status === 'candidate').slice(0, 10),
-                rejected: ranked.filter(entry => entry.status === 'rejected').length,
+                rejected: ranked.filter(entry => entry.status === 'rejected_in_simulation' || entry.status === 'rejected').length,
                 summary: summarizeMarketLabLedger(readMarketLabLedger()),
             });
         } catch (e) {
@@ -8138,6 +8374,22 @@ ${personaContext}${characterContext}`.trim()
             const { default: ledger } = await import('../core/CostLedger.js');
             const since = req.query.since || null;
             res.json({ success: true, attribution: ledger.getByActor(since) });
+        } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    });
+
+    // GET /api/soma/cost/daily?day=YYYY-MM-DD — attributed calls, tokens, and spend
+    router.get('/cost/daily', async (req, res) => {
+        try {
+            const day = String(req.query.day || new Date().toISOString().slice(0, 10));
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return res.status(400).json({ success: false, error: 'day must be YYYY-MM-DD' });
+            const { default: ledger } = await import('../core/CostLedger.js');
+            res.json({ success: true, ...ledger.getDailyReport(day) });
+        } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    });
+
+    router.get('/cost/gateway', (_req, res) => {
+        try {
+            res.json({ success: true, ...deepSeekGateway.getStatus() });
         } catch (e) { res.status(500).json({ success: false, error: e.message }); }
     });
 

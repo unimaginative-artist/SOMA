@@ -80,6 +80,33 @@ function gate(id, label, passed, detail, value = null, threshold = null) {
     return { id, label, passed: !!passed, detail, value, threshold };
 }
 
+/**
+ * Wilson score 95% lower bound on win rate. A point estimate of 60% over 100
+ * trades can be a lucky 53% strategy; the lower bound is what we can actually
+ * claim with confidence. Returns percent (0-100).
+ */
+export function wilsonLowerBound(wins, trades, z = 1.96) {
+    const n = finite(trades, 0);
+    if (n <= 0) return 0;
+    const p = Math.min(1, Math.max(0, finite(wins, 0) / n));
+    const z2 = z * z;
+    const denominator = 1 + z2 / n;
+    const centre = p + z2 / (2 * n);
+    const margin = z * Math.sqrt((p * (1 - p) + z2 / (4 * n)) / n);
+    return Number((((centre - margin) / denominator) * 100).toFixed(2));
+}
+
+/**
+ * Real out-of-sample evidence: the latest training/backtest best must have a
+ * meaningful sample AND be profitable. Previously any completed training job
+ * with a `best` field passed — including a 1-trade, $0.0003 trial.
+ */
+export function hasRealOutOfSampleEvidence(latestTraining, { minTrades = 30 } = {}) {
+    const best = latestTraining?.best;
+    if (!best) return false;
+    return finite(best.trades, 0) >= minTrades && finite(best.pnl, 0) > 0;
+}
+
 export function getTier(id = 'paper') {
     return PROMOTION_TIERS.find(tier => tier.id === id) || PROMOTION_TIERS[0];
 }
@@ -103,6 +130,7 @@ export function evaluatePromotionLadder({
         minClosedTrades: policy.minClosedTrades ?? 100,
         minTestingDays: policy.minTestingDays ?? 7,
         minWinRate: policy.minWinRate ?? 60,
+        minWinRateWilsonLB: policy.minWinRateWilsonLB ?? 52,
         minProfitFactor: policy.minProfitFactor ?? 1.4,
         maxDrawdownPct: policy.maxDrawdownPct ?? 12,
         minMarketLabScore: policy.minMarketLabScore ?? 0.72,
@@ -111,19 +139,22 @@ export function evaluatePromotionLadder({
 
     const closedTrades = finite(stats.totalTrades, 0);
     const winRate = normalizeWinRate(stats.winRate);
+    const wins = finite(stats.wins, Math.round((winRate / 100) * closedTrades));
+    const winRateLB = wilsonLowerBound(wins, closedTrades);
     const profitFactor = finite(stats.profitFactor, 0);
     const marketLabScore = finite(activeStrategy.score, 0);
     const drawdownPct = Math.abs(finite(worstTradePct, 0));
-    const outOfSampleReady = !paperPolicy.requireOutOfSample || !!latestTraining?.best;
+    const outOfSampleReady = !paperPolicy.requireOutOfSample || hasRealOutOfSampleEvidence(latestTraining);
 
     const tinyGates = [
         gate('closedTrades', 'Closed paper trades', closedTrades >= paperPolicy.minClosedTrades, `${closedTrades}/${paperPolicy.minClosedTrades} closed paper trades`, closedTrades, paperPolicy.minClosedTrades),
         gate('testingAge', 'Testing age', finite(testingDays, 0) >= paperPolicy.minTestingDays, `${finite(testingDays, 0).toFixed(2)}/${paperPolicy.minTestingDays} calendar days`, finite(testingDays, 0), paperPolicy.minTestingDays),
         gate('winRate', 'Win rate', winRate >= paperPolicy.minWinRate, `${winRate.toFixed(1)}%/${paperPolicy.minWinRate}%`, winRate, paperPolicy.minWinRate),
+        gate('winRateLB', 'Win rate (95% lower bound)', winRateLB >= paperPolicy.minWinRateWilsonLB, `${winRateLB.toFixed(1)}%/${paperPolicy.minWinRateWilsonLB}% Wilson LB over ${closedTrades} trades`, winRateLB, paperPolicy.minWinRateWilsonLB),
         gate('profitFactor', 'Profit factor', profitFactor >= paperPolicy.minProfitFactor, `${profitFactor.toFixed(2)}/${paperPolicy.minProfitFactor}`, profitFactor, paperPolicy.minProfitFactor),
         gate('drawdown', 'Drawdown cap', drawdownPct <= paperPolicy.maxDrawdownPct, `${drawdownPct.toFixed(2)}%/${paperPolicy.maxDrawdownPct}% max`, drawdownPct, paperPolicy.maxDrawdownPct),
         gate('marketLabScore', 'Market Lab score', marketLabScore >= paperPolicy.minMarketLabScore, `${marketLabScore.toFixed(3)}/${paperPolicy.minMarketLabScore}`, marketLabScore, paperPolicy.minMarketLabScore),
-        gate('outOfSample', 'Out-of-sample check', outOfSampleReady, outOfSampleReady ? 'holdout evidence present' : 'holdout evidence required', outOfSampleReady, true)
+        gate('outOfSample', 'Out-of-sample check', outOfSampleReady, outOfSampleReady ? 'profitable holdout evidence (≥30 trades) present' : 'requires profitable out-of-sample evidence with ≥30 trades', outOfSampleReady, true)
     ];
 
     const liveTrades = finite(liveStats.closedTrades, 0);

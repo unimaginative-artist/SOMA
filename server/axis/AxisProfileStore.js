@@ -266,10 +266,24 @@ class AxisProfileStore {
 
     addMessage(chatId, input = {}, profile = {}) {
         const state = this.getState(profile);
-        const chat = state.chats.find(item => item.id === chatId);
-        if (!chat) throw new Error('Chat not found');
         const text = String(input.text || '').trim();
         if (!text) throw new Error('Message text is required');
+        let chat = state.chats.find(item => item.id === chatId);
+        let baseChats = state.chats;
+        if (!chat) {
+            // First message to a brand-new direct — create the thread on the fly
+            // so a conversation started from Studio (or Command Bridge) persists.
+            chat = {
+                id: chatId,
+                title: input.title || chatId,
+                image: input.image || '',
+                online: false,
+                favorite: false,
+                createdAt: now(),
+                updatedAt: now(),
+            };
+            baseChats = [chat, ...state.chats];
+        }
         const message = {
             id: `msg-${now()}`,
             threadId: input.threadId || chatId,
@@ -283,9 +297,10 @@ class AxisProfileStore {
             updatedAt: now(),
             readAt: null,
             archivedAt: null,
+            security: input.security && typeof input.security === 'object' ? input.security : null,
         };
         const messages = { ...state.messages, [chatId]: [...(state.messages[chatId] || []), message].slice(-250) };
-        const chats = state.chats.map(item => item.id === chatId ? chatSummary({ ...item, updatedAt: now() }, messages[chatId]) : item);
+        const chats = baseChats.map(item => item.id === chatId ? chatSummary({ ...item, updatedAt: now() }, messages[chatId]) : item);
         const saved = this.saveState({ ...state, chats, messages }, profile);
         this.recordActivity({ type: 'axis_direct_sent', title: 'Direct sent', summary: `Direct sent to ${chat.title}.` }, profile);
         return { message, messages: saved.messages[chatId], axis: saved };

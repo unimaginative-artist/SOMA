@@ -11,11 +11,15 @@ import { AutonomousTrader, _setPerformanceCacheFlush } from './autonomousTrader.
 import strategyHuntDaemon from '../../daemons/StrategyHuntDaemon.js';
 import notificationService from '../services/NotificationService.js';
 import lowLatencyEngine from './lowLatencyEngine.js';
+import missionControlRuntime from './MissionControlRuntime.js';
 
 const router = express.Router();
 
 // Registry: symbol (uppercased) → AutonomousTrader instance
 const _registry = new Map();
+// Shared so PositionGuardian can snapshot SOMA's own paper-engine equity instead
+// of the untouched Alpaca account (whose frozen $100k made daily_snapshots useless).
+global.SOMA_AUTONOMOUS_REGISTRY = _registry;
 
 // Cache per symbol + aggregate
 const _cache = new Map();
@@ -50,6 +54,38 @@ function getOrCreateInstance(symbol) {
         _registry.set(key, new AutonomousTrader());
     }
     return _registry.get(key);
+}
+
+function normalizeTradeSymbol(symbol) {
+    const raw = String(symbol || '').trim().toUpperCase();
+    if (['BTC', 'ETH', 'SOL'].includes(raw)) return `${raw}-USD`;
+    return raw;
+}
+
+function resolveAutonomousStartRequest({ symbol, preset, config = {} } = {}) {
+    const runtime = missionControlRuntime.getStatus?.() || {};
+    const selectionMode = String(config.strategySelectionMode || runtime.strategySelectionMode || 'auto').toLowerCase();
+    if (selectionMode === 'auto' && runtime.activeStrategy?.symbol) {
+        return {
+            symbol: normalizeTradeSymbol(runtime.activeStrategy.symbol),
+            preset: null,
+            config: {
+                ...config,
+                strategySelectionMode: 'auto',
+                paperMode: config.paperMode !== false,
+                selectedBy: 'mission_control_sim_to_live',
+                selectedStrategyId: runtime.activeStrategy.strategyId,
+                selectedCandidateId: runtime.activeStrategy.candidateId || null
+            },
+            runtime
+        };
+    }
+    return {
+        symbol: normalizeTradeSymbol(symbol),
+        preset,
+        config,
+        runtime
+    };
 }
 
 // ─── Durable trading intent ──────────────────────────────────────────────────
@@ -161,21 +197,34 @@ router.post('/start', async (req, res) => {
         const { symbol, preset, config } = req.body;
         if (!symbol) return res.status(400).json({ success: false, error: 'symbol is required' });
 
-        const sym = symbol.toUpperCase();
+        const resolved = resolveAutonomousStartRequest({ symbol, preset, config: config || {} });
+        const sym = resolved.symbol;
         const existing = _registry.get(sym);
         if (existing?.isRunning) {
             return res.status(400).json({ success: false, error: `${sym} is already trading. Stop it first.` });
         }
 
         const instance = getOrCreateInstance(sym);
-        const result = await instance.start(sym, preset, config || {});
+        const result = await instance.start(sym, resolved.preset, resolved.config || {});
 
         if (!result.success) return res.status(400).json(result);
-        recordEngaged(sym, preset, config || {});
+        recordEngaged(sym, resolved.preset, resolved.config || {});
         ensureStreaming();
-        notificationService.sendAlert('🟢 Engine Engaged', `Autonomous ${config?.paperMode ? 'paper ' : ''}trading started on **${sym}** (${preset || 'default'})`).catch(() => {});
+        notificationService.sendAlert('🟢 Engine Engaged', `Autonomous ${resolved.config?.paperMode ? 'paper ' : ''}trading started on **${sym}** (${resolved.preset || 'auto ladder'})`).catch(() => {});
         flushCache(sym);
-        res.json({ ...result, symbol: sym, runningSymbols: [..._registry.keys()].filter(k => _registry.get(k).isRunning) });
+        res.json({
+            ...result,
+            symbol: sym,
+            requested: { symbol, preset, config: config || {} },
+            resolved: {
+                symbol: sym,
+                preset: resolved.preset,
+                strategySelectionMode: resolved.config?.strategySelectionMode,
+                selectedStrategyId: resolved.config?.selectedStrategyId,
+                selectedCandidateId: resolved.config?.selectedCandidateId
+            },
+            runningSymbols: [..._registry.keys()].filter(k => _registry.get(k).isRunning)
+        });
     } catch (error) {
         console.error('[Autonomous API] Start error:', error.message);
         res.status(500).json({ success: false, error: error.message });

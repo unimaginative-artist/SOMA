@@ -367,6 +367,10 @@ export class SocialIntelDaemon extends BaseDaemon {
                 scheduledFor: fireAt,
                 sourceKey: item.sourceKey || `${post.type}:${item.title || item.angle || item.thought || Date.now()}`,
                 sourceUrl: item.url || null,
+                metadata: {
+                    sourceTitle: item.title || item.angle || null,
+                    sourceProvider: item.source || null,
+                },
             });
             if (pushed) {
                 console.log(`[SocialIntel] ✅ Queued at ${new Date(fireAt).toLocaleTimeString()}: "${post.text.slice(0, 80)}..."`);

@@ -13,6 +13,7 @@ import { EventEmitter } from 'events';
 import { spawn } from 'child_process';
 import path from 'path';
 import os from 'os';
+import { assertPublicMediaMetadata, assertPublicPost } from '../server/social/SocialContentSafety.js';
 
 export class SomaBrowserArbiter extends EventEmitter {
     constructor(system) {
@@ -76,6 +77,8 @@ export class SomaBrowserArbiter extends EventEmitter {
     }
 
     async postToX(text, options = {}) {
+        assertPublicPost(text, { platform: 'x', type: 'post' });
+        assertPublicMediaMetadata(options.images || (options.imagePath ? [{ path: options.imagePath, alt: options.imageAlt }] : []));
         return await this._dispatchTask('post_x', {
             text,
             images: options.images,
@@ -85,6 +88,7 @@ export class SomaBrowserArbiter extends EventEmitter {
     }
 
     async postToLinkedIn(text) {
+        assertPublicPost(text, { platform: 'linkedin', type: 'post' });
         return await this._dispatchTask('post_linkedin', { text });
     }
 
@@ -103,11 +107,16 @@ export class SomaBrowserArbiter extends EventEmitter {
 
     /** Reply to a specific tweet. tweetUrl = full x.com/status/... URL. */
     async replyToTweetX(tweetUrl, text) {
+        assertPublicPost(text, { platform: 'x', type: 'reply' });
         return await this._dispatchTask('reply_to_tweet_x', { tweet_url: tweetUrl, text });
     }
 
     /** Generic task dispatch for routes that need to call arbitrary tasks. */
     async run(task, payload = {}) {
+        if (task === 'post_x' || task === 'post_linkedin' || task === 'reply_to_tweet_x') {
+            assertPublicPost(payload.text, { platform: task.includes('linkedin') ? 'linkedin' : 'x', type: task });
+            assertPublicMediaMetadata(payload.images || (payload.image_path ? [{ path: payload.image_path, alt: payload.image_alt }] : []));
+        }
         return await this._dispatchTask(task, payload);
     }
 

@@ -43,6 +43,22 @@ class TrainingDataCollector extends BaseArbiter {
     
     // Subscribe to events that should trigger data collection
     this.subscribe('system/interaction_complete', this.handleInteraction.bind(this));
+    this.subscribe('soma.goal.completed', this.handleGoalCompleted.bind(this));
+  }
+
+  async handleGoalCompleted(message) {
+    const goal = message.payload?.goal;
+    if (!goal) return;
+
+    const interaction = {
+      input: `Goal: ${goal.title}\nDescription: ${goal.description}`,
+      output: goal.metadata?.completionResult?.summary || goal.metadata?.completionResult?.result || goal.metadata?.learningLesson?.outcome || 'Goal completed successfully.',
+      context: { category: goal.category, title: goal.title, tasks: goal.tasks },
+      brain: 'AgenticExecutor',
+      type: 'goal_completion'
+    };
+
+    await this.captureInteraction(interaction);
   }
 
   async handleMessage(message) {

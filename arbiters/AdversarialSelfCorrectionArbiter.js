@@ -30,6 +30,12 @@ export class AdversarialSelfCorrectionArbiter extends BaseArbiterV4 {
                 this.auditLogger.info(`🛡️ [${this.name}] Intercepted Netrunner Challenge: ${challenge.cveId || 'Unknown CVE'}`);
                 await this.runRedTeamSession(challenge);
             });
+
+            // Listen for Simulation Suite physics trajectories to stress-test them
+            messageBroker.subscribe('SIMULATION_TRAJECTORY_SUCCESS', async (payload) => {
+                this.auditLogger.info(`🛡️ [${this.name}] Intercepted Simulation Trajectory for Red Team stress-test!`);
+                await this.runSimulationRedTeamSession(payload);
+            });
         }
     }
 
@@ -94,6 +100,71 @@ export class AdversarialSelfCorrectionArbiter extends BaseArbiterV4 {
                 output: patch.text,
                 metadata: { cve: challenge.cveId }
             });
+        }
+
+        return sessionResult;
+    }
+
+    /**
+     * Conducts a Red Team session against a simulated physics trajectory to find logic flaws.
+     */
+    async runSimulationRedTeamSession(payload) {
+        const targetProcess = 'SOMA Physics Simulation Engine';
+        this.auditLogger.info(`🛡️ [RedTeam] Initiating stress-test against ${targetProcess}`);
+        
+        // 1. "Breaker" Persona: Invent a physics/logic exploit based on the demonstration
+        const breakerQuery = `[BREAKER PERSONA] You are an elite physics engine exploiter (like a speedrunner finding glitches). 
+        Your goal is to break SOMA's physics simulation. 
+        She just completed this physics demonstration successfully with score ${payload.score || 'Unknown'}:
+        Trajectory: ${JSON.stringify(payload.trajectory || {}).substring(0, 500)}...
+        
+        How could you exploit her physics logic (e.g. integer overflow, clipping, impossible forces) to bypass the intended challenge?`;
+
+        let recentInsights = '';
+        if (this.system.mnemonicArbiter) {
+            try {
+                const memories = await this.system.mnemonicArbiter.recall('wander insight', { limit: 2 });
+                const wanderMemories = (memories || []).filter(m => m.metadata?.type === 'wander_insight' || m.content?.includes('Wander Insight'));
+                if (wanderMemories.length > 0) {
+                    recentInsights = '\nUse these recent insights you gained from wandering the web to inspire your attack:\n' + 
+                        wanderMemories.map(m => `- ${m.content}`).join('\n');
+                }
+            } catch (e) {
+                this.auditLogger.warn(`[RedTeam] Failed to recall wander insights: ${e.message}`);
+            }
+        }
+
+        const fullBreakerQuery = breakerQuery + recentInsights;
+
+        let attack = { text: "Simulated Attack: Apply infinite force by dividing by zero on collision impact." };
+        if (this.quadBrain) {
+             attack = await this.quadBrain.callBrain('AURORA', fullBreakerQuery, { temperature: 0.9, maxTokens: 1000 });
+        }
+
+        // 2. "Architect" Persona: Analyze and Patch
+        const architectQuery = `[ARCHITECT PERSONA] You are SOMA's physics engine architect.
+        A Red Team session just produced this potential physics exploit:
+        "${attack.text}"
+        
+        Analyze this physics attack. How would you update the simulation engine to prevent this exploit?`;
+
+        let patch = { text: "Simulated Patch: Clamp force vectors to a maximum magnitude and catch NaN divisions." };
+        if (this.quadBrain) {
+             patch = await this.quadBrain.callBrain('LOGOS', architectQuery, { temperature: 0.2, maxTokens: 1000 });
+        }
+
+        const sessionResult = {
+            timestamp: new Date().toISOString(),
+            target: targetProcess,
+            attack_vector: attack.text,
+            defense_patch: patch.text,
+            status: "Physics Exploit Mapped & Patch Synthesized"
+        };
+
+        this.vulnerabilitiesFound.push(sessionResult);
+        
+        if (messageBroker) {
+            messageBroker.publish('security.logic_update', sessionResult);
         }
 
         return sessionResult;

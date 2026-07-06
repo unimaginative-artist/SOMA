@@ -11,7 +11,7 @@ export const AGENT_CAPABILITY_CONTRACTS = {
     soma: {
         name: 'soma',
         roles: ['coder', 'researcher', 'tester', 'reviewer', 'ops'],
-        tools: ['read_file', 'search_code', 'verify_syntax', 'run_tests', 'pulse_stage_code'],
+        tools: ['read_file', 'search_code', 'verify_syntax', 'run_tests', 'pulse_stage_code', 'market_lab_status', 'market_lab_compile', 'sim_to_live_status', 'sim_to_live_reconcile', 'sim_to_live_backtest'],
         canMutateCode: true,
         requiresHealthCheck: false,
         evidenceRequired: ['artifact.type', 'artifact.passed']

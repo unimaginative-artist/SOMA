@@ -26,6 +26,7 @@ class SimulationLearningEngine {
         this.stateFile = path.join(process.cwd(), 'data', 'trading', 'learning-state.json');
         this.cycleIntervalMs = 5 * 60 * 1000; // Learn every 5 minutes
         this.minTradesForLearning = 20;        // Don't adjust with fewer trades
+        this.minNewTradesForTuning = 25;       // Parameter changes need fresh evidence, not re-reads of old trades
         this.maxAdjustmentPct = 0.15;          // Max 15% change per cycle
         this.intervalId = null;
 
@@ -89,11 +90,19 @@ class SimulationLearningEngine {
         const adjustments = [];
         const config = scalpingEngine.config;
 
+        // Parameter tuning requires FRESH closed trades since the last tuning pass.
+        // Without this, the same 30 trades get re-analyzed every 5 minutes and
+        // parameters drift on zero new information (observed Jul 2026: identical
+        // 30-trade window re-evaluated for hours).
+        const maxTradeId = closedTrades.reduce((m, t) => Math.max(m, Number(t.id) || 0), 0);
+        const newSinceTune = closedTrades.filter(t => (Number(t.id) || 0) > (this.state.lastTunedTradeId || 0)).length;
+        const tuningAllowed = newSinceTune >= this.minNewTradesForTuning;
+
         // ─── Analysis 1: Exit Reason Breakdown ───
         const exitReasons = this._analyzeExitReasons(closedTrades);
 
         // If too many stops are hitting, widen the stop
-        if (exitReasons.stopPct > 60 && closedTrades.length >= this.minTradesForLearning) {
+        if (tuningAllowed && exitReasons.stopPct > 60 && closedTrades.length >= this.minTradesForLearning) {
             const oldVal = config.stopLossATRMultiplier;
             const newVal = Math.min(3.0, oldVal * (1 + this.maxAdjustmentPct * 0.5));
             if (newVal !== oldVal) {
@@ -107,7 +116,7 @@ class SimulationLearningEngine {
         }
 
         // If too many timeouts, tighten take-profit or increase signal quality
-        if (exitReasons.timeoutPct > 40 && closedTrades.length >= this.minTradesForLearning) {
+        if (tuningAllowed && exitReasons.timeoutPct > 40 && closedTrades.length >= this.minTradesForLearning) {
             const oldVal = config.requiredSignals;
             const newVal = Math.min(3, oldVal + 1);
             if (newVal !== oldVal) {
@@ -124,7 +133,7 @@ class SimulationLearningEngine {
         const stats = tradeLogger.getStats();
 
         // If win rate is strong, allow slightly more aggressive trading
-        if (stats.winRate > 60 && closedTrades.length >= 50) {
+        if (tuningAllowed && stats.winRate > 60 && closedTrades.length >= 50) {
             // Lower RSI threshold slightly (allow more entries)
             const oldRsi = config.rsiOversold;
             const newRsi = Math.max(25, oldRsi - 2);
@@ -151,7 +160,7 @@ class SimulationLearningEngine {
         }
 
         // If win rate is poor, tighten entry criteria
-        if (stats.winRate < 40 && closedTrades.length >= 30) {
+        if (tuningAllowed && stats.winRate < 40 && closedTrades.length >= 30) {
             const oldRsi = config.rsiOversold;
             const newRsi = Math.min(40, oldRsi + 2);
             if (newRsi !== oldRsi) {
@@ -189,7 +198,7 @@ class SimulationLearningEngine {
         }
 
         // ─── Analysis 3: Risk/Reward Adaptation ───
-        if (stats.avgWin > 0 && stats.avgLoss > 0) {
+        if (tuningAllowed && stats.avgWin > 0 && stats.avgLoss > 0) {
             const rrRatio = stats.avgWin / stats.avgLoss;
 
             // If risk/reward is poor, adjust profit targets
@@ -210,7 +219,7 @@ class SimulationLearningEngine {
         // ─── Analysis 4: Max Daily Loss Adaptation ───
         // If daily losses are consistently hitting the cap, it might be too tight
         // or the strategy needs to cool down
-        if (stats.totalPnl < -config.maxDailyLoss * 0.8 && closedTrades.length >= 20) {
+        if (tuningAllowed && stats.totalPnl < -config.maxDailyLoss * 0.8 && closedTrades.length >= 20) {
             const oldDailyMax = config.maxDailyTrades;
             const newDailyMax = Math.max(50, oldDailyMax - 25);
             if (newDailyMax !== oldDailyMax) {
@@ -237,6 +246,9 @@ class SimulationLearningEngine {
         }
 
         // ─── Record Cycle ───
+        // Mark the tuning evidence consumed (even on a "no change needed" verdict)
+        // so the next tuning pass waits for genuinely new trades.
+        if (tuningAllowed) this.state.lastTunedTradeId = maxTradeId;
         this.state.totalCycles++;
         this.state.lastCycleAt = new Date().toISOString();
         this.state.tradesAnalyzedTotal = closedTrades.length;

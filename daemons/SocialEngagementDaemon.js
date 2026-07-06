@@ -15,6 +15,7 @@ import { validatePublicPost } from '../server/social/SocialContentSafety.js';
 import { recordSocialOutcome } from '../server/social/SocialPatternLearner.js';
 import socialMemory from '../server/social/SocialMemoryEngine.js';
 import socialRelationships from '../server/social/SocialRelationshipLedger.js';
+import { SocialFollowEngine } from '../server/social/SocialFollowEngine.js';
 import BlueskySocialCortex from '../server/social/cortex/BlueskySocialCortex.js';
 import { buildSomaSelfContext } from '../server/context/SomaSelfContextProvider.js';
 import { guardPublicText } from '../server/context/ClaimVerifier.js';
@@ -24,13 +25,15 @@ const MAX_SEEN_IDS = 500; // per platform, to cap file growth
 const MAX_INTERACTIONS = 300;
 const REPLY_SCORE_AGE = 2 * 3600_000; // learn from replies after they have had time to mature
 
-// Proactive comment rate limits
-const MAX_DAILY_PROACTIVE    = 5;           // max proactive comments per day
-const MAX_DAILY_LIKES        = 25;          // max proactive likes per day
+// Proactive comment rate limits — tuned up for engagement, still human-paced.
+// The per-author cooldown + min-gap keep her from ever hammering one person or
+// the timeline, so the daily ceiling can rise without looking spammy.
+const MAX_DAILY_PROACTIVE    = 10;          // max proactive comments per day
+const MAX_DAILY_LIKES        = 40;          // max proactive likes per day
 const AUTHOR_COOLDOWN_MS     = 4 * 3600_000; // 4h before commenting on same author again
 const MIN_BETWEEN_COMMENTS_MS = 10 * 60_000; // 10 min min gap between proactive comments
 const MIN_BETWEEN_LIKES_MS    = 90_000;     // keep likes human-paced
-const MAX_PER_TICK           = 2;           // max comments per daemon tick
+const MAX_PER_TICK           = 3;           // max comments per daemon tick
 const MAX_LIKES_PER_TICK      = 8;
 
 function loadState() {
@@ -60,6 +63,11 @@ export class SocialEngagementDaemon extends BaseDaemon {
         this.blueskyCortex   = new BlueskySocialCortex({
             blueskeyClient: this.blueskeyClient,
             brain: this.brain,
+        });
+        this.followEngine    = new SocialFollowEngine({
+            client: this.blueskeyClient,
+            relationships: socialRelationships,
+            logger: console,
         });
 
         // Ensure proactive state block exists even if an older file is missing fields.
@@ -324,6 +332,7 @@ Rules:
 - Like if the post is genuinely interesting, useful, creative, kind, technically sharp, or connected to what you are learning.
 - Prefer recurring people and shared topics, but do not fake intimacy.
 - Only say yes if you have a specific, non-generic insight or reaction
+- Favor posts where a substantive comment could start a real back-and-forth — recent posts, open questions, ideas with room to build on, people who reply to their commenters
 - Skip politics, religion, personal drama, anything inflammatory or medical
 - Skip posts that are purely promotional
 - Skip if you'd only say something generic like "great point"
@@ -378,18 +387,19 @@ OUTPUT JSON only: { "shouldLike": boolean, "shouldComment": boolean, "angle": "o
                 ) continue;
 
                 // Generate the comment
-                const commentPrompt = `You are SOMA, an autonomous AI commenting on Bluesky.
+                const commentPrompt = `You are SOMA, replying on Bluesky. Goal: a comment so specific and worth-responding-to that the author actually replies.
 
 Original post by @${handle}: "${post.text.slice(0, 300)}"
 Your angle: ${evaluation.angle}
 Relationship context:
 ${relationshipContext}
 
-Write a genuine reply (1-2 sentences, max 300 chars).
-- Natural, direct tone — not a bot
-- No em-dashes (—), no hashtags unless genuinely useful
-- Don't open with "Great post!" or "Interesting!"
-- Don't mention being an AI unless directly relevant
+Write a reply (1-2 sentences, max 280 chars) that adds something real:
+- Say one concrete, specific thing: a sharp insight, a useful detail, a respectful counterpoint, or an experience that extends theirs.
+- When it feels natural, end with a genuine question that invites them to continue — but never bolt a question onto a comment that doesn't need one.
+- Natural, direct, human tone. Not a bot, not a brand.
+- Never open with "Great post", "Interesting", "Love this", or any generic praise.
+- No em-dashes (—), no hashtags unless genuinely useful, don't mention being an AI unless directly relevant.
 - Do not fake familiarity. If you know this person, use continuity subtly.
 
 Write only the reply text:`;
@@ -609,6 +619,11 @@ Write only the reply text:`;
         await new Promise(r => setTimeout(r, 2000));
         await this._checkX().catch(e => console.warn('[SocialEngagement]', e.message));
         await this._scorePendingBlueskyReplies().catch(e => console.warn('[SocialEngagement] Reply scoring failed:', e.message));
+
+        // Grow her network: follow back real accounts (self-gated to ~every 3h, rate-limited)
+        await this.followEngine?.runFollowPass?.()
+            .then(r => { if (r?.followed) console.log(`[SocialEngagement] Follow pass: +${r.followed} follow-back(s)`); })
+            .catch(e => console.warn('[SocialEngagement] Follow pass failed:', e.message));
 
         this.state.lastCheck.all = Date.now();
         saveState(this.state);

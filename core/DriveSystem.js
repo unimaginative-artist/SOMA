@@ -20,14 +20,18 @@
 export class DriveSystem {
     constructor(config = {}) {
         this.tension       = 0.0;   // Current restlessness / drive pressure
+        this.boredom       = 0.0;   // Curiosity drive (increases when idle)
         this.satisfaction  = 0.0;   // Last reward signal (decays over time)
         this.lastActionAt  = Date.now();
         this.goalsCompleted = 0;
         this.tasksWorked    = 0;
+        this.ticksAtMaxTension = 0; // Tracks consecutive ticks spent heavily obsessed
 
         this.config = {
             // How fast tension builds when nothing happens (per idle tick)
             tensionBuildRate:       0.04,  // +4% per idle cycle (~2 min interval → full tension in ~50 min)
+            boredomBuildRate:       0.05,  // +5% per idle cycle for Curiosity drive
+            boredomDecayOnWander:   0.80,  // Drops 80% after a wander task
 
             // How much tension drops on different events
             tensionDecayOnWork:     0.15,  // Working a goal step: -15%
@@ -51,12 +55,36 @@ export class DriveSystem {
     // ─── Called each heartbeat tick when NO task was executed ───────────────
     onIdleTick() {
         this.tension = Math.min(1.0, this.tension + this.config.tensionBuildRate);
+        this.boredom = Math.min(1.0, this.boredom + this.config.boredomBuildRate);
         this.satisfaction = Math.max(0, this.satisfaction - this.config.satisfactionDecayRate);
+        
+        if (this.tension >= 0.95) {
+            this.ticksAtMaxTension++;
+        } else {
+            this.ticksAtMaxTension = 0;
+        }
+    }
+
+    // ─── Circuit Breaker Logic ──────────────────────────────────────────────
+    isCircuitBreakerTripped() {
+        return this.ticksAtMaxTension >= 10;
+    }
+
+    resetCircuitBreaker() {
+        this.tension = 0.0;
+        this.ticksAtMaxTension = 0;
+        this.satisfaction = 1.0; // Artificial relief
+    }
+
+    // ─── Called when a wander task finishes ────────────────────────────────
+    onWanderComplete() {
+        this.boredom = Math.max(0, this.boredom - this.config.boredomDecayOnWander);
     }
 
     // ─── Called when a goal work step was executed ──────────────────────────
     onTaskExecuted(goal = null) {
         this.tension = Math.max(0, this.tension - this.config.tensionDecayOnWork);
+        this.ticksAtMaxTension = 0;
         this.lastActionAt = Date.now();
         this.tasksWorked++;
     }
@@ -64,6 +92,7 @@ export class DriveSystem {
     // ─── Called when a goal fully completes — the reward signal ─────────────
     onGoalComplete(goal = null) {
         this.tension = Math.max(0, this.tension - this.config.tensionDecayOnComplete);
+        this.ticksAtMaxTension = 0;
         this.satisfaction = Math.min(1.0, this.satisfaction + 0.6);
         this.lastActionAt = Date.now();
         this.goalsCompleted++;
@@ -104,6 +133,7 @@ export class DriveSystem {
         const idleMs = Date.now() - this.lastActionAt;
         return {
             tension:          parseFloat(this.tension.toFixed(3)),
+            boredom:          parseFloat(this.boredom.toFixed(3)),
             satisfaction:     parseFloat(this.satisfaction.toFixed(3)),
             actionThreshold:  parseFloat(this.getActionThreshold().toFixed(3)),
             isUrgent:         this.isUrgent(),

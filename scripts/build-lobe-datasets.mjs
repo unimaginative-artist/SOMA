@@ -31,6 +31,7 @@ import { promises as fs, existsSync, readdirSync, readFileSync, statSync } from 
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import { validateTrainingExample } from '../core/TrainingDataPolicy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -255,8 +256,11 @@ function loadExistingLobeFiles() {
             if (!lobeMatch) continue;
             const lobe = lobeMatch[1];
             const items = loadJsonlFile(path.join(synthDir, file));
-            result[lobe].push(...items.map(ex => ({
-                ...ex, _source: 'synthetic_deepseek', _lobe: lobe, _confidence: 0.95,
+            const verifiedTeacherItems = items.filter(ex =>
+                String(ex.metadata?.provider || ex.metadata?.actualProvider || '').toLowerCase() === 'deepseek'
+            );
+            result[lobe].push(...verifiedTeacherItems.map(ex => ({
+                ...ex, _source: 'synthetic_teacher', _lobe: lobe, _confidence: 0.95,
             })));
         }
     }
@@ -295,6 +299,13 @@ function loadGenericTraining(minScore = 1) {
         totalRead += items.length;
 
         for (const ex of items) {
+            const qualityTier = String(ex.metadata?.qualityTier || '').toLowerCase();
+            const acceptedTiers = new Set(['reviewed', 'verified', 'training_approved', 'nemesis_corrected', 'teacher_generated']);
+            if (!acceptedTiers.has(qualityTier)) { discarded++; continue; }
+            if (qualityTier === 'teacher_generated' && String(ex.metadata?.provider || '').toLowerCase() !== 'deepseek') {
+                discarded++;
+                continue;
+            }
             // Normalize to messages format
             let messages = ex.messages;
             if (!messages && ex.instruction !== undefined) {
@@ -489,11 +500,27 @@ function mergeAndDedup(datasets) {
                 : [{ role: 'system', content: LOBE_SYSTEM_PROMPTS[lobe] }, ...normalizedMessages];
 
             const src = ex._source || 'unknown';
+            const qualityTier = ex.metadata?.qualityTier ||
+                (src === 'seed' ? 'training_approved' : src === 'dpo_revision' ? 'nemesis_corrected' : 'reviewed');
+            const policy = validateTrainingExample({
+                instruction: user.content,
+                response: asst.content,
+                metadata: {
+                    ...(ex.metadata || {}),
+                    source: src,
+                    qualityTier,
+                    provider: ex.metadata?.actualProvider || ex.metadata?.provider,
+                    model: ex.metadata?.actualModel || ex.metadata?.model,
+                    lobe: lobe.toUpperCase()
+                }
+            });
+            if (!policy.accepted) continue;
             sourceCounts[src] = (sourceCounts[src] || 0) + 1;
 
             clean.push({
                 messages: msgs,
                 metadata: {
+                    ...policy.metadata,
                     source: src,
                     lobe: lobe.toUpperCase(),
                     confidence: ex._confidence || 0,
@@ -514,6 +541,7 @@ const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
 const SINGLE_LOBE = args.includes('--lobe') ? args[args.indexOf('--lobe') + 1] : null;
 const MIN_SCORE = args.includes('--min-score') ? parseInt(args[args.indexOf('--min-score') + 1]) : 1;
+const INCLUDE_UNVERIFIED_CONVERSATIONS = args.includes('--include-unverified-conversations');
 const TARGET_LOBES = SINGLE_LOBE ? [SINGLE_LOBE] : LOBES;
 
 if (SINGLE_LOBE && !LOBES.includes(SINGLE_LOBE)) {
@@ -531,7 +559,12 @@ console.log('── Loading data sources ──');
 const seeds = loadSeeds();
 const lobeFiles = loadExistingLobeFiles();
 const generic = loadGenericTraining(MIN_SCORE);
-const conversations = loadConversations(MIN_SCORE);
+const conversations = INCLUDE_UNVERIFIED_CONVERSATIONS
+    ? loadConversations(MIN_SCORE)
+    : { logos: [], aurora: [], prometheus: [], thalamus: [] };
+if (!INCLUDE_UNVERIFIED_CONVERSATIONS) {
+    console.log('[conversations] raw conversation import disabled; use verified exports or pass --include-unverified-conversations explicitly');
+}
 const dpoPairs = loadDpoPairs(MIN_SCORE);
 
 // Merge per lobe
