@@ -55,6 +55,38 @@ function extractSignatures(content) {
  * Apply a surgical edit (series of old→new string replacements) to content.
  * Returns { result, applied, failed } where failed lists any edits whose old string wasn't found.
  */
+// Whitespace-tolerant locator: LLM-generated old-strings routinely differ from
+// the file only in indentation / trailing spaces / blank-line runs, which broke
+// exact-substring matching and failed otherwise-valid patches. Find a span in
+// `content` whose whitespace-normalized form equals the normalized `needle`,
+// and return the exact original span so we replace real bytes (not normalized
+// ones). Content differences beyond whitespace still fail — this only forgives
+// formatting, never meaning.
+function normalizeWs(s) {
+    return s.replace(/[ \t]+/g, ' ').replace(/[ \t]*\n[ \t]*/g, '\n').replace(/\n{2,}/g, '\n').trim();
+}
+
+function findWhitespaceTolerantSpan(content, needle) {
+    const normNeedle = normalizeWs(needle);
+    if (!normNeedle) return null;
+    // Anchor on the first non-trivial line of the needle to limit the search.
+    const anchor = needle.split('\n').map(l => l.trim()).find(l => l.length > 3);
+    if (!anchor) return null;
+    let from = 0;
+    while (true) {
+        const idx = content.indexOf(anchor, from);
+        if (idx === -1) return null;
+        // Expand a candidate window forward and test increasing end points.
+        for (let end = idx + anchor.length; end <= content.length; end++) {
+            if (normalizeWs(content.slice(idx, end)) === normNeedle) {
+                return { start: idx, end };
+            }
+            if (end - idx > needle.length * 3 + 400) break; // window too big — give up on this anchor
+        }
+        from = idx + anchor.length;
+    }
+}
+
 function applySurgicalEdits(originalContent, edits) {
     let result = originalContent;
     const applied = [];
@@ -65,12 +97,19 @@ function applySurgicalEdits(originalContent, edits) {
             failed.push({ edit, reason: 'edit.old and edit.new must be strings' });
             continue;
         }
-        if (!result.includes(edit.old)) {
-            failed.push({ edit, reason: 'old string not found in file — content may have changed' });
+        if (result.includes(edit.old)) {
+            result = result.replace(edit.old, edit.new);
+            applied.push(edit);
             continue;
         }
-        result = result.replace(edit.old, edit.new);
-        applied.push(edit);
+        // Fallback: forgive whitespace/indentation drift in the LLM's old-string.
+        const span = findWhitespaceTolerantSpan(result, edit.old);
+        if (span) {
+            result = result.slice(0, span.start) + edit.new + result.slice(span.end);
+            applied.push({ ...edit, matchedVia: 'whitespace_tolerant' });
+            continue;
+        }
+        failed.push({ edit, reason: 'old string not found in file — content may have changed' });
     }
 
     return { result, applied, failed };

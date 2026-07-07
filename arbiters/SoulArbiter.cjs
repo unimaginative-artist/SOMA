@@ -95,6 +95,36 @@ class SoulArbiter {
       .map(e => e.feeling);
   }
 
+  // ── Read ALL reflections (for self-review / consolidation) ───────────────
+  // Returns full entries with a stable index so she can reference and edit them.
+  getAllReflections() {
+    if (!this._loaded) this.initialize();
+    return this.entries.map((e, i) => ({ index: i, ...e }));
+  }
+
+  // ── Edit her own reflection in place ─────────────────────────────────────
+  // She can revise a past felt memory (e.g. after new understanding) rather than
+  // only ever appending. Returns the updated entry or null if out of range.
+  editReflection(index, newFeeling) {
+    if (!this._loaded) this.initialize();
+    const i = Number(index);
+    if (!Number.isInteger(i) || i < 0 || i >= this.entries.length) return null;
+    if (!newFeeling || typeof newFeeling !== 'string') return null;
+    this.entries[i] = { ...this.entries[i], feeling: newFeeling.trim(), editedAt: Date.now() };
+    this._scheduleSave();
+    return this.entries[i];
+  }
+
+  // ── Prune a reflection she no longer stands by ───────────────────────────
+  removeReflection(index) {
+    if (!this._loaded) this.initialize();
+    const i = Number(index);
+    if (!Number.isInteger(i) || i < 0 || i >= this.entries.length) return false;
+    this.entries.splice(i, 1);
+    this._scheduleSave();
+    return true;
+  }
+
   // ── Persist ───────────────────────────────────────────────────────────────
   _scheduleSave() {
     if (this._saveTimer) clearTimeout(this._saveTimer);

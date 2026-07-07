@@ -501,6 +501,25 @@ export async function loadExtendedSystems(system) {
         console.log('    🔗 STEVE Executive ← Full Specialist Ecosystem');
     }
 
+    // ── MaxApprovalShim: MAX approves self-mods in production ──
+    // Production boots SomaBootstrapV2, so the shim wired in the old SomaBootstrap.js
+    // never loaded — EngineeringSwarm.modifyCode hit its humanInLoop gate and found
+    // "no approval gate available", refusing every self-mod. Wire it here so MAX
+    // (Barry's delegated approver) is the signing authority on the production path.
+    try {
+        if (!system.maxApprovalShim) {
+            const { default: maxBridge } = await import('../../core/MaxAgentBridge.js');
+            system.maxBridge = system.maxBridge || maxBridge;
+            const { MaxApprovalShim } = await import('../../arbiters/MaxApprovalShim.js');
+            system.maxApprovalShim = new MaxApprovalShim({ name: 'MaxApprovalShim', logger: console });
+            system.maxApprovalShim.system = system;
+            await system.maxApprovalShim.initialize({ maxAgentBridge: system.maxBridge });
+            console.log('    🔗 MaxApprovalShim online (MAX = self-mod approver)');
+        }
+    } catch (err) {
+        console.warn(`    ⚠️  MaxApprovalShim wiring skipped: ${err.message}`);
+    }
+
     // ── NEMESIS: Chat quality gate ──
     try {
         const { NemesisArbiter } = await import('../../arbiters/NemesisArbiter.js');

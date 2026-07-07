@@ -325,6 +325,44 @@ const soul        = require('../../arbiters/SoulArbiter.cjs');
 export default function(system) {
     // Helper to get active brain
     const getBrain = () => system.quadBrain || system.somArbiter || system.kevinArbiter || system.brain || system.superintelligence;
+
+    // ── Reflections: read, edit, and consolidate into one paper ──────────────
+    // Barry's ask: she posts reflections all day; on command she folds them into
+    // a single constructive paper. GET lists them; PATCH edits one; POST /consolidate
+    // synthesizes the whole set into research/reflections/.
+    router.get('/reflections', (req, res) => {
+        try {
+            const sl = system.soul;
+            if (!sl?.getAllReflections) return res.json({ success: true, reflections: [] });
+            res.json({ success: true, reflections: sl.getAllReflections() });
+        } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    });
+
+    router.patch('/reflections/:index', (req, res) => {
+        try {
+            const sl = system.soul;
+            const { feeling } = req.body || {};
+            if (feeling === '' || feeling === null) {
+                const removed = sl?.removeReflection?.(req.params.index);
+                return res.json({ success: !!removed, removed: !!removed });
+            }
+            const updated = sl?.editReflection?.(req.params.index, feeling);
+            res.json({ success: !!updated, reflection: updated });
+        } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    });
+
+    router.post('/reflections/consolidate', async (req, res) => {
+        try {
+            const brain = getBrain();
+            const { consolidateReflections } = await import('../../core/ReflectionConsolidator.js');
+            const result = await consolidateReflections({
+                soul: system.soul,
+                brain,
+                focus: req.body?.focus || null
+            });
+            res.json(result);
+        } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    });
     const memoryMetadata = (memory = {}) => {
         if (memory.metadata && typeof memory.metadata === 'object') return memory.metadata;
         if (typeof memory.metadata === 'string') {

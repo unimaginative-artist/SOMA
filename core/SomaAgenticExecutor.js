@@ -781,6 +781,23 @@ export class SomaAgenticExecutor {
                 }
             },
 
+            consolidate_reflections: {
+                description: "Read ALL of SOMA's private reflections and synthesize them into one constructive paper (themes, what she's learned, unresolved tensions, next directions). Writes to research/reflections/. Use when asked to consolidate reflections, findings, or thoughts into a paper.",
+                args: '{"focus":"optional topic to focus the paper on"}',
+                execute: async ({ focus = null } = {}) => {
+                    try {
+                        const { consolidateReflections } = await import('./ReflectionConsolidator.js');
+                        return await consolidateReflections({
+                            soul: this.system?.soul,
+                            brain: this.brain || this.system?.quadBrain,
+                            focus
+                        });
+                    } catch (error) {
+                        return { success: false, error: error.message };
+                    }
+                }
+            },
+
             architecture_census: {
                 description: 'Run a full architecture census: classify every source module under core/, arbiters/, server/, daemons/, cognitive/, src/ as active or candidate-unused (with stubbed tags) based on a codebase-wide reference scan. Writes data/architecture-census/latest.json — the required evidence base for architecture_reorg_plan. Run this FIRST before any reorganization.',
                 args: '{}',

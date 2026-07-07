@@ -232,6 +232,29 @@ export class EngineeringSwarmArbiter extends BaseArbiterV4 {
   }
 
   /**
+   * Get the MAX approval shim, constructing it on demand from the MAX bridge
+   * singleton if no loader wired it into system. This makes MAX-as-approver work
+   * regardless of bootstrap path or system-object identity.
+   */
+  async _getMaxApprovalShim() {
+    if (this.system?.maxApprovalShim) return this.system.maxApprovalShim;
+    if (this._lazyMaxShim) return this._lazyMaxShim;
+    try {
+      const { default: maxBridge } = await import('../core/MaxAgentBridge.js');
+      const { MaxApprovalShim } = await import('./MaxApprovalShim.js');
+      const shim = new MaxApprovalShim({ name: 'MaxApprovalShim', logger: this.auditLogger || console });
+      shim.system = this.system;
+      await shim.initialize({ maxAgentBridge: maxBridge });
+      this._lazyMaxShim = shim;
+      if (this.system) this.system.maxApprovalShim = shim; // share it forward
+      return shim;
+    } catch (e) {
+      this.auditLogger?.warn?.(`[EngSwarm] Could not construct MaxApprovalShim: ${e.message}`);
+      return null;
+    }
+  }
+
+  /**
    * Main Entry Point for Autonomous Engineering
    * Orchestrates the research, plan, debate, and synthesis cycle.
    */
@@ -260,9 +283,14 @@ export class EngineeringSwarmArbiter extends BaseArbiterV4 {
     // disable approval during early boot.
     const humanInLoop = commandBridgeSettings?.authority?.humanInLoopOverride !== false;
     if (humanInLoop) {
-      if (this.system?.maxApprovalShim) {
-          this.auditLogger.info(`[EngSwarm] Bypassing human-in-the-loop gate, delegating to MAX via MaxApprovalShim.`);
-          const approval = await this.system.maxApprovalShim.requestApproval({ filepath, request });
+      // Prefer MAX as approver. Construct the shim on demand if no loader wired it
+      // into this.system — production boots SomaBootstrapV2 and the swarm's system
+      // object didn't always carry maxApprovalShim, which stranded every self-mod
+      // at "no approval gate available".
+      const maxShim = await this._getMaxApprovalShim();
+      if (maxShim) {
+          this.auditLogger.info(`[EngSwarm] Delegating code modification approval to MAX via MaxApprovalShim.`);
+          const approval = await maxShim.requestApproval({ filepath, request });
           if (!approval?.approved) {
               this.auditLogger.warn(`[EngSwarm] 🛑 MAX rejected code modification for "${filepath}"`);
               return { success: false, error: `Modification rejected by MAX: ${approval?.reason || 'denied'}`, humanRejected: true };
@@ -1085,6 +1113,12 @@ You MUST output ONLY a valid JSON object matching the requested schema. Ensure a
     if (!this.quadBrain) return null;
 
     this.auditLogger.info(`[Swarm] 📊 Generating empirical benchmark script for: ${filepath}`);
+    // The temp benchmark file is written to this.rootPath, so the import specifier
+    // must be RELATIVE to rootPath. filepath arrives absolute — using it directly
+    // produced a doubled path (rootPath + absolutePath) and ERR_MODULE_NOT_FOUND,
+    // which failed the benchmark step for every self-mod. Compute the relative form.
+    const absTarget = path.isAbsolute(filepath) ? filepath : path.join(this.rootPath, filepath);
+    const importSpecifier = './' + path.relative(this.rootPath, absTarget).replace(/\\/g, '/');
     const prompt = `You are SOMA's empirical benchmarking generator.
 Given this file: ${filepath}
 And this original code:
@@ -1098,12 +1132,12 @@ The script must print a single JSON line containing:
 
 Rules:
 1. Respond with ONLY the javascript code inside a javascript code block.
-2. The script will be saved as an ES module (.mjs). You MUST use ES module import syntax. Do NOT use require().
-   Since the target file may be a CommonJS module (using module.exports) or an ES module (using export), the safest way to import is using a default import or a wildcard import, such as:
-   import pkg from './${filepath.replace(/\\/g, '/')}';
+2. The script will be saved as an ES module (.mjs) at the project root. You MUST use ES module import syntax. Do NOT use require().
+   Since the target file may be a CommonJS module (using module.exports) or an ES module (using export), the safest way to import is using a default import or a wildcard import. Use EXACTLY this import path:
+   import pkg from '${importSpecifier}';
    const { ... } = pkg;
    // Or:
-   import * as pkg from './${filepath.replace(/\\/g, '/')}';
+   import * as pkg from '${importSpecifier}';
 3. Ensure the script runs quickly (max 1 second). Do not print any other text.`;
 
     try {

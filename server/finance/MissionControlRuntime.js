@@ -582,10 +582,20 @@ class MissionControlRuntime {
 
         // Regime-specific selection on LIVE data only
         if (regime && liveTotal > 0) {
+            // Force exploration in the current regime: any strategy with < 3 trials in this regime goes first
+            const underexploredInRegime = Object.entries(strategies)
+                .filter(([id]) => isStrategyAllowed(id))
+                .filter(([id, s]) => (s.live?.byRegime?.[regime]?.trials || 0) < 3);
+            if (underexploredInRegime.length > 0) {
+                const [id] = underexploredInRegime[Math.floor(Math.random() * underexploredInRegime.length)];
+                console.log(`[MCR] UCB1 live-regime-explore: ${id} for regime=${regime}`);
+                return id;
+            }
+
             const regimeStrategies = Object.entries(strategies)
-                .filter(([, s]) => (s.live?.byRegime?.[regime]?.trials || 0) >= 3);
+                .filter(([id]) => isStrategyAllowed(id));
             if (regimeStrategies.length >= 2) {
-                const regimeTotal = regimeStrategies.reduce((sum, [, v]) => sum + v.live.byRegime[regime].trials, 0) || 1;
+                const regimeTotal = regimeStrategies.reduce((sum, [, v]) => sum + (v.live?.byRegime?.[regime]?.trials || 0), 0) || 1;
                 let bestId = null, bestScore = -Infinity;
                 for (const [id, s] of regimeStrategies) {
                     const rs = s.live.byRegime[regime];
