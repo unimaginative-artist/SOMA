@@ -53,7 +53,7 @@ export const PatchSchema = {
                             path: { type: "string" },
                             // full_rewrite mode: provide complete file content
                             content: { type: "string" },
-                            // surgical mode: provide targeted old→new replacements (preferred for large files)
+                            // surgical mode: provide targeted old→new replacements
                             edits: {
                                 type: "array",
                                 items: {
@@ -64,10 +64,19 @@ export const PatchSchema = {
                                     },
                                     required: ["old", "new"]
                                 }
+                            },
+                            // function-swap mode: replace one whole function/method by name (robust)
+                            replaceFunction: {
+                                type: "object",
+                                properties: {
+                                    name: { type: "string" },
+                                    source: { type: "string" }
+                                },
+                                required: ["name", "source"]
                             }
                         },
                         required: ["path"]
-                        // Note: either 'content' or 'edits' must be present — enforced at runtime by SwarmPatchTransaction
+                        // Note: one of 'content' / 'edits' / 'replaceFunction' must be present — enforced at runtime by SwarmPatchTransaction
                     }
                 }
             },
@@ -399,25 +408,29 @@ export class EngineeringSwarmArbiter extends BaseArbiterV4 {
                 // Run experimental benchmark after patch application
                 let benchmarkMetrics = null;
                 if (benchmarkHelper) {
+                    // Fail-OPEN on benchmark INFRASTRUCTURE errors: many targets (e.g.
+                    // stateful arbiters needing Redis/DB/embedder) simply can't be
+                    // isolate-imported and run standalone. A benchmark that can't even
+                    // execute is NOT evidence the patch is bad, so skip the latency
+                    // check instead of rejecting a valid, syntax-verified patch.
                     try {
                         benchmarkMetrics = await benchmarkHelper.runExperimental();
-                        if (benchmarkMetrics) {
-                            this.auditLogger.info(`[Swarm] 📊 Swarm Benchmark comparison:
-   - Baseline Latency: ${benchmarkMetrics.baseline.latencyMs.toFixed(3)}ms
-   - Experimental Latency: ${benchmarkMetrics.experimental.latencyMs.toFixed(3)}ms (Delta: ${benchmarkMetrics.latencyDeltaPercent.toFixed(1)}%)
-   - Memory Delta: ${benchmarkMetrics.memoryDeltaBytes} bytes`);
-
-                            // If latency regression > 30% and it runs for more than 5ms (avoid micro-jitter), reject!
-                            if (benchmarkMetrics.latencyDeltaPercent > 30 && benchmarkMetrics.baseline.latencyMs > 5) {
-                                throw new Error(`Latency regression of ${benchmarkMetrics.latencyDeltaPercent.toFixed(1)}% exceeds the 30% safety threshold.`);
-                            }
-                        }
                     } catch (benchRunErr) {
-                        this.auditLogger.warn(`[Swarm] Benchmarking execution failed: ${benchRunErr.message}`);
+                        this.auditLogger.warn(`[Swarm] Benchmark could not run — skipping latency check (fail-open): ${benchRunErr.message}`);
                         if (benchmarkHelper.tempBenchPath) {
                             await fs.rm(benchmarkHelper.tempBenchPath, { force: true }).catch(() => {});
                         }
-                        throw benchRunErr; // Reject patch on benchmark check failure
+                        benchmarkMetrics = null;
+                    }
+                    // Only a MEASURED regression rejects the patch.
+                    if (benchmarkMetrics) {
+                        this.auditLogger.info(`[Swarm] 📊 Swarm Benchmark comparison:
+   - Baseline Latency: ${benchmarkMetrics.baseline.latencyMs.toFixed(3)}ms
+   - Experimental Latency: ${benchmarkMetrics.experimental.latencyMs.toFixed(3)}ms (Delta: ${benchmarkMetrics.latencyDeltaPercent.toFixed(1)}%)
+   - Memory Delta: ${benchmarkMetrics.memoryDeltaBytes} bytes`);
+                        if (benchmarkMetrics.latencyDeltaPercent > 30 && benchmarkMetrics.baseline.latencyMs > 5) {
+                            throw new Error(`Latency regression of ${benchmarkMetrics.latencyDeltaPercent.toFixed(1)}% exceeds the 30% safety threshold.`);
+                        }
                     }
                 }
 
@@ -1003,10 +1016,12 @@ Please output ONLY a valid JSON object matching the schema. No markdown code blo
     Produce final code patch for ORIGINAL FILE: ${context.filepath}
 
     PATCH FORMAT RULES (AEGIS Protocol — read carefully):
-    - If the file is large (>100 lines) or already exists: use SURGICAL edits.
+    - PREFERRED when your change is contained to one function or method: use FUNCTION-SWAP.
+      Function-swap format: { "patch": { "files": [{ "path": "...", "replaceFunction": { "name": "recall", "source": "async recall(query, topK = 5) {\\n  ...entire new method body...\\n}" } }] } }
+      Provide the COMPLETE new function/method source in "source" (signature through closing brace). The system locates the function by name via the parser and swaps its whole span — you do NOT need to reproduce surrounding lines exactly. This is far more reliable than surgical edits; use it whenever the change lives inside a single named function or method.
+    - If the change spans multiple unrelated spots: use SURGICAL edits.
       Surgical format: { "patch": { "files": [{ "path": "...", "edits": [{ "old": "exact string", "new": "replacement" }] }] } }
-      Each "old" must be an EXACT verbatim substring of the current file. Copy it character-for-character.
-      Make the "old" string unique enough (include 1-2 surrounding lines of context) to avoid ambiguity.
+      Each "old" must be an EXACT verbatim substring of the current file. Copy it character-for-character, including every line.
     - If the file is new or small (<100 lines): full rewrite is acceptable.
       Full rewrite format: { "patch": { "files": [{ "path": "...", "content": "entire file content" }] } }
     - NEVER use full_rewrite on large existing files. The AEGIS guard will block it if you delete routes or functions.

@@ -4,18 +4,22 @@
  * Multi-file patch transaction system for SOMA.
  * Allows safe multi-file edits with atomic-like rollback protection.
  *
- * Supports two patch modes per file:
+ * Supports three patch modes per file:
  *   1. full_rewrite  — { path, content }   — overwrites the whole file (AEGIS-guarded for large files)
- *   2. surgical      — { path, edits: [{ old, new }] } — targeted string replacements (always safe)
+ *   2. surgical      — { path, edits: [{ old, new }] } — targeted string replacements
+ *   3. replaceFunction — { path, replaceFunction: { name, source } } — AST-located
+ *      whole-function/method swap. Robust to LLM formatting drift: instead of a
+ *      fragile multi-line find-and-replace (which dies if the model drops a line),
+ *      it finds the named function via the parser and swaps its entire span.
  *
  * AEGIS Guard: if a full_rewrite would silently delete routes or function signatures
  * that existed before the patch, the write is blocked and an error is thrown.
- * Surgical edits bypass AEGIS (they are inherently non-destructive to unrelated code).
  */
 
 import fs from 'fs/promises';
 import path from 'path';
 import { resolveWithinRoot } from './PathSafety.js';
+import { parse } from '@babel/parser';
 
 // ── AEGIS: files with more lines than this get signature-checked before any full_rewrite ──
 const AEGIS_LINE_THRESHOLD = 100;
@@ -85,6 +89,62 @@ function findWhitespaceTolerantSpan(content, needle) {
         }
         from = idx + anchor.length;
     }
+}
+
+// Find a named function / class method / assigned arrow in the AST and return its
+// exact source span. Handles the common declaration forms so the swarm can swap a
+// whole function without brittle string matching.
+function locateFunctionSpan(content, name) {
+    let ast;
+    try {
+        ast = parse(content, {
+            sourceType: 'unambiguous',
+            errorRecovery: true,
+            plugins: ['classProperties', 'classPrivateProperties', 'classPrivateMethods', 'objectRestSpread', 'optionalChaining', 'nullishCoalescingOperator', 'topLevelAwait']
+        });
+    } catch (e) {
+        return { ok: false, reason: `parse failed: ${e.message}` };
+    }
+    let found = null;
+    const nameOf = (node) => {
+        const t = node.type;
+        if (t === 'FunctionDeclaration' && node.id) return node.id.name;
+        if ((t === 'ClassMethod' || t === 'ObjectMethod') && node.key) return node.key.name ?? node.key.value;
+        if (t === 'ClassProperty' && node.key && node.value && /FunctionExpression|ArrowFunctionExpression/.test(node.value.type)) return node.key.name;
+        if (t === 'VariableDeclarator' && node.id && node.init && /FunctionExpression|ArrowFunctionExpression/.test(node.init.type)) return node.id.name;
+        return null;
+    };
+    const visit = (node) => {
+        if (found || !node || typeof node !== 'object') return;
+        if (Array.isArray(node)) { for (const n of node) visit(n); return; }
+        if (typeof node.type === 'string' && nameOf(node) === name
+            && typeof node.start === 'number' && typeof node.end === 'number') {
+            found = node; return;
+        }
+        for (const k in node) {
+            if (k === 'loc' || k === 'start' || k === 'end' || k === 'range'
+                || k === 'leadingComments' || k === 'trailingComments' || k === 'innerComments') continue;
+            const v = node[k];
+            if (v && typeof v === 'object') visit(v);
+        }
+    };
+    visit(ast.program ? ast.program.body : ast);
+    if (!found) return { ok: false, reason: `function/method "${name}" not found` };
+    return { ok: true, start: found.start, end: found.end };
+}
+
+function replaceFunctionInSource(content, name, newSource) {
+    const span = locateFunctionSpan(content, name);
+    if (!span.ok) return { ok: false, reason: span.reason };
+    const result = content.slice(0, span.start) + String(newSource).trim() + content.slice(span.end);
+    // Safety: the replacement must itself parse (no broken syntax swapped in).
+    try {
+        parse(result, { sourceType: 'unambiguous', errorRecovery: false,
+            plugins: ['classProperties', 'classPrivateProperties', 'classPrivateMethods', 'objectRestSpread'] });
+    } catch (e) {
+        return { ok: false, reason: `replacement would break file syntax: ${e.message}` };
+    }
+    return { ok: true, result };
 }
 
 function applySurgicalEdits(originalContent, edits) {
@@ -158,7 +218,25 @@ export class SwarmPatchTransaction {
                 });
 
                 // ── Determine patch mode ──────────────────────────────────────
-                if (Array.isArray(file.edits)) {
+                if (file.replaceFunction && typeof file.replaceFunction.name === 'string'
+                    && typeof file.replaceFunction.source === 'string') {
+                    // FUNCTION-SWAP MODE: AST-located whole-function replacement.
+                    if (original === null) {
+                        throw new Error(`replaceFunction on non-existent file: ${file.path}`);
+                    }
+                    const { ok, result, reason } = replaceFunctionInSource(original, file.replaceFunction.name, file.replaceFunction.source);
+                    if (!ok) {
+                        throw new Error(`[AEGIS] replaceFunction failed for ${file.path}: ${reason}`);
+                    }
+                    // No signature-preservation check needed: replaceFunction only rewrites
+                    // the located function's byte span, so all code outside it is identical
+                    // by construction, and replaceFunctionInSource already re-parses the
+                    // result to guarantee valid syntax. (A whole-file signature diff here
+                    // also false-positives on in-function calls like redis.get('...').)
+                    console.log(`[SwarmTransaction] 🔧 Function-swap: replaced "${file.replaceFunction.name}" in ${file.path}`);
+                    filesToPatch.push({ path: fullPath, content: result });
+
+                } else if (Array.isArray(file.edits)) {
                     // SURGICAL MODE: apply edits to original content
                     if (original === null) {
                         throw new Error(`Surgical edit on non-existent file: ${file.path}`);
@@ -192,7 +270,7 @@ export class SwarmPatchTransaction {
                     filesToPatch.push({ path: fullPath, content: file.content });
 
                 } else {
-                    throw new Error(`File entry for ${file.path} must have either 'content' (string) or 'edits' (array)`);
+                    throw new Error(`File entry for ${file.path} must have 'content' (string), 'edits' (array), or 'replaceFunction' ({name, source})`);
                 }
             }
 
