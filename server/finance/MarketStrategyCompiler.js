@@ -78,9 +78,12 @@ function buildCompiledStrategy(entry, policy) {
             },
             exit: {
                 type: 'bounded_dynamic_exit',
-                stopLossPct: assetClass === 'crypto' ? 0.018 : 0.012,
-                takeProfitPct: assetClass === 'crypto' ? 0.045 : 0.028,
-                trailingStopPct: assetClass === 'crypto' ? 0.014 : 0.009,
+                // Honor caller-provided exit params (e.g. a DreamCounterfactual winner
+                // whose specific stop/TP beat the baseline on real bars) — otherwise the
+                // discovered edge would be silently overwritten by asset-class defaults.
+                stopLossPct: finite(entry.dslOverride?.exit?.stopLossPct, assetClass === 'crypto' ? 0.018 : 0.012),
+                takeProfitPct: finite(entry.dslOverride?.exit?.takeProfitPct, assetClass === 'crypto' ? 0.045 : 0.028),
+                trailingStopPct: finite(entry.dslOverride?.exit?.trailingStopPct, assetClass === 'crypto' ? 0.014 : 0.009),
                 maxPositionAgeMs: assetClass === 'crypto' ? 4 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000
             },
             sizing: {
