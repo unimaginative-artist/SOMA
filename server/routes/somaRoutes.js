@@ -351,6 +351,20 @@ export default function(system) {
         } catch (e) { res.status(500).json({ success: false, error: e.message }); }
     });
 
+    // Dream → counterfactual → backtest: turns "what if X had been different?"
+    // from prose into tested parameter edits scored on real historical bars.
+    router.post('/dream/counterfactuals', async (req, res) => {
+        try {
+            const { symbol, strategyId, baseline } = req.body || {};
+            if (!symbol || !strategyId || !baseline) {
+                return res.status(400).json({ success: false, error: 'symbol, strategyId, baseline (params) required' });
+            }
+            const { dreamCounterfactuals } = await import('../../core/DreamCounterfactualEngine.js');
+            const result = await dreamCounterfactuals({ symbol, strategyId, baseline });
+            res.json(result);
+        } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    });
+
     // Pulse behavioral sandbox: run a proposed function-swap in-process against
     // the LIVE arbiter's real dependencies and compare behavior to the original.
     // This is the real behavioral gate that the separate-process simulator can't be.

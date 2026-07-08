@@ -74,7 +74,7 @@ function summarizeTrades(trades, initialCapital) {
     };
 }
 
-function backtestBars({ bars, candidate, initialCapital = 10000 }) {
+export function backtestBars({ bars, candidate, initialCapital = 10000 }) {
     const dsl = candidate.compiledStrategy?.dsl || {};
     const exit = dsl.exit || {};
     const sizing = dsl.sizing || {};
