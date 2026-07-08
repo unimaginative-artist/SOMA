@@ -115,6 +115,19 @@ async function run() {
         const v = s.delta == null ? 'no baseline' : s.delta > 0 ? `TRAINING HELPS (+${s.delta}pts)` : s.delta === 0 ? 'no gain' : `WORSE (${s.delta}pts)`;
         console.log(`  ${s.lobe.padEnd(16)} trained ${String(s.trainedPct).padStart(3)}%  vs base ${String(s.baselinePct).padStart(3)}%  → ${v}`);
     }
+
+    // Write the trust file the sandwich reads: a lobe is only trusted to ground
+    // DeepSeek if it STRICTLY beats the base model on its own domain. Retrain a
+    // lobe, re-run this, and it auto-earns (or loses) its place — no manual toggle.
+    const fs = await import('fs/promises');
+    const path = await import('path');
+    const trust = {};
+    for (const s of summary) trust[s.lobe] = { trusted: s.delta != null && s.delta > 0, trainedPct: s.trainedPct, baselinePct: s.baselinePct, delta: s.delta };
+    const trustPath = path.join(process.cwd(), 'data', 'lobe-trust.json');
+    await fs.mkdir(path.dirname(trustPath), { recursive: true });
+    await fs.writeFile(trustPath, JSON.stringify({ measuredAt: new Date().toISOString(), baseline, trust }, null, 2), 'utf8');
+    const trusted = Object.entries(trust).filter(([, v]) => v.trusted).map(([k]) => k);
+    console.log(`\n[lobe-bench] trust file written → ${trusted.length ? trusted.join(', ') : 'NO lobes trusted (sandwich falls back to pure DeepSeek)'}`);
 }
 
 run().catch(e => { console.error(e); process.exit(1); });

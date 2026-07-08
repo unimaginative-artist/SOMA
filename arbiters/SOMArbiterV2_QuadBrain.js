@@ -300,9 +300,36 @@ export class SOMArbiterV2_QuadBrain extends BaseArbiterV4 {
    * Returns the specialist's domain perspective, or null if the model isn't available.
    * Silent fallback — if the model isn't trained yet, the query continues normally.
    */
+  // A lobe model may ground/answer only if it earned trust — i.e. it STRICTLY
+  // beat the base model on its own domain in scripts/lobe-benchmark.mjs, recorded
+  // in data/lobe-trust.json. Untracked models (stock qwen, etc.) are trusted by
+  // default; a benchmarked-and-failed lobe (e.g. the degraded soma-thalamus) is
+  // skipped so it can't poison reasoning. No trust file → trust all (backward compat).
+  async _isLobeModelTrusted(lobeModel) {
+    try {
+      const now = Date.now();
+      if (!this._lobeTrust || now - this._lobeTrust.ts > 60000) {
+        let data = null;
+        try { data = JSON.parse(await fs.readFile(path.join(process.cwd(), 'data', 'lobe-trust.json'), 'utf8')); } catch {}
+        this._lobeTrust = { ts: now, trust: data?.trust || null };
+      }
+      const trust = this._lobeTrust.trust;
+      if (!trust) return true;
+      const base = String(lobeModel).replace(/-q4\b.*$/, '').replace(/:.*$/, '');
+      const entry = trust[base] || trust[lobeModel];
+      return entry ? entry.trusted !== false : true;
+    } catch { return true; }
+  }
+
   async _queryLobeSpecialist(lobeName, query) {
     const lobeModel = this.lobeModels[lobeName];
     if (!lobeModel) return null;
+
+    // Skip lobes that failed their benchmark — they degrade, not ground.
+    if (!(await this._isLobeModelTrusted(lobeModel))) {
+      this.auditLogger.info(`[${this.name}] Lobe ${lobeModel} skipped for grounding (below base on its own domain)`);
+      return null;
+    }
 
     // Only proceed if the trained model is actually registered in Ollama
     const available = await this._getAvailableOllamaModels();
@@ -433,9 +460,16 @@ INTEGRATED RESPONSE:`;
     // ── 2. LOCAL HEARTBEAT: use lobe-specific model if trained, else base ──
     try {
         const requestedLobe = context?.activeLobe || context?.preferredBrain || context?.brain;
-        const lobeModel = requestedLobe && this.lobeModels?.[requestedLobe];
+        let lobeModel = requestedLobe && this.lobeModels?.[requestedLobe];
+        // Don't let a benchmarked-failed lobe (e.g. degraded soma-thalamus) be the
+        // local reasoning model — fall back to the base local model instead. This
+        // keeps the heartbeat/local path fully working, just not broken.
+        if (lobeModel && !(await this._isLobeModelTrusted(lobeModel))) {
+            this.auditLogger.info(`[${this.name}] Lobe ${lobeModel} untrusted → using base local model ${this.ollamaModel}`);
+            lobeModel = null;
+        }
         const modelToUse = lobeModel || this.ollamaModel;
-        
+
         if (lobeModel) {
             this.auditLogger.info(`[${this.name}] 🧠 Lobe Specialist: ${modelToUse} (${requestedLobe} lobe)`);
         } else {
