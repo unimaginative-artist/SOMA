@@ -351,6 +351,21 @@ export default function(system) {
         } catch (e) { res.status(500).json({ success: false, error: e.message }); }
     });
 
+    // Pulse behavioral sandbox: run a proposed function-swap in-process against
+    // the LIVE arbiter's real dependencies and compare behavior to the original.
+    // This is the real behavioral gate that the separate-process simulator can't be.
+    router.post('/pulse/behavioral-verify', async (req, res) => {
+        try {
+            const { filepath, className, methodName, newFunctionSource, probes, mutating } = req.body || {};
+            if (!filepath || !className || !methodName || !newFunctionSource) {
+                return res.status(400).json({ success: false, error: 'filepath, className, methodName, newFunctionSource required' });
+            }
+            const { verifyBehavior } = await import('../../core/PulseBehavioralSandbox.js');
+            const result = await verifyBehavior({ system, filepath, className, methodName, newFunctionSource, probes: probes || [], mutating: !!mutating });
+            res.json({ success: true, ...result });
+        } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    });
+
     router.post('/reflections/consolidate', async (req, res) => {
         try {
             const brain = getBrain();
