@@ -77,81 +77,145 @@ function swapFunction(content, name, newSource) {
 
 function summarize(value) {
     try {
-        if (value == null) return { kind: typeof value, value: value };
+        if (value == null) return { kind: typeof value, isNull: true };
         if (Array.isArray(value)) return { kind: 'array', length: value.length };
         if (typeof value === 'object') {
-            const results = value.results;
-            if (Array.isArray(results)) return { kind: 'object', resultsLen: results.length, tier: value.tier ?? null };
-            return { kind: 'object', keys: Object.keys(value).slice(0, 8) };
+            const s = { kind: 'object', keys: Object.keys(value).sort() };
+            if (Array.isArray(value.results)) { s.resultsLen = value.results.length; s.tier = value.tier ?? null; }
+            return s;
         }
-        return { kind: typeof value, value: String(value).slice(0, 80) };
+        if (typeof value === 'number') return { kind: 'number', isNaN: Number.isNaN(value) };
+        return { kind: typeof value, value: String(value).slice(0, 60) };
     } catch { return { kind: 'unsummarizable' }; }
 }
 
-export async function verifyBehavior({ system, filepath, className, methodName, newFunctionSource, probes = [], mutating = false }) {
-    if (mutating) return { passed: false, ran: false, reason: 'behavioral probe refused: method flagged as mutating (would touch live state)' };
-    if (!system) return { passed: true, ran: false, reason: 'no system handle — skipped (fail-open)' };
-
-    const live = resolveLiveInstance(system, className);
-    if (!live || typeof live[methodName] !== 'function') {
-        return { passed: true, ran: false, reason: `no live instance/method for ${className}.${methodName} — skipped (fail-open)` };
-    }
-
-    let PatchedClass, tmpPath;
+// Find the class that declares a method named `methodName`, so the swarm doesn't
+// have to tell us the class — we read it from the source being modified.
+function resolveClassForMethod(content, methodName) {
+    let ast;
     try {
-        const absTarget = path.isAbsolute(filepath) ? filepath : path.join(ROOT, filepath);
-        const original = await fs.readFile(absTarget, 'utf8');
-        const patched = swapFunction(original, methodName, newFunctionSource);
+        ast = parse(content, { sourceType: 'unambiguous', errorRecovery: true,
+            plugins: ['classProperties', 'classPrivateProperties', 'classPrivateMethods', 'objectRestSpread', 'optionalChaining', 'nullishCoalescingOperator', 'topLevelAwait'] });
+    } catch { return null; }
+    let found = null;
+    const visit = (n, cls) => {
+        if (found || !n || typeof n !== 'object') return;
+        if (Array.isArray(n)) { for (const x of n) visit(x, cls); return; }
+        const nextCls = (n.type === 'ClassDeclaration' || n.type === 'ClassExpression') && n.id ? n.id.name : cls;
+        if (n.type === 'ClassMethod' && n.key && (n.key.name ?? n.key.value) === methodName && nextCls) { found = nextCls; return; }
+        for (const k in n) { if (['loc', 'start', 'end', 'range', 'leadingComments', 'trailingComments'].includes(k)) continue; const v = n[k]; if (v && typeof v === 'object') visit(v, nextCls); }
+    };
+    visit(ast.program ? ast.program.body : ast, null);
+    return found;
+}
 
+// Generic probe inputs: run the OLD method with each; keep the ones that don't
+// throw, so we compare on inputs the original genuinely handles.
+const AUTO_PROBE_ARGS = [ [], [''], ['test'], ['BTC-USD'], [null], [undefined], [0], [1], [{}], [[]], ['test', 3] ];
+
+export async function verifyBehavior({ system, filepath, className, methodName, newFunctionSource, originalContent = null, probes = [], mutating = false }) {
+    if (mutating) return { passed: true, ran: false, reason: 'skipped: method flagged mutating (would touch live state)' };
+
+    const absTarget = path.isAbsolute(filepath) ? filepath : path.join(ROOT, filepath);
+    let original = originalContent;
+    if (original == null) { try { original = await fs.readFile(absTarget, 'utf8'); } catch { return { passed: true, ran: false, reason: 'could not read source' }; } }
+
+    // Auto-resolve the class from the source if the caller didn't name it.
+    const cls = className || resolveClassForMethod(original, methodName);
+    if (!cls) return { passed: true, ran: false, reason: `no class found for method ${methodName} — skipped (fail-open)` };
+
+    // The OLD baseline: the live in-memory instance (real deps + real state) if
+    // present, else a fresh instance from the ORIGINAL source.
+    const live = system ? resolveLiveInstance(system, cls) : null;
+
+    let tmpNew, tmpOld, oldInst, newInst;
+    try {
+        const patched = swapFunction(original, methodName, newFunctionSource);
         await fs.mkdir(SANDBOX_DIR, { recursive: true });
-        // Keep the module's own imports resolvable by mirroring its extension and
-        // placing the temp file where relative specifiers still resolve is hard,
-        // so instead we import from a temp copy NEXT TO the original.
-        tmpPath = path.join(path.dirname(absTarget), `.behav-${Date.now()}${path.extname(absTarget)}`);
-        await fs.writeFile(tmpPath, patched, 'utf8');
-        const mod = await import(pathToFileURL(tmpPath).href + `?t=${Date.now()}`);
-        PatchedClass = mod[className] || mod.default || Object.values(mod).find(v => typeof v === 'function' && v.prototype?.[methodName]);
-        if (!PatchedClass) throw new Error(`patched module did not export class ${className}`);
+        tmpNew = path.join(path.dirname(absTarget), `.behav-new-${Date.now()}${path.extname(absTarget)}`);
+        await fs.writeFile(tmpNew, patched, 'utf8');
+        const modNew = await import(pathToFileURL(tmpNew).href + `?t=${Date.now()}`);
+        newInst = instanceFrom(modNew, cls, methodName);
+        if (!newInst) throw new Error(`patched module exposed no usable instance/class for ${cls}.${methodName}`);
+
+        if (live) {
+            oldInst = live;
+        } else {
+            tmpOld = path.join(path.dirname(absTarget), `.behav-old-${Date.now()}${path.extname(absTarget)}`);
+            await fs.writeFile(tmpOld, original, 'utf8');
+            const modOld = await import(pathToFileURL(tmpOld).href + `?t=${Date.now()}`);
+            oldInst = instanceFrom(modOld, cls, methodName);
+        }
+        // Share the old instance's state onto the new one so the A/B runs on the
+        // same data (the whole point — compare behavior, not empty scaffolding).
+        if (oldInst && newInst && oldInst !== newInst) {
+            for (const k of Object.keys(oldInst)) { try { newInst[k] = oldInst[k]; } catch {} }
+        }
     } catch (e) {
-        if (tmpPath) await fs.rm(tmpPath, { force: true }).catch(() => {});
+        for (const p of [tmpNew, tmpOld]) if (p) await fs.rm(p, { force: true }).catch(() => {});
         return { passed: false, ran: true, reason: `could not load patched module: ${e.message}` };
     }
 
-    // Build a patched instance sharing the LIVE instance's real deps/state.
-    const patchedInstance = Object.create(PatchedClass.prototype);
-    Object.assign(patchedInstance, live);
-
-    const comparisons = [];
-    let passed = true;
-    try {
-        for (const probe of probes) {
-            const args = Array.isArray(probe.args) ? probe.args : [probe.args];
-            let origOut, origErr = null, testOut, testErr = null;
-            try { origOut = await live[methodName](...args); } catch (e) { origErr = e.message; }
-            try { testOut = await patchedInstance[methodName](...args); } catch (e) { testErr = e.message; }
-
-            // Regression: patched throws where original didn't.
-            const regressed = !origErr && testErr;
-            // For the common empty-query guard, allow the patched to short-circuit
-            // (return {results:[]}) on inputs the probe marks as expectedEmpty.
-            const os = summarize(origOut), ts = summarize(testOut);
-            const ok = !regressed && (probe.expectEmpty
-                ? (ts.resultsLen === 0 || ts.tier === 'none')
-                : true); // non-empty probes: pass if it didn't error/regress
-            if (!ok) passed = false;
-            comparisons.push({ label: probe.label || JSON.stringify(args).slice(0, 40), origErr, testErr, orig: os, test: ts, ok });
-        }
-    } finally {
-        await fs.rm(tmpPath, { force: true }).catch(() => {});
+    if (!oldInst || typeof oldInst[methodName] !== 'function' || !newInst || typeof newInst[methodName] !== 'function') {
+        return finishSkip([tmpNew, tmpOld], `no runnable old/new instance for ${cls}.${methodName} — skipped (fail-open)`);
     }
 
+    // Probe set: caller-provided, else auto-generate (keep args the OLD handles).
+    const probeArgs = probes.length ? probes.map(p => Array.isArray(p.args) ? p.args : [p.args]) : AUTO_PROBE_ARGS;
+    const comparisons = [];
+    let passed = true, ranAny = false;
+    try {
+        for (const args of probeArgs) {
+            let oOut, oErr = null, nOut, nErr = null;
+            try { oOut = await oldInst[methodName](...args); } catch (e) { oErr = e.message; }
+            try { nOut = await newInst[methodName](...args); } catch (e) { nErr = e.message; }
+            ranAny = true;
+            const os = summarize(oOut), ns = summarize(nOut);
+
+            // FAIL conditions (real behavioral regressions):
+            //  - new throws where old didn't
+            //  - new returns an object with DIFFERENT keys than old (contract change)
+            //  - new returns NaN where old returned a real number
+            const newThrows = !oErr && nErr;
+            const shapeChanged = os.kind === 'object' && ns.kind === 'object'
+                && JSON.stringify(os.keys) !== JSON.stringify(ns.keys);
+            const nanRegression = os.kind === 'number' && !os.isNaN && ns.kind === 'number' && ns.isNaN;
+            const ok = !(newThrows || shapeChanged || nanRegression);
+            if (!ok) passed = false;
+            comparisons.push({ args: JSON.stringify(args).slice(0, 30), oErr, nErr, old: os, new: ns, ok,
+                fail: newThrows ? 'new_throws' : shapeChanged ? 'shape_changed' : nanRegression ? 'nan' : null });
+        }
+    } finally {
+        for (const p of [tmpNew, tmpOld]) if (p) await fs.rm(p, { force: true }).catch(() => {});
+    }
+
+    const flagged = comparisons.filter(c => !c.ok);
     return {
         passed,
-        ran: true,
-        method: `${className}.${methodName}`,
-        probes: comparisons,
-        note: 'in-process A/B against live dependencies'
+        ran: ranAny,
+        method: `${cls}.${methodName}`,
+        baseline: live ? 'live-instance' : 'fresh-instance',
+        probesRun: comparisons.length,
+        failures: flagged.slice(0, 5),
+        note: passed ? 'behavior preserved (A/B on real inputs)' : 'behavioral regression detected'
     };
+}
+
+// Get a usable instance (with the target method) from a module, whether it
+// exports the CLASS (construct it) or a SINGLETON INSTANCE (use it directly).
+function instanceFrom(mod, cls, methodName) {
+    const asClass = (typeof mod[cls] === 'function' && mod[cls].prototype?.[methodName]) ? mod[cls]
+        : (typeof mod.default === 'function' && mod.default.prototype?.[methodName]) ? mod.default
+        : Object.values(mod).find(v => typeof v === 'function' && v.prototype?.[methodName]);
+    if (asClass) { try { return new asClass(); } catch { try { return new asClass({}); } catch { /* fall through */ } } }
+    // Singleton instance export
+    if (mod.default && typeof mod.default[methodName] === 'function') return mod.default;
+    return Object.values(mod).find(v => v && typeof v === 'object' && typeof v[methodName] === 'function') || null;
+}
+
+async function finishSkip(paths, reason) {
+    for (const p of paths) if (p) await fs.rm(p, { force: true }).catch(() => {});
+    return { passed: true, ran: false, reason };
 }
 
 export default verifyBehavior;

@@ -451,6 +451,36 @@ export class EngineeringSwarmArbiter extends BaseArbiterV4 {
                     throw new Error(`Verification FAILED: ${verification.error}`);
                 }
 
+                // ── 6.5 RUNTIME BEHAVIORAL GATE ────────────────────────────────
+                // Syntax + the static hallucination guard catch invented fields, but
+                // NOT a logic error that uses real fields wrongly (e.g. sum vs avg, a
+                // changed return contract). Run the patched function vs the original
+                // against real data and reject on a measured regression. Fail-open
+                // when it can't get an instance/data — with an honest verdict recorded.
+                let behavioralVerified = false;
+                for (const f of verdict.patch?.files || []) {
+                    if (!f.replaceFunction?.name || typeof f.replaceFunction.source !== 'string') continue;
+                    try {
+                        const { verifyBehavior } = await import('../core/PulseBehavioralSandbox.js');
+                        const bv = await verifyBehavior({
+                            system: this.system,
+                            filepath: f.path,
+                            methodName: f.replaceFunction.name,
+                            newFunctionSource: f.replaceFunction.source,
+                            originalContent: research.content
+                        });
+                        if (bv.ran && !bv.passed) {
+                            throw new Error(`Behavioral regression in ${f.replaceFunction.name}(): ${JSON.stringify(bv.failures).slice(0, 300)}. Compare against the original behavior and fix the logic.`);
+                        }
+                        if (bv.ran && bv.passed) behavioralVerified = true;
+                        this.auditLogger.info(`[Swarm] 🧪 Behavioral gate ${bv.ran ? (bv.passed ? 'PASSED (' + bv.baseline + ', ' + bv.probesRun + ' probes)' : 'FAILED') : 'skipped: ' + bv.reason} — ${f.replaceFunction.name}`);
+                    } catch (behErr) {
+                        if (/Behavioral regression/.test(behErr.message)) throw behErr;
+                        this.auditLogger.warn(`[Swarm] Behavioral gate could not run for ${f.replaceFunction.name}: ${behErr.message}`);
+                    }
+                }
+                this._lastBehavioralVerified = behavioralVerified;
+
                 // Finalize changes
                 transaction.commit();
                 blackboard.post('insights', { type: 'task_complete', status: 'success' });
