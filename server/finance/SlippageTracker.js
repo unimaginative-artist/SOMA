@@ -142,7 +142,9 @@ class SlippageTracker {
      * Get stats by symbol
      */
     getStatsBySymbol(symbol) {
-        const symbolTrades = this.trades.filter(t => t.symbol === symbol);
+        if (symbol == null || typeof symbol !== 'string' || symbol === '') return null;
+        const normalizedInput = symbol.toLowerCase();
+        const symbolTrades = this.trades.filter(t => t.symbol.toLowerCase() === normalizedInput);
         if (symbolTrades.length === 0) return null;
 
         const slippages = symbolTrades.map(t => t.slippageBps);
