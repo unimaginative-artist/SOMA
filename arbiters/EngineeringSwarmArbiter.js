@@ -1013,6 +1013,15 @@ Please output ONLY a valid JSON object matching the schema. No markdown code blo
     [CONSENSUS]: ${debate.consensus}
     [PREVIOUS ERROR]: ${state.lastError || "None"}
 
+    [CURRENT SOURCE OF ${context.filepath} — this is the EXACT code on disk right now]:
+    \`\`\`
+    ${String(context.content || '').slice(0, 16000)}
+    \`\`\`
+    GROUND YOUR PATCH IN THE SOURCE ABOVE. Do NOT reconstruct functions from memory.
+    Every field name, property, method signature, and return shape in your patch
+    MUST match the current source verbatim — copy real identifiers from it, do not
+    invent field names. This is the #1 cause of failed self-mods.
+
     Produce final code patch for ORIGINAL FILE: ${context.filepath}
 
     PATCH FORMAT RULES (AEGIS Protocol — read carefully):
