@@ -142,19 +142,21 @@ class SlippageTracker {
      * Get stats by symbol
      */
     getStatsBySymbol(symbol) {
-        const symbolTrades = this.trades.filter(t => t.symbol === symbol);
-        if (symbolTrades.length === 0) return null;
-
-        const slippages = symbolTrades.map(t => t.slippageBps);
-        const avg = slippages.reduce((a, b) => a + b, 0) / slippages.length;
-
-        return {
-            symbol,
-            trades: symbolTrades.length,
-            avgSlippageBps: Math.round(avg),
-            totalImpact: symbolTrades.reduce((sum, t) => sum + t.slippageDollars, 0).toFixed(2)
-        };
+    if (symbol == null || symbol === '') {
+      console.warn('[SlippageTracker] getStatsBySymbol called with invalid symbol:', JSON.stringify(symbol));
+      return null;
     }
+    const filtered = this.trades.filter(t => String(t.symbol).toUpperCase() === String(symbol).toUpperCase());
+    if (filtered.length === 0) return null;
+    const totalSlipPct = filtered.reduce((sum, t) => sum + (t.slipPct || 0), 0);
+    const count = filtered.length;
+    const avgSlipPct = totalSlipPct / count;
+    const maxSlip = Math.max(...filtered.map(t => t.slipPct || 0));
+    const minSlip = Math.min(...filtered.map(t => t.slipPct || 0));
+    const totalBaseVolume = filtered.reduce((sum, t) => sum + (t.baseVolume || 0), 0);
+    const totalQuoteVolume = filtered.reduce((sum, t) => sum + (t.quoteVolume || 0), 0);
+    return { symbol, count, avgSlipPct, maxSlip, minSlip, totalBaseVolume, totalQuoteVolume };
+  }
 
     /**
      * Get stats by strategy
