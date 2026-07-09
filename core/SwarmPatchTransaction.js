@@ -133,6 +133,44 @@ function locateFunctionSpan(content, name) {
     return { ok: true, start: found.start, end: found.end };
 }
 
+// Common built-in member names — accessing these is never "hallucinated".
+const BUILTIN_MEMBERS = new Set(['length','map','filter','reduce','reduceRight','forEach','find','findIndex','findLast','some','every','includes','indexOf','lastIndexOf','slice','splice','push','pop','shift','unshift','join','split','concat','sort','reverse','flat','flatMap','keys','values','entries','fill','at','toString','valueOf','toFixed','toPrecision','toExponential','toUpperCase','toLowerCase','trim','trimStart','trimEnd','replace','replaceAll','match','matchAll','search','startsWith','endsWith','padStart','padEnd','charAt','charCodeAt','codePointAt','substring','substr','repeat','normalize','localeCompare','then','catch','finally','all','allSettled','race','any','resolve','reject','log','warn','error','info','debug','table','parse','stringify','now','getTime','getFullYear','getMonth','getDate','getHours','toISOString','hasOwnProperty','constructor','prototype','call','apply','bind','name','message','stack','code','max','min','abs','round','floor','ceil','sqrt','cbrt','pow','random','sign','trunc','log2','log10','hypot','add','set','get','has','delete','clear','size','from','of','isArray','isInteger','isSafeInteger','isFinite','isNaN','assign','freeze','create','defineProperty','getOwnPropertyNames','entries','test','exec','source','flags','lastIndex','default','status','ok','json','text','headers','body','signal','aborted','type','target','currentTarget','key','value','done','next','return','throw','padEnd']);
+
+// Property names accessed via `obj.PROP` (non-computed) in a source snippet.
+function collectAccessedMembers(source) {
+    const names = new Set();
+    let ast;
+    try {
+        ast = parse(source, { sourceType: 'unambiguous', errorRecovery: true, plugins: ['classProperties', 'classPrivateProperties', 'classPrivateMethods', 'objectRestSpread', 'optionalChaining', 'nullishCoalescingOperator'] });
+    } catch { return names; }
+    const visit = (n) => {
+        if (!n || typeof n !== 'object') return;
+        if (Array.isArray(n)) { for (const x of n) visit(x); return; }
+        if ((n.type === 'MemberExpression' || n.type === 'OptionalMemberExpression') && !n.computed && n.property && n.property.type === 'Identifier') {
+            names.add(n.property.name);
+        }
+        for (const k in n) { if (['loc', 'start', 'end', 'range', 'leadingComments', 'trailingComments'].includes(k)) continue; const v = n[k]; if (v && typeof v === 'object') visit(v); }
+    };
+    visit(ast.program ? ast.program.body : ast);
+    return names;
+}
+
+// A function-swap should never read a member that appears NOWHERE in the file —
+// that member has to be defined somewhere to exist, so its absence means the LLM
+// invented it (e.g. hallucinating t.slipPct when trades only have slippageBps).
+// This is the #1 self-mod failure mode and it can't be caught by syntax alone.
+function findHallucinatedMembers(newFunctionSource, originalFileContent) {
+    const accessed = collectAccessedMembers(newFunctionSource);
+    if (!accessed.size) return [];
+    const fileTokens = new Set(String(originalFileContent).match(/[A-Za-z_$][A-Za-z0-9_$]*/g) || []);
+    const invented = [];
+    for (const m of accessed) {
+        if (BUILTIN_MEMBERS.has(m)) continue;
+        if (!fileTokens.has(m)) invented.push(m);
+    }
+    return invented;
+}
+
 function replaceFunctionInSource(content, name, newSource) {
     const span = locateFunctionSpan(content, name);
     if (!span.ok) return { ok: false, reason: span.reason };
@@ -227,6 +265,12 @@ export class SwarmPatchTransaction {
                     const { ok, result, reason } = replaceFunctionInSource(original, file.replaceFunction.name, file.replaceFunction.source);
                     if (!ok) {
                         throw new Error(`[AEGIS] replaceFunction failed for ${file.path}: ${reason}`);
+                    }
+                    // Behavioral guard: reject hallucinated field/method references so the
+                    // swarm retries with the real identifiers instead of shipping garbage.
+                    const invented = findHallucinatedMembers(file.replaceFunction.source, original);
+                    if (invented.length) {
+                        throw new Error(`[AEGIS] Function-swap "${file.replaceFunction.name}" references members that exist NOWHERE in ${file.path} — likely hallucinated: ${invented.join(', ')}. Rewrite using only identifiers that appear in the current source.`);
                     }
                     // No signature-preservation check needed: replaceFunction only rewrites
                     // the located function's byte span, so all code outside it is identical
