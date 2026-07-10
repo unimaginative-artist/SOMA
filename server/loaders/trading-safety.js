@@ -21,6 +21,7 @@ import driftDetector from '../../server/finance/DriftDetector.js';
 import abTestFramework from '../../server/finance/ABTestFramework.js';
 import marketRegimeDetector from '../../server/finance/MarketRegimeDetector.js';
 import simToLiveDaemon from '../../server/finance/SimToLiveDaemon.js';
+import portfolioPruner from '../../server/finance/PortfolioPruner.js';
 
 export async function loadTradingSafety(system) {
     console.log('\n[Loader] Trading Safety Systems...');
@@ -107,6 +108,11 @@ export async function loadTradingSafety(system) {
         // Start sim-to-live reconciliation: sim nominates, paper validates, live stays human-gated.
         simToLiveDaemon.start({ intervalMs: 5 * 60 * 1000, initialDelayMs: 45000 });
 
+        // Start the portfolio pruner: auto-cut clear paper losers on REAL evidence
+        // (the only trustworthy signal — strategies can't be backtest-optimized).
+        // Automates the manual SOL cut; paper only, never the last engine.
+        portfolioPruner.start({ intervalMs: 2 * 60 * 60 * 1000, initialDelayMs: 3 * 60 * 1000 });
+
         // A/B framework initializes on import (no separate start needed)
 
         // Expose on global for financeRoutes to use the shared instances
@@ -123,6 +129,7 @@ export async function loadTradingSafety(system) {
             abTestFramework,
             regimeDetector: marketRegimeDetector,
             simToLiveDaemon,
+            portfolioPruner,
         };
 
         console.log('      Risk Manager initialized (Kelly Criterion, 8 risk checks)');
