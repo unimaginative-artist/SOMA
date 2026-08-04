@@ -22,6 +22,14 @@ import costLedger from '../server/core/CostLedger.js';
 import deepSeekGateway from '../server/core/DeepSeekGateway.js';
 import { SOMA_VALUES_PROMPT } from '../core/SomaValues.js';
 import { OdinOrchestrator } from '../core/OdinOrchestrator.js';
+import { LimbicCognitivePolicy } from '../core/LimbicCognitivePolicy.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
+
+const execFileAsync = promisify(execFile);
+const __QUADBRAIN_DIR = path.dirname(fileURLToPath(import.meta.url));
+const __REPO_ROOT = path.resolve(__QUADBRAIN_DIR, '..'); // arbiters/ → repo root
 
 // Constants for performance monitoring
 const CIRCUIT_BREAKER_WINDOW = 10;
@@ -108,6 +116,10 @@ export class SOMArbiterV2_QuadBrain extends BaseArbiterV4 {
     // Sessions & context
     this.sessions = new Map();
     this.activeLobes = new Set(['AURORA', 'LOGOS', 'PROMETHEUS', 'THALAMUS']);
+    this.limbicPolicy = new LimbicCognitivePolicy();
+    this.currentChemistry = this.limbicPolicy.snapshot().chemistry;
+    this.currentFeelings = this.limbicPolicy.snapshot().feelings;
+    this._limbicUnsubscribers = [];
 
     // Model Rate Limiting (Cooldowns)
     this._modelRateLimitedUntil = new Map();
@@ -133,6 +145,26 @@ export class SOMArbiterV2_QuadBrain extends BaseArbiterV4 {
     } catch (e) {
         this.auditLogger.warn(`[${this.name}] ⚠️ Local provider heartbeat failed: ${e.message}`);
     }
+
+    // Chemistry and embodied feelings may bias attention, never authority.
+    const receiveAffect = (msg, fallbackSource) => {
+      const payload = msg?.payload || msg || {};
+      const result = this.limbicPolicy.ingest({
+        chemistry: payload.chemistry || payload.state || null,
+        feelings: payload.feelings || null,
+        source: payload.source || msg?.from || fallbackSource,
+        confidence: payload.confidence ?? 0.9,
+        observedAt: payload.observedAt || msg?.timestamp || Date.now(),
+        reason: payload.reason || payload.weather || ''
+      });
+      if (result.accepted) {
+        const snapshot = this.limbicPolicy.snapshot();
+        this.currentChemistry = snapshot.chemistry;
+        this.currentFeelings = snapshot.feelings;
+      }
+    };
+    this._limbicUnsubscribers.push(messageBroker.subscribe('limbic_update', msg => receiveAffect(msg, 'LimbicArbiter')));
+    this._limbicUnsubscribers.push(messageBroker.subscribe('embodiment.affect', msg => receiveAffect(msg, 'EmbodimentRuntime')));
   }
 
   // ── Circuit Breaker Logic ──────────────────────────────────────────
@@ -213,16 +245,12 @@ export class SOMArbiterV2_QuadBrain extends BaseArbiterV4 {
                   stability: odinResult.stability
               };
           } else {
-              const lobeResults = await Promise.all(
-                activeLobes.map(([lobeName]) => this._runLobe(lobeName, query, context))
-              );
+              const lobeResults = await this._executeLobeReasoning(activeLobes, query, context);
               response = await this._synthesizeLobes(lobeResults, query, context);
           }
         } else {
           // Simple queries: standard single-lobe fast path, no ODIN overhead
-          const lobeResults = await Promise.all(
-            activeLobes.map(([lobeName]) => this._runLobe(lobeName, query, context))
-          );
+          const lobeResults = await this._executeLobeReasoning(activeLobes, query, context);
           response = await this._synthesizeLobes(lobeResults, query, context);
         }
       }
@@ -259,6 +287,13 @@ export class SOMArbiterV2_QuadBrain extends BaseArbiterV4 {
     const scores = {};
     for (const lobe of Object.keys(SOMArbiterV2_QuadBrain.LOBE_DOMAINS)) {
       scores[lobe] = this._scoreLobe(lobe, query);
+    }
+
+    // Affective state changes attention within bounded offsets. It cannot
+    // authorize a tool, motion, trade, or self-modification operation.
+    const affect = this.limbicPolicy.cognitivePolicy(context, query);
+    for (const [lobe, offset] of Object.entries(affect.lobeOffsets)) {
+      scores[lobe] = Math.min(1, (scores[lobe] || 0) + offset);
     }
 
     let active = Object.entries(scores)
@@ -351,17 +386,167 @@ export class SOMArbiterV2_QuadBrain extends BaseArbiterV4 {
     }
   }
 
+  // ── Retrieval-lobe: ground the reasoner in HER OWN facts ──────────────────
+  // A lobe is not a weak model that competes with DeepSeek. It is a specialist
+  // that hands DeepSeek facts DeepSeek cannot have: SOMA's actual source code,
+  // past engineering outcomes, and a real parse/verify signal. Dependency-light
+  // (git grep + fs) by design so it grounds even before heavy arbiters load.
+  // LOGOS is proven first; the other three lobes clone this dispatch.
+  async _retrieveLobeContext(lobeName, query) {
+    if (lobeName !== 'LOGOS') return null;
+    try {
+      return await Promise.race([
+        this._retrieveLogosContext(query),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('retrieval timeout')), 5000)),
+      ]);
+    } catch (e) {
+      this.auditLogger.warn(`[${this.name}] LOGOS retrieval skipped: ${e.message}`);
+      return null;
+    }
+  }
+
+  /** Pull terms worth grepping the codebase for: identifiers first (most
+   *  discriminative), then a few salient content words to aid co-occurrence. */
+  _extractCodeTerms(query) {
+    const STOP = new Set(['this','that','with','from','have','does','what','when','where','which','function','file','code','error','class','method','const','async','await','return','import','export','the','and','for','you','how','why','fix','soma','make','work','working','should','could','would','check','about','into','then','they','their','there']);
+    const identifiers = new Set();
+    const salient = new Set();
+    for (const m of query.matchAll(/[\w./-]+\.(?:js|cjs|mjs|ts|jsx|tsx|json)\b/g)) identifiers.add(m[0]);
+    for (const m of query.matchAll(/\b[A-Za-z_][A-Za-z0-9_]{3,}\b/g)) {
+      const t = m[0];
+      const looksIdentifier = /[A-Z]/.test(t.slice(1)) || t.includes('_');
+      if (looksIdentifier && !STOP.has(t.toLowerCase())) identifiers.add(t);
+      else if (t.length >= 5 && !STOP.has(t.toLowerCase())) salient.add(t);
+    }
+    return [...identifiers, ...salient].slice(0, 6);
+  }
+
+  async _retrieveLogosContext(query) {
+    // Only ground code-ish queries; repo excerpts are noise on non-code asks.
+    const codeish = /\b(code|function|method|class|module|arbiter|daemon|bug|error|debug|refactor|implement|route|import|export|async|api)\b/i.test(query)
+      || /[A-Z][a-z]+[A-Z]/.test(query) || /\w+\.(js|cjs|mjs|ts|jsx)\b/.test(query);
+    if (!codeish) return null;
+
+    const terms = this._extractCodeTerms(query);
+    if (terms.length === 0) return null;
+
+    // 1. Locate each term in her actual tracked source (parallel, fast, no ML).
+    //    Keep hits per-term so we can weight by term rarity, not raw count.
+    const JUNK = /node_modules|[/\\]dist[/\\]|\.min\.|WORKING_|backup|\.bak\b|_old\b|old[-_]versions?|[/\\]unused[/\\]|[/\\]a cognitive terminal[/\\]|_jan\d|_\d{4}[-_]/i;
+    const grepResults = await Promise.all(terms.map(async (term) => {
+      try {
+        const res = await execFileAsync('git', ['grep', '-n', '-I', '-i', '--no-color', '-e', term, '--', '*.js', '*.cjs', '*.mjs', '*.jsx'], { cwd: __REPO_ROOT, timeout: 2500, maxBuffer: 1 << 20 });
+        return { term, out: res.stdout || '' };
+      } catch (e) {
+        return { term, out: e.stdout || '' }; // git grep exits 1 on no-match; not an error
+      }
+    }));
+
+    // fileData: file → { terms: Map<term,firstLine>, totalHits }
+    const fileData = new Map();
+    const termFileFreq = new Map(); // term → # of distinct files that matched it
+    for (const { term, out } of grepResults) {
+      const filesForTerm = new Set();
+      for (const line of out.split('\n')) {
+        const m = line.match(/^(.+?):(\d+):/);
+        if (!m) continue;
+        const file = m[1];
+        if (JUNK.test(file)) continue;
+        filesForTerm.add(file);
+        const rec = fileData.get(file) || { terms: new Map(), totalHits: 0 };
+        rec.totalHits++;
+        if (!rec.terms.has(term)) rec.terms.set(term, Number(m[2])); // first line of this term
+        fileData.set(file, rec);
+      }
+      termFileFreq.set(term, filesForTerm.size);
+    }
+    if (fileData.size === 0) return null;
+
+    // 2. Score by term rarity (IDF-like): a term matching few files is far more
+    //    discriminative than a word that appears everywhere. Reward files where
+    //    multiple distinct query terms co-occur. Anchor the excerpt on the
+    //    rarest matched term (the most specific hit, e.g. the definition site).
+    const weightOf = (term) => 1 / Math.log2(2 + (termFileFreq.get(term) || 1));
+    const scored = Array.from(fileData.entries()).map(([file, rec]) => {
+      let score = 0;
+      for (const term of rec.terms.keys()) score += weightOf(term);
+      score += 0.4 * (rec.terms.size - 1); // co-occurrence bonus
+      // Filename-match bonus: the file named after a matched identifier is
+      // almost always the definition site, not a mere reference.
+      const base = path.basename(file).replace(/\.(c|m)?jsx?$/i, '').toLowerCase();
+      for (const term of rec.terms.keys()) {
+        const tl = term.toLowerCase().replace(/\.(c|m)?jsx?$/i, '');
+        if (tl.length >= 4 && (base === tl || base.includes(tl) || tl.includes(base))) { score += 2.5; break; }
+      }
+      const rarestTerm = Array.from(rec.terms.keys()).sort((a, b) => (termFileFreq.get(a) || 1) - (termFileFreq.get(b) || 1))[0];
+      return { file, rec, score, anchorLine: rec.terms.get(rarestTerm), rarestTerm };
+    }).sort((a, b) => b.score - a.score);
+
+    const ranked = scored.slice(0, 2);
+    const excerpts = [];
+    for (const { file, rec, anchorLine, rarestTerm } of ranked) {
+      try {
+        const content = await fs.readFile(path.join(__REPO_ROOT, file), 'utf8');
+        const lines = content.split('\n');
+        const start = Math.max(0, anchorLine - 8);
+        const end = Math.min(lines.length, anchorLine + 14);
+        const snippet = lines.slice(start, end).map((l, i) => `${start + i + 1}: ${l}`).join('\n');
+        excerpts.push(`-- ${file} (around ${rarestTerm} @ line ${anchorLine}, ${rec.totalHits} total match${rec.totalHits > 1 ? 'es' : ''}) --\n${snippet}`);
+      } catch { /* file vanished, skip */ }
+    }
+    if (excerpts.length === 0) return null;
+
+    // 3. Past engineering outcomes with these files (memory DeepSeek can't have).
+    let experience = '';
+    try {
+      const mnemonic = global.__SOMA_SYSTEM__?.mnemonicArbiter || global.__SOMA_SYSTEM__?.mnemonic;
+      if (mnemonic?.recall) {
+        const hits = await Promise.race([
+          mnemonic.recall(`engineering ${ranked[0].file} ${terms.join(' ')}`, { limit: 2, minScore: 0.35 }),
+          new Promise(r => setTimeout(() => r(null), 1500)),
+        ]);
+        const notes = (Array.isArray(hits) ? hits : hits?.results || [])
+          .map(h => h.text || h.content).filter(Boolean).slice(0, 2);
+        if (notes.length) experience = `\n\n[PAST EXPERIENCE]\n${notes.map(n => '- ' + String(n).slice(0, 200)).join('\n')}`;
+      }
+    } catch { /* memory optional */ }
+
+    // 4. Real verify signal: does the top referenced file still parse?
+    let verify = '';
+    const topFile = ranked[0].file;
+    if (/\.(c?js|mjs)$/.test(topFile)) {
+      try {
+        await execFileAsync('node', ['--check', path.join(__REPO_ROOT, topFile)], { cwd: __REPO_ROOT, timeout: 4000 });
+        verify = `\n\n[VERIFY] ${topFile} parses cleanly (node --check passed).`;
+      } catch (e) {
+        const msg = String(e.stderr || e.message || '').split('\n')[0].slice(0, 160);
+        verify = `\n\n[VERIFY] ${topFile} FAILS node --check: ${msg}`;
+      }
+    }
+
+    return `Grounded in SOMA's own codebase (retrieved live, not recalled from training):\n\n${excerpts.join('\n\n')}${experience}${verify}`;
+  }
+
   /** Run a single lobe against the query — returns its perspective */
   async _runLobe(lobeName, query, context) {
     const lobe = SOMArbiterV2_QuadBrain.LOBE_DOMAINS[lobeName];
     if (!lobe) return { lobe: lobeName, name: lobeName, output: '', failed: true };
 
-    // Query the trained specialist lobe locally first (non-blocking, silent if unavailable)
-    const specialistText = await this._queryLobeSpecialist(lobeName, query);
+    // Ground the lobe in HER OWN facts first (repo/memory/verify), then the
+    // trained specialist model if one is trusted. Either source may be null;
+    // both run in parallel so grounding never serializes latency.
+    const [retrieved, specialistText] = await Promise.all([
+      this._retrieveLobeContext(lobeName, query),
+      this._queryLobeSpecialist(lobeName, query),
+    ]);
+    const grounding = [
+      retrieved && `[${lobeName} SPECIALIST CONTEXT — grounded in SOMA's own code/memory]\n${retrieved}`,
+      specialistText && `[${lobeName} SPECIALIST MODEL]\n${specialistText}`,
+    ].filter(Boolean);
 
-    // Inject specialist context into the prompt so DeepSeek reasons over it
-    const enrichedQuery = specialistText
-      ? `[${lobeName} SPECIALIST CONTEXT — use for domain accuracy]\n${specialistText}\n\n[USER QUERY]\n${query}`
+    // Inject grounding into the prompt so DeepSeek reasons over her real facts
+    const enrichedQuery = grounding.length
+      ? `${grounding.join('\n\n')}\n\n[USER QUERY]\n${query}`
       : query;
 
     try {
@@ -371,12 +556,76 @@ export class SOMArbiterV2_QuadBrain extends BaseArbiterV4 {
         name: lobe.name,
         output: result.text || '',
         provider: result.provider,
-        specialistUsed: !!specialistText
+        specialistUsed: !!specialistText,
+        groundedFromRepo: !!retrieved
       };
     } catch (e) {
       this.auditLogger.warn(`[${this.name}] Lobe ${lobeName} failed: ${e.message}`);
       return { lobe: lobeName, name: lobe.name, output: '', provider: 'none', failed: true };
     }
+  }
+
+  /** Execute lobe reasoning, routing through adversarial debate if deep thinking is enabled */
+  async _executeLobeReasoning(activeLobes, query, context) {
+    const debateRequested = activeLobes.length >= 2
+      && (context.deepThinking || context.forceMultiLobe)
+      && Number(context._debateDepth || 0) === 0;
+    const maxDebateCalls = Math.max(0, Math.min(3, Number(context.maxDebateCalls ?? 3)));
+    if (debateRequested && maxDebateCalls >= 3) {
+      this.auditLogger.info(`[${this.name}] ⚔️ Initiating adversarial debate: ${activeLobes[0][0]} vs ${activeLobes[1][0]}`);
+      let resA = null;
+      let resB = null;
+      try {
+        const lobeA = activeLobes[0][0];
+        const lobeB = activeLobes[1][0];
+        const debateContext = { ...context, _debateDepth: 1, tools: null, onToken: null };
+
+        // The proposer does not get the final word after being criticized.
+        resA = await this._runLobe(lobeA, query, debateContext);
+        if (resA.failed || !resA.output) throw new Error('Debate proposer failed');
+
+        const evidence = String(context.evidenceSummary || context.toolEvidence || 'No external evidence bundle supplied.').slice(0, 1200);
+        const critiquePrompt = `Audit the ${lobeA} proposal below from the ${lobeB} perspective. Identify factual errors, unsupported assumptions, physical constraints, and safety risks. Distinguish evidence from inference. Do not invent objections or sources.\n\nORIGINAL QUESTION:\n${query}\n\nAVAILABLE EVIDENCE:\n${evidence}\n\nPROPOSAL:\n${resA.output}\n\nCRITICAL AUDIT:`;
+        resB = await this._runLobe(lobeB, critiquePrompt, debateContext);
+        if (resB.failed || !resB.output) throw new Error('Debate critic failed');
+
+        const judgePrompt = `You are the independent adjudicator. Resolve the proposal and critique using only the question and supplied evidence. Do not defer automatically, and do not let the proposer dismiss a valid criticism.\n\nQUESTION:\n${query}\n\nEVIDENCE:\n${evidence}\n\nPROPOSAL (${lobeA}):\n${resA.output}\n\nCRITIQUE (${lobeB}):\n${resB.output}\n\nChoose exactly one terminal decision: ANSWER, INSUFFICIENT_EVIDENCE, NEEDS_OBSERVATION, or REQUIRES_OPERATOR. Then provide the best concise answer or the concrete missing evidence/action.\n\nDECISION:`;
+        const judged = await this._callProviderCascade(judgePrompt, {
+          ...debateContext,
+          activeLobe: 'SYNTHESIS',
+          taskKind: context.taskKind || 'factual',
+          temperature: 0.25,
+          maxTokens: Math.min(Number(context.maxTokens || 1200), 1200)
+        });
+        if (!judged?.text) {
+          throw new Error('Lobe debate participant failed');
+        }
+        const decision = judged.text.match(/(?:^|\n)\s*(?:DECISION\s*:\s*)?(ANSWER|INSUFFICIENT_EVIDENCE|NEEDS_OBSERVATION|REQUIRES_OPERATOR)\b/i)?.[1]?.toUpperCase() || 'ANSWER';
+        return [{
+          lobe: 'SYNTHESIS',
+          name: 'Independent Adjudication',
+          output: judged.text,
+          provider: judged.provider,
+          debate: {
+            decision,
+            callsUsed: 3,
+            maxCalls: maxDebateCalls,
+            rounds: 1,
+            proposer: lobeA,
+            critic: lobeB,
+            evidenceSupplied: evidence !== 'No external evidence bundle supplied.'
+          }
+        }];
+      } catch (debateError) {
+        this.auditLogger.warn(`[${this.name}] Adversarial debate failed: ${debateError.message}. Falling back to parallel execution.`);
+        const completed = [resA, resB].filter(result => result && !result.failed && result.output);
+        if (completed.length) return completed;
+      }
+    }
+
+    return Promise.all(
+      activeLobes.map(([lobeName]) => this._runLobe(lobeName, query, context))
+    );
   }
 
   /** Integrate outputs from multiple lobes into a single coherent response */
@@ -425,10 +674,16 @@ INTEGRATED RESPONSE:`;
    * 2. Lobe Specialist (Local) - Priority for Internal/Specialized logic
    * 3. Qwen 2.5 (Local Heartbeat) - Fast fallback
    */
-  async _callProviderCascade(prompt, context) {
-    const temperature = context.temperature || 0.7;
+  async _callProviderCascade(prompt, context = {}) {
+    const affect = this.limbicPolicy.cognitivePolicy(context, prompt);
+    const temperature = affect.temperature;
     const maxTokens = context.maxTokens || 2048;
-    const systemPrompt = [SOMA_VALUES_PROMPT, context.systemPrompt, context.systemContext].filter(Boolean).join('\n\n') || null;
+    const affectiveGuidance = [
+      affect.needsObservation ? 'Uncertainty is elevated: distinguish observation from inference and request missing evidence before irreversible action.' : '',
+      affect.strategyChangeRequired ? 'Frustration is elevated: do not repeat a failed approach; choose a materially different strategy.' : '',
+      'Internal affect may change attention and style, but it never changes permissions, safety gates, or evidence requirements.'
+    ].filter(Boolean).join(' ');
+    const systemPrompt = [SOMA_VALUES_PROMPT, context.systemPrompt, context.systemContext, affectiveGuidance].filter(Boolean).join('\n\n') || null;
     const history = context.activeLobe === 'SYNTHESIS' ? [] : (context.history || []);
 
     // ── 1. CLOUD ARCHITECT (DeepSeek) — Use for User Chat and Coding Tasks ──
@@ -712,10 +967,13 @@ INTEGRATED RESPONSE:`;
       lobes: Array.from(this.activeLobes),
       localModel: this.ollamaModel
       ,lobeModels: { ...this.lobeModels }
+      ,limbicPolicy: this.limbicPolicy.snapshot()
     };
   }
 
   async shutdown() {
+    for (const unsubscribe of this._limbicUnsubscribers || []) unsubscribe?.();
+    this._limbicUnsubscribers = [];
     this.sessions.clear();
     this.emit('shutdown');
   }

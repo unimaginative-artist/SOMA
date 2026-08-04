@@ -13,7 +13,17 @@ const { buildQualityReport, verifyGoal } = require('../core/GoalQualityGate.cjs'
 const { defaultLearningSpine } = require('../core/LearningSpine.cjs');
 const { ownerName } = require('../core/SomaOwner.cjs');
 const { atomicWriteJson, readJsonWithRecovery } = require('../core/AtomicJsonStore.cjs');
-const { STATUS, TERMINAL_STATUSES, isTerminal, transitionGoal, isHumanGoal, deriveGoalState } = require('../core/GoalLifecycle.cjs');
+const { STATUS, TERMINAL_STATUSES, isTerminal, transitionGoal, isHumanGoal, deriveGoalState, normalizeStatus } = require('../core/GoalLifecycle.cjs');
+const { WorkGovernor } = require('../core/WorkGovernor.cjs');
+const { AutonomousMissionDirector } = require('../core/AutonomousMissionDirector.cjs');
+
+const CHILD_GOAL_TOOL_ALLOWLIST = new Set([
+  'read_file', 'list_files', 'search_code', 'system_search',
+  'computer_read', 'computer_list', 'computer_search',
+  'web_fetch', 'github_search', 'memory_recall', 'memory_store',
+  'write_file', 'save_progress', 'run_tests', 'verify_syntax',
+  'pulse_stage_code', 'modify_code', 'spawn_agents'
+]);
 
 // NEMESIS Phase 2.2: Reality checks for autonomous goal generation
 let PrometheusNemesis = null;
@@ -40,8 +50,10 @@ class GoalPlannerArbiter extends BaseArbiter {
     this.failedGoals = []; // Archive of failed goals
     
     // Configuration
-    this.maxActiveGoals = config.maxActiveGoals || 20;
+    this.maxActiveGoals = config.maxActiveGoals || Number(process.env.SOMA_MAX_ACTIVE_GOALS || 8);
     this.humanReservedSlots = Math.min(this.maxActiveGoals, Math.max(1, Number(config.humanReservedSlots || process.env.SOMA_HUMAN_GOAL_SLOTS || 4)));
+    this.maxNonTradingQueue = Math.max(1, Number(config.maxNonTradingQueue || process.env.SOMA_NON_TRADING_QUEUE_LIMIT || 3));
+    this.maxNonTradingExecution = 1;
     this.maxCompletedHistory = config.maxCompletedHistory || 100;
     this.stalledThresholdDays = config.stalledThresholdDays || 7;
     this.planningIntervalHours = config.planningIntervalHours || 0.5; // every 30 min
@@ -83,6 +95,13 @@ class GoalPlannerArbiter extends BaseArbiter {
     // Persistence
     this.dataDir = config.dataDir || path.join(process.cwd(), 'data');
     this.persistPath = path.join(this.dataDir, 'goals.json');
+    this.workGovernor = config.workGovernor || new WorkGovernor({ dataDir: this.dataDir });
+    this.missionDirector = config.missionDirector || new AutonomousMissionDirector({
+      planner: this,
+      governor: this.workGovernor,
+      dataDir: this.dataDir,
+      logger: this.logger
+    });
     this.planPath = path.join(process.cwd(), 'SOMA', 'plan.md');
     this._dirty = false;
 
@@ -118,6 +137,14 @@ class GoalPlannerArbiter extends BaseArbiter {
 
     // Load persisted goals before anything else
     await this._loadFromDisk();
+    const governed = this.workGovernor.reconcileExisting(this.goals, this.activeGoals);
+    if (governed.deferred > 0) {
+      this._dirty = true;
+      this.logger.warn(`[${this.name}] Work Governor deferred ${governed.deferred} autonomous queue item(s) into the proposal backlog.`);
+    }
+    this.reconcileExecutionFocus({ persist: true });
+    this.enforceNonTradingQueueLimit({ persist: true });
+    this.missionDirector.initialize();
 
     // Import bullet points from PRIORITIES.md as goals (once per install, deduped)
     await this._importPrioritiesAsGoals();
@@ -193,6 +220,13 @@ class GoalPlannerArbiter extends BaseArbiter {
 
   /** Returns true when a goal is complex enough to warrant decomposition */
   _isComplexGoal(goal) {
+    // Some goals are already an atomic contract even when their instructions are
+    // long. Reinterpreting those goals destroys operator intent and can replace a
+    // concrete artifact with unrelated generic self-improvement work.
+    if (goal.metadata?.allowDecomposition === false || goal.metadata?.executionMode === 'atomic') return false;
+    // Decomposition is an explicit typed-workflow feature. A long or ambitious
+    // sentence is not permission to reinterpret the operator's objective.
+    if (!goal.metadata?.workflow?.allowDecomposition && goal.metadata?.allowDecomposition !== true) return false;
     if (goal.metadata?.decomposed) return false;       // already decomposed
     if (goal.tasks?.some(task => task.title || task.description || Array.isArray(task.steps))) return false;
     if (goal.metadata?.parentGoalId) return false;     // is itself a sub-goal
@@ -210,11 +244,19 @@ class GoalPlannerArbiter extends BaseArbiter {
 
   _deterministicDecomposition(goal) {
     const root = `data/self-improvement/${goal.id}`;
+    const inspectionTools = ['read_file', 'list_files', 'search_code', 'write_file', 'save_progress'];
+    const implementationTools = [
+      'read_file', 'list_files', 'search_code', 'write_file', 'save_progress',
+      'pulse_stage_code', 'modify_code', 'verify_syntax', 'run_tests'
+    ];
     return [
       {
         title: 'Measure current cognition pipeline baseline',
         description: `Inspect the real execution, memory, and verification paths. Record timings, failure counts, and source locations in ${root}/baseline.json.`,
         artifactPath: `${root}/baseline.json`,
+        allowedTools: inspectionTools,
+        allowedWritePaths: [`${root}/baseline.json`],
+        maxSteps: 15,
         successCriteria: ['Relevant runtime and source paths are inspected', 'Baseline metrics and recurring failures are recorded', 'The baseline artifact exists and is non-empty'],
         order: 1
       },
@@ -222,6 +264,9 @@ class GoalPlannerArbiter extends BaseArbiter {
         title: 'Rank bounded architecture improvements',
         description: `Use the measured baseline to rank concrete upgrades by impact, risk, cost, and falsification test. Save the ranked decision in ${root}/ranked-upgrades.json.`,
         artifactPath: `${root}/ranked-upgrades.json`,
+        allowedTools: inspectionTools,
+        allowedWritePaths: [`${root}/ranked-upgrades.json`],
+        maxSteps: 15,
         successCriteria: ['Each proposed upgrade cites baseline evidence', 'Impact, risk, cost, and falsification test are present', 'One bounded upgrade is selected for implementation'],
         order: 2
       },
@@ -229,6 +274,9 @@ class GoalPlannerArbiter extends BaseArbiter {
         title: 'Implement selected cognition pipeline upgrade',
         description: `Implement only the top bounded upgrade selected in ${root}/ranked-upgrades.json. Stage code through Pulse and run executable verification. Save changed files and command results in ${root}/implementation.json.`,
         artifactPath: `${root}/implementation.json`,
+        allowedTools: implementationTools,
+        allowedWritePaths: [`${root}/implementation.json`, 'core', 'arbiters', 'server', 'daemons', 'tests'],
+        maxSteps: 30,
         successCriteria: ['Changed files are explicitly listed', 'Pulse staging or the self-modification pipeline approves the change', 'A syntax, test, or build command passes'],
         order: 3
       },
@@ -236,6 +284,9 @@ class GoalPlannerArbiter extends BaseArbiter {
         title: 'Benchmark upgrade and publish verdict',
         description: `Repeat the baseline measurement, compare before and after, and save a keep, revise, or rollback verdict in ${root}/verdict.json.`,
         artifactPath: `${root}/verdict.json`,
+        allowedTools: ['read_file', 'list_files', 'search_code', 'write_file', 'save_progress', 'run_tests', 'verify_syntax'],
+        allowedWritePaths: [`${root}/verdict.json`],
+        maxSteps: 20,
         successCriteria: ['Before and after measurements use the same method', 'The result includes a falsification check', 'The verdict states keep, revise, or rollback with evidence'],
         order: 4
       }
@@ -252,9 +303,25 @@ class GoalPlannerArbiter extends BaseArbiter {
         description: item.description.trim().slice(0, 1200),
         order: Number(item.order || index + 1),
         artifactPath: String(item.artifactPath || `${safeRoot}step-${index + 1}.json`).replace(/\\/g, '/'),
-        successCriteria: Array.isArray(item.successCriteria) ? item.successCriteria.map(String).filter(Boolean).slice(0, 6) : []
+        successCriteria: Array.isArray(item.successCriteria) ? item.successCriteria.map(String).filter(Boolean).slice(0, 6) : [],
+        allowedTools: [...new Set((Array.isArray(item.allowedTools) ? item.allowedTools : [])
+          .map(value => String(value).trim())
+          .filter(value => CHILD_GOAL_TOOL_ALLOWLIST.has(value)))].slice(0, 30),
+        allowedWritePaths: [...new Set([
+          ...(Array.isArray(item.allowedWritePaths) ? item.allowedWritePaths : []),
+          item.artifactPath || `${safeRoot}step-${index + 1}.json`
+        ].map(value => String(value).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, ''))
+          .filter(value => value && !path.isAbsolute(value) && !value.split('/').includes('..')))].slice(0, 20),
+        maxSteps: Math.max(5, Math.min(60, Number(item.maxSteps || 20)))
       }))
-      .filter(item => item.title.length >= 8 && item.description.length >= 40 && item.artifactPath.startsWith(safeRoot) && item.successCriteria.length >= 2)
+      .filter(item =>
+        item.title.length >= 8 &&
+        item.description.length >= 40 &&
+        item.artifactPath.startsWith(safeRoot) &&
+        item.successCriteria.length >= 2 &&
+        item.allowedTools.length >= 2 &&
+        item.allowedWritePaths.includes(item.artifactPath)
+      )
       .sort((a, b) => a.order - b.order);
   }
 
@@ -274,13 +341,16 @@ Rules:
 - Each sub-goal must be actionable and specific (name the file or component)
 - Every sub-goal must produce one JSON artifact under data/self-improvement/${goal.id}/
 - Include 2-4 measurable success criteria for every sub-goal
+- Include an explicit allowedTools array using only bounded SOMA tools
+- Include allowedWritePaths; it must contain the artifact and only exact files or repository directories needed by that child
+- Include a maxSteps budget between 5 and 60
 - Order them so later sub-goals depend on earlier ones
 - Keep each title under 12 words
 - Output JSON only — no markdown, no explanation:
 
 [
-  { "title": "...", "description": "...", "artifactPath": "data/self-improvement/${goal.id}/step-1.json", "successCriteria": ["...", "..."], "order": 1 },
-  { "title": "...", "description": "...", "artifactPath": "data/self-improvement/${goal.id}/step-2.json", "successCriteria": ["...", "..."], "order": 2 }
+  { "title": "...", "description": "...", "artifactPath": "data/self-improvement/${goal.id}/step-1.json", "successCriteria": ["...", "..."], "allowedTools": ["read_file", "search_code", "write_file"], "allowedWritePaths": ["data/self-improvement/${goal.id}/step-1.json"], "maxSteps": 15, "order": 1 },
+  { "title": "...", "description": "...", "artifactPath": "data/self-improvement/${goal.id}/step-2.json", "successCriteria": ["...", "..."], "allowedTools": ["read_file", "write_file", "run_tests"], "allowedWritePaths": ["data/self-improvement/${goal.id}/step-2.json"], "maxSteps": 20, "order": 2 }
 ]`;
 
     try {
@@ -302,6 +372,9 @@ Rules:
   async decomposeGoal(goalId, actor = this.name) {
     const goal = this.goals.get(goalId);
     if (!goal) return { success: false, error: 'Goal not found' };
+    if (goal.metadata?.allowDecomposition === false || goal.metadata?.executionMode === 'atomic') {
+      return { success: false, skipped: true, reason: 'atomic_goal_contract' };
+    }
     if (!this._isComplexGoal(goal)) return { success: false, skipped: true, reason: 'goal_is_already_bounded' };
 
     const subGoals = await this._decomposeGoal(goal);
@@ -334,14 +407,23 @@ Rules:
         verification: {
           evidenceRequired: ['summary', 'artifact'],
           filesExist: [subGoal.artifactPath],
-          allowStopReason: false
+          allowStopReason: false,
+          requirePoseidon: true
         },
         metadata: {
           parentGoalId: goal.id,
           parentTitle: goal.title,
+          admissionApproved: true,
           decompositionOrder: subGoal.order || index + 1,
           expectedArtifact: subGoal.artifactPath,
-          measurableDecomposition: true
+          expectedArtifacts: [subGoal.artifactPath],
+          measurableDecomposition: true,
+          strictContract: true,
+          allowedTools: subGoal.allowedTools,
+          allowedWritePaths: subGoal.allowedWritePaths,
+          maxSteps: subGoal.maxSteps,
+          deadlineAt: Date.now() + (72 * 60 * 60_000),
+          requireRevisionWrites: true
         }
       }, 'autonomous');
       if (created?.success && created.goal?.id) {
@@ -494,9 +576,21 @@ Rules:
   // ░░ GOAL MANAGEMENT ░░
   // ═══════════════════════════════════════════════════════════
 
+  submitProposal(goalData, source = 'autonomous') {
+    return this.workGovernor.submitProposal(goalData || {}, source);
+  }
+
+  listWorkProposals(options = {}) {
+    return this.workGovernor.list(options);
+  }
+
   async createGoal(goalData, source = 'user') {
     try {
       goalData = defaultLearningSpine.applyGoalContract(goalData || {});
+      // Producers historically embedded their real source in the goal object
+      // while omitting createGoal's second argument. Honor that provenance so
+      // an autonomous repair cannot masquerade as a human request.
+      source = goalData.source || goalData.metadata?.source || source;
       let alignmentReceipt = null;
 
       // Validate goal data
@@ -504,9 +598,22 @@ Rules:
         throw new Error('Goal must have title and category');
       }
 
+      const admission = this.workGovernor.decide(goalData, source);
+      if (!admission.admitted) {
+        if (
+          goalData.metadata?.admissionClass === 'self_evolution' &&
+          goalData.metadata?.missionDirectorApproved !== true &&
+          this.missionDirector
+        ) {
+          return await this.missionDirector.admitGoalData(goalData, source);
+        }
+        return this.workGovernor.submitProposal(goalData, source, admission.reason);
+      }
+
       const existingGoals = Array.from(this.goals.values());
       const quality = buildQualityReport(goalData, existingGoals);
-      const requireQuality = goalData.requireQuality !== false && source !== 'legacy';
+      const isHumanUserReq = isHumanGoal({ ...goalData, source, metadata: { ...(goalData.metadata || {}), source } });
+      const requireQuality = goalData.requireQuality !== false && source !== 'legacy' && !isHumanUserReq;
       if (requireQuality && !quality.approved) {
         return {
           success: false,
@@ -519,19 +626,52 @@ Rules:
       if (!alignment.ok) return alignment.response;
       alignmentReceipt = alignment.receipt;
       const incomingHuman = isHumanGoal({ ...goalData, source, metadata: { ...(goalData.metadata || {}), source } });
+      const incomingTrading = this.isTradingGoal({ ...goalData, metadata: { ...(goalData.metadata || {}), source } });
 
-      // Deduplication — reject if a similar active goal already exists (all non-user sources)
+      // Deduplication applies to every producer, including Discord/user retries.
+      // A repeated command should resume or inspect the existing goal, not create
+      // another UUID competing for the same execution lane.
+      const duplicate = this._findSimilarActiveGoal(goalData.category, goalData.title, goalData);
+      if (duplicate) {
+        this.logger.info(`[${this.name}] Skipping duplicate goal "${goalData.title}" — similar active goal exists: "${duplicate.title}"`);
+        return { success: false, error: 'Duplicate goal exists', existingGoalId: duplicate.id };
+      }
+
       if (source !== 'user') {
-        const duplicate = this._findSimilarActiveGoal(goalData.category, goalData.title, goalData);
-        if (duplicate) {
-          this.logger.info(`[${this.name}] Skipping duplicate goal "${goalData.title}" — similar active goal exists: "${duplicate.title}"`);
-          return { success: false, error: 'Duplicate goal exists', existingGoalId: duplicate.id };
-        }
-
         // Cooldown check — don't regenerate categories that are on a failure streak
         if (this._isCategoryOnCooldown(goalData.category)) {
           this.logger.info(`[${this.name}] Category "${goalData.category}" is on failure cooldown — skipping "${goalData.title}"`);
           return { success: false, error: `Category "${goalData.category}" on cooldown after repeated failures` };
+        }
+      }
+
+      // Self-heal before capacity math: dead/parked goals must not hold an execution
+      // slot or count toward capacity. Only genuinely live goals occupy a lane.
+      // (blocked/verification_failed/failed/broken/etc. lingered in activeGoals and
+      //  silently clogged the autonomous queue — the ASI loop starved on corpses.)
+      // Matches the live-set the loader uses when restoring activeGoals on boot,
+      // so this runtime sweep never diverges from restart behavior.
+      const LIVE_OCCUPYING = new Set([STATUS.PROPOSED, STATUS.PENDING, STATUS.ACTIVE, STATUS.DELEGATED]);
+      let sweptDead = 0;
+      for (const id of Array.from(this.activeGoals)) {
+        const g = this.goals.get(id);
+        if (!g || !LIVE_OCCUPYING.has(g.status)) { this.activeGoals.delete(id); sweptDead++; }
+      }
+      if (sweptDead > 0) {
+        this._dirty = true;
+        this.logger.warn(`[${this.name}] 🧹 Swept ${sweptDead} non-live goal(s) from active slots before capacity check`);
+      }
+
+      if (!incomingHuman && !incomingTrading) {
+        const queuedNonTrading = Array.from(this.activeGoals)
+          .map(id => this.goals.get(id))
+          .filter(goal => goal && !this.isTradingGoal(goal) && [STATUS.PENDING, STATUS.PROPOSED].includes(goal.status));
+        if (queuedNonTrading.length >= this.maxNonTradingQueue) {
+          return {
+            success: false,
+            error: `Non-trading execution queue is full (${this.maxNonTradingQueue}); finish or defer existing work before proposing more.`,
+            queueFull: true
+          };
         }
       }
 
@@ -630,6 +770,7 @@ Rules:
       // Store goal
       this.goals.set(goal.id, goal);
       this.activeGoals.add(goal.id);
+      const queuePolicy = this.enforceNonTradingQueueLimit({ preferredGoalId: incomingHuman ? goal.id : null });
       
       // Update statistics
       this.stats.goalsCreated++;
@@ -663,11 +804,11 @@ Rules:
       this._saveToDisk();
 
       // Start goal if no dependencies and not proposed
-      if (goal.status !== 'proposed' && goal.dependencies.length === 0 && goal.prerequisites.length === 0) {
+      if (this.activeGoals.has(goal.id) && goal.status !== 'proposed' && goal.dependencies.length === 0 && goal.prerequisites.length === 0) {
         await this.startGoal(goal.id);
       }
       
-      return { success: true, goalId: goal.id, goal };
+      return { success: true, goalId: goal.id, goal, queuePolicy };
     } catch (err) {
       this.logger.error(`[${this.name}] Failed to create goal: ${err.message}`);
       return { success: false, error: err.message };
@@ -730,6 +871,20 @@ Rules:
       return { success: false, reason: 'Goal not in pending or proposed state' };
     }
 
+    if (!this.isTradingGoal(goal)) {
+      const focused = this.getExecutionFocus();
+      if (focused && focused.id !== goal.id) {
+        goal.metadata = {
+          ...(goal.metadata || {}),
+          queuedBehindGoalId: focused.id,
+          queuedAt: goal.metadata?.queuedAt || Date.now()
+        };
+        this._dirty = true;
+        this._saveToDisk();
+        return { success: false, queued: true, reason: 'execution_focus_busy', focusedGoalId: focused.id };
+      }
+    }
+
     this.transitionGoal(goalId, STATUS.ACTIVE, { reason: 'execution_started', actor: this.name });
     goal.approved = true;
     
@@ -743,12 +898,82 @@ Rules:
     return { success: true };
   }
 
+  isTradingGoal(goal = {}) {
+    const explicit = [goal.type, goal.category, goal.metadata?.domain, goal.metadata?.lane, goal.metadata?.specialistDomain]
+      .filter(Boolean).join(' ').toLowerCase();
+    if (/\b(?:trading|trade|market|portfolio|crypto|equities|forex|paper_trading)\b/.test(explicit)) return true;
+    return /\b(?:trade|trading|market strategy|portfolio|btc|eth|crypto)\b/i.test(`${goal.title || ''} ${goal.description || ''}`);
+  }
+
+  getExecutionFocus() {
+    return Array.from(this.activeGoals)
+      .map(id => this.goals.get(id))
+      .filter(goal => goal && goal.status === STATUS.ACTIVE && !this.isTradingGoal(goal))
+      .sort((a, b) => {
+        if (isHumanGoal(a) !== isHumanGoal(b)) return isHumanGoal(a) ? -1 : 1;
+        return Number(b.priority || 0) - Number(a.priority || 0) || Number(a.startedAt || a.createdAt || 0) - Number(b.startedAt || b.createdAt || 0);
+      })[0] || null;
+  }
+
+  reconcileExecutionFocus({ persist = false } = {}) {
+    const executing = Array.from(this.activeGoals)
+      .map(id => this.goals.get(id))
+      .filter(goal => goal && goal.status === STATUS.ACTIVE && !this.isTradingGoal(goal))
+      .sort((a, b) => {
+        if (isHumanGoal(a) !== isHumanGoal(b)) return isHumanGoal(a) ? -1 : 1;
+        return Number(b.priority || 0) - Number(a.priority || 0) || Number(a.startedAt || a.createdAt || 0) - Number(b.startedAt || b.createdAt || 0);
+      });
+    const focused = executing[0] || null;
+    for (const goal of executing.slice(this.maxNonTradingExecution)) {
+      transitionGoal(goal, STATUS.PENDING, { reason: 'single_execution_focus', actor: this.name, force: true });
+      goal.metadata = {
+        ...(goal.metadata || {}),
+        queuedBehindGoalId: focused?.id || null,
+        queuedAt: goal.metadata?.queuedAt || Date.now()
+      };
+      this._dirty = true;
+    }
+    if (persist && this._dirty) this._saveToDisk();
+    return { focusedGoalId: focused?.id || null, queuedGoalIds: executing.slice(this.maxNonTradingExecution).map(goal => goal.id) };
+  }
+
+  enforceNonTradingQueueLimit({ preferredGoalId = null, persist = false } = {}) {
+    const queued = Array.from(this.activeGoals)
+      .map(id => this.goals.get(id))
+      .filter(goal => goal && !this.isTradingGoal(goal) && [STATUS.PENDING, STATUS.PROPOSED].includes(goal.status))
+      .sort((a, b) => {
+        if (a.id === preferredGoalId) return -1;
+        if (b.id === preferredGoalId) return 1;
+        if (isHumanGoal(a) !== isHumanGoal(b)) return isHumanGoal(a) ? -1 : 1;
+        return Number(b.priority || 0) - Number(a.priority || 0) || Number(b.createdAt || 0) - Number(a.createdAt || 0);
+      });
+    const deferredGoalIds = [];
+    for (const goal of queued.slice(this.maxNonTradingQueue)) {
+      transitionGoal(goal, STATUS.DEFERRED, { reason: 'non_trading_queue_limit', actor: this.name, force: true });
+      goal.metadata = {
+        ...(goal.metadata || {}),
+        deferredReason: `Non-trading queue limited to ${this.maxNonTradingQueue}`,
+        deferredAt: Date.now()
+      };
+      this.activeGoals.delete(goal.id);
+      deferredGoalIds.push(goal.id);
+      this.stats.goalsDeferred++;
+      this._dirty = true;
+    }
+    if (persist && this._dirty) this._saveToDisk();
+    return {
+      limit: this.maxNonTradingQueue,
+      queuedGoalIds: queued.slice(0, this.maxNonTradingQueue).map(goal => goal.id),
+      deferredGoalIds
+    };
+  }
+
   transitionGoal(goalId, nextStatus, options = {}) {
     const goal = this.goals.get(goalId);
     if (!goal) return { success: false, error: 'Goal not found' };
     try {
       const transition = transitionGoal(goal, nextStatus, options);
-      if (isTerminal(goal.status) || [STATUS.DEFERRED, STATUS.BROKEN, STATUS.REJECTED, STATUS.ARCHIVED].includes(goal.status)) {
+      if (isTerminal(goal.status) || [STATUS.DEFERRED, STATUS.BROKEN, STATUS.BLOCKED, STATUS.REJECTED, STATUS.ARCHIVED].includes(goal.status)) {
         this.activeGoals.delete(goalId);
       } else {
         this.activeGoals.add(goalId);
@@ -772,7 +997,7 @@ Rules:
   getExecutionAttemptBudget(goalOrId) {
     const goal = typeof goalOrId === 'string' ? this.goals.get(goalOrId) : goalOrId;
     if (!goal) return null;
-    const maxAttempts = Math.max(1, Number(goal.metadata?.goalContract?.maxAttempts || goal.metadata?.maxAttempts || 3));
+    const maxAttempts = Math.max(1, Number(goal.metadata?.goalContract?.maxAttempts || goal.metadata?.maxAttempts || 2));
     const attempts = Math.max(0, Number(goal.metadata?.executionAttempts || 0));
     return { attempts, maxAttempts, exhausted: attempts >= maxAttempts, remaining: Math.max(0, maxAttempts - attempts) };
   }
@@ -801,7 +1026,10 @@ Rules:
     
     // Update progress
     if (typeof progress === 'number') {
-      goal.metrics.progress = Math.min(100, Math.max(0, progress));
+      const evidenceBound = metadata.progressSource === 'verified_evidence'
+        ? Number(metadata.evidenceProgress?.progress ?? progress)
+        : progress;
+      goal.metrics.progress = Math.min(100, Math.max(0, evidenceBound));
     }
     
     // Update current metrics
@@ -998,16 +1226,22 @@ Rules:
       return { success: false, error: 'Goal not found' };
     }
     
-    const deferredTransition = this.transitionGoal(goalId, STATUS.DEFERRED, { reason: reason || 'goal_deferred', actor: this.name });
-    if (!deferredTransition.success) return deferredTransition;
-    goal.metadata.deferredReason = reason;
-    
-    this.stats.goalsDeferred++;
+    const humanCancelled = /\b(user|owner|human|discord)\b/i.test(reason);
+    const targetStatus = humanCancelled ? STATUS.ABANDONED : STATUS.DEFERRED;
+    const transition = this.transitionGoal(goalId, targetStatus, { reason: reason || 'goal_deferred', actor: this.name });
+    if (!transition.success) return transition;
+    if (humanCancelled) {
+      goal.metadata.cancelledAt = Date.now();
+      goal.metadata.cancelledReason = reason;
+    } else {
+      goal.metadata.deferredReason = reason;
+      this.stats.goalsDeferred++;
+    }
 
     this._dirty = true;
     this._saveToDisk();
 
-    this.logger.info(`[${this.name}] ⏸️  Deferred goal: ${goal.title} - ${reason}`);
+    this.logger.info(`[${this.name}] ${humanCancelled ? '🛑 Cancelled' : '⏸️ Deferred'} goal: ${goal.title} - ${reason}`);
 
     return { success: true, goal };
   }
@@ -1047,20 +1281,198 @@ Rules:
   async retryGoal(goalId, options = {}) {
     const goal = this.goals.get(goalId);
     if (!goal) return { success: false, error: 'Goal not found' };
-    const retryable = new Set([STATUS.BROKEN, STATUS.VERIFICATION_FAILED, STATUS.FAILED, STATUS.DEFERRED]);
-    if (!retryable.has(goal.status)) return { success: false, error: `Goal is not retryable from status ${goal.status}` };
+    const retryable = new Set([STATUS.PENDING, STATUS.BROKEN, STATUS.BLOCKED, STATUS.VERIFICATION_FAILED, STATUS.FAILED, STATUS.DEFERRED, STATUS.DELEGATED]);
+    const exhaustedActive = goal.status === STATUS.ACTIVE && this.getExecutionAttemptBudget(goal)?.exhausted;
+    if (!retryable.has(goal.status) && !exhaustedActive) return { success: false, error: `Goal is not retryable from status ${goal.status}` };
     goal.metadata = {
       ...(goal.metadata || {}),
       executionAttempts: 0,
+      artifactlessSessions: 0,
+      terminalReport: null,
+      attemptBudget: null,
+      maxEscalation: null,
       retryAuthorizedAt: Date.now(),
       retryAuthorizedBy: options.actor || 'human',
       retryReason: options.reason || 'manual retry'
     };
-    const transitioned = this.transitionGoal(goalId, STATUS.PENDING, {
+    const transitioned = this.transitionGoal(goalId, STATUS.ACTIVE, {
       reason: goal.metadata.retryReason,
       actor: goal.metadata.retryAuthorizedBy,
-      persist: true
+      persist: true,
+      force: true
     });
+    if (!transitioned.success) return transitioned;
+    goal.metrics.progress = Math.min(goal.metrics?.progress || 0, 75);
+    return { success: true, goal };
+  }
+
+  /**
+   * Called when EngineeringSwarmArbiter fails to execute a goal.
+   * Retries up to 3 times with escalating priority and a post-mortem appended
+   * to the description so the next swarm attempt has failure context.
+   * On the 3rd failure, archives via failGoal() which applies category cooldowns.
+   */
+  async _handleSwarmGoalFailure(goalId, reason = 'unknown') {
+    const goal = this.goals.get(goalId);
+    if (!goal) return { success: false, error: 'Goal not found' };
+
+    const MAX_SWARM_ATTEMPTS = 3;
+    goal.metadata.swarmFailureCount = (goal.metadata.swarmFailureCount || 0) + 1;
+    const attempt = goal.metadata.swarmFailureCount;
+
+    if (attempt < MAX_SWARM_ATTEMPTS) {
+      // Escalate — bump priority and annotate description for next attempt
+      const oldPriority = goal.priority;
+      goal.priority = Math.min(95, goal.priority + 15);
+      this.transitionGoal(goalId, STATUS.PENDING, { reason: 'swarm_retry', actor: this.name });
+
+      // Append post-mortem only if not already present for this attempt number
+      const marker = `[POST-MORTEM attempt ${attempt}]`;
+      if (!goal.description.includes(marker)) {
+        goal.description += `\n${marker}: Swarm execution failed. Reason: ${reason}. Adjust strategy.`;
+      }
+
+      this.logger.warn(
+        `[${this.name}] ⚠️  Swarm failure for "${goal.title}" (attempt ${attempt}/${MAX_SWARM_ATTEMPTS}) ` +
+        `— priority escalated ${oldPriority}→${goal.priority}, queued for retry`
+      );
+
+      this._dirty = true;
+      this._saveToDisk();
+      return { success: true, retrying: true, attempt, goal };
+    }
+
+    // 3rd failure — archive it properly (applies category cooldown logic)
+    this.logger.warn(
+      `[${this.name}] ❌ Goal "${goal.title}" exhausted ${MAX_SWARM_ATTEMPTS} swarm attempts — archiving`
+    );
+    return await this.failGoal(goalId, `Swarm exhausted ${MAX_SWARM_ATTEMPTS} attempts. Last error: ${reason}`);
+  }
+
+  getActiveGoals(filter = {}) {
+    const goals = Array.from(this.activeGoals).map(id => this.goals.get(id));
+    
+    // Apply filters
+    let filtered = goals;
+    if (filter.category) {
+      filtered = filtered.filter(g => g.category === filter.category);
+    }
+    if (filter.type) {
+      filtered = filtered.filter(g => g.type === filter.type);
+    }
+    if (filter.minPriority) {
+      filtered = filtered.filter(g => g.priority >= filter.minPriority);
+    }
+    
+    // Sort by priority
+    filtered.sort((a, b) => b.priority - a.priority);
+    
+    return {
+      success: true,
+      goals: filtered,
+      count: filtered.length,
+      total: this.activeGoals.size
+    };
+  }
+
+  getGoalStatus(goalId) {
+    const goal = this.goals.get(goalId);
+    if (!goal) {
+      return { success: false, error: 'Goal not found' };
+    }
+    
+    return {
+      success: true,
+      goal,
+      age: Date.now() - goal.createdAt,
+      isStalled: this.isGoalStalled(goal)
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // ░░ GOAL PRIORITIZATION ░░
+  // ═══════════════════════════════════════════════════════════
+
+  calculateGoalPriority(goal) {
+    // Escalate user-requested goals to maximum priority
+    const source = goal.metadata?.source || goal.source;
+    if (source === 'user_requested' || source === 'human' || source === 'discord' || source === 'priorities_md') {
+      return 100;
+    }
+
+    const scores = {
+      impact: this.calculateImpactScore(goal),
+      urgency: this.calculateUrgencyScore(goal),
+      feasibility: this.calculateFeasibilityScore(goal),
+      resourceCost: this.calculateResourceCostScore(goal)
+    };
+    
+    const priority = 
+      scores.impact * this.priorityWeights.impact +
+      scores.urgency * this.priorityWeights.urgency +
+      scores.feasibility * this.priorityWeights.feasibility +
+      scores.resourceCost * this.priorityWeights.resourceCost;
+    
+    return Math.round(priority * 100);
+  }
+
+  calculateImpactScore(goal) {
+    // Higher impact for strategic goals
+    const typeScores = { strategic: 1.0, tactical: 0.7, operational: 0.5 };
+    const typeScore = typeScores[goal.type] || 0.5;
+    
+    // Higher impact for certain categories
+    const categoryScores = {
+      learning: 0.9,
+      optimization: 0.8,
+      quality: 0.7,
+      capability: 1.0
+    };
+    const categoryScore = categoryScores[goal.category] || 0.5;
+    
+    return (typeScore + categoryScore) / 2;
+  }
+
+  calculateUrgencyScore(goal) {
+    if (!goal.dueDate) return 0.5;
+    
+    const daysUntilDue = (goal.dueDate - Date.now()) / 86400000;
+    if (daysUntilDue < 1) return 1.0;
+    if (daysUntilDue < 3) return 0.9;
+    if (daysUntilDue < 7) return 0.7;
+    if (daysUntilDue < 30) return 0.5;
+    return 0.3;
+  }
+
+  calculateFeasibilityScore(goal) {
+    // Base feasibility on dependencies and prerequisites
+    const dependencyPenalty = goal.dependencies.length * 0.1;
+    const prerequisitePenalty = goal.prerequisites.length * 0.15;
+    let score = 1.0 - Math.min(0.5, dependencyPenalty + prerequisitePenalty);
+
+    // Outcome-aware adjustment: penalise categories that keep failing
+    const catRate = this._getCategorySuccessRate(goal.category, 7 * 24 * 3600_000);
+    if (catRate !== null) {
+      if (catRate < 0.3)       score -= 0.25;  // category is consistently failing
+      else if (catRate < 0.5)  score -= 0.10;
+      else if (catRate > 0.75) score += 0.10;  // category has a good track record
+    }
+
+    // Swarm-specific penalty: if the swarm is struggling and this goal needs it
+    const swarmCategories = ['optimization', 'quality', 'capability', 'learning'];
+    if (swarmCategories.includes(goal.category) && this._swarmHistory.length >= 5) {
+      const recent = this._swarmHistory.slice(-20);
+      const swarmRate = recent.filter(e => e.success).length / recent.length;
+      if (swarmRate < 0.4) score -= 0.15;
+    }
+
+    return Math.max(0.1, Math.min(1.0, score));
+  }
+
+  // Success rate for a category in the given window, null if no data
+  _getCategorySuccessRate(category, windowMs = 7 * 24 * 3600_000) {
+    const since = Date.now() - windowMs;
+    const wins  = this.completedGoals.filter(g => g.category === category && (g.completedAt || 0) >= since).length;
     if (!transitioned.success) return transitioned;
     goal.metrics.progress = Math.min(goal.metrics?.progress || 0, 75);
     return { success: true, goal };
@@ -1298,87 +1710,57 @@ Rules:
    * Check if a similar active goal already exists (deduplication)
    * Matches on same category + overlapping intent across title, description, and rationale.
    */
-  _findSimilarActiveGoal(category, title, goalData = {}) {
-    const candidate = this._goalIntentSignature({
-      category,
-      title,
-      description: goalData.description || '',
-      metadata: goalData.metadata || {},
-      rationale: goalData.rationale || ''
-    });
+  _calculateTitleSimilarity(titleA, titleB) {
+    const clean = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+    const wordsA = clean(titleA);
+    const wordsB = clean(titleB);
+    if (wordsA.length === 0 || wordsB.length === 0) return 0;
+    const setA = new Set(wordsA);
+    const setB = new Set(wordsB);
+    let intersection = 0;
+    for (const w of setA) {
+      if (setB.has(w)) intersection++;
+    }
+    const union = new Set([...wordsA, ...wordsB]);
+    return intersection / union.size;
+  }
 
+  _goalIntentSignature(goal = {}) {
+    const stopwords = new Set([
+      'a', 'an', 'and', 'for', 'in', 'of', 'on', 'the', 'to', 'with',
+      'goal', 'soma', 'system', 'please'
+    ]);
+    const tokens = String(goal.title || goal.description || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(token => token && !stopwords.has(token))
+      .slice(0, 24);
+    const category = String(goal.category || 'general').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    return {
+      key: tokens.length ? `${category}:${tokens.join(' ')}` : '',
+      category,
+      tokens
+    };
+  }
+
+  /**
+   * Check if a similar active goal already exists (deduplication)
+   * Matches on >50% semantic title similarity.
+   */
+  _findSimilarActiveGoal(category, title, goalData = {}) {
     for (const goalId of this.activeGoals) {
       const goal = this.goals.get(goalId);
-      if (!goal || goal.category !== category) continue;
+      if (!goal) continue;
+      if (['completed', 'failed', 'broken', 'blocked', 'verification_failed', 'rejected', 'archived', 'deferred', 'cancelled'].includes(goal.status)) continue;
 
-      const existing = this._goalIntentSignature(goal);
-      if (candidate.key && candidate.key === existing.key) return goal;
-
-      const overlap = this._setOverlap(candidate.tokens, existing.tokens);
-      const sameSource = (goal.metadata?.source || '') === (goalData.metadata?.source || '');
-      const strongIntentMatch = overlap >= 0.58;
-      const sourceBackedMatch = sameSource && overlap >= 0.42;
-
-      if (strongIntentMatch || sourceBackedMatch) {
+      // Semantic title similarity check (>50% Jaccard overlap)
+      const titleSim = this._calculateTitleSimilarity(title, goal.title);
+      if (titleSim > 0.5) {
         return goal;
       }
     }
     return null;
-  }
-
-  _goalIntentSignature(goal = {}) {
-    const text = [
-      goal.category || '',
-      goal.title || '',
-      goal.description || '',
-      goal.rationale || '',
-      goal.metadata?.rationale || '',
-      goal.metadata?.why || '',
-      goal.metadata?.gap || '',
-      goal.metadata?.searchQuery || ''
-    ].join(' ').toLowerCase();
-
-    const synonymMap = new Map([
-      ['browse', 'web'], ['browser', 'web'], ['browsing', 'web'], ['navigation', 'web'],
-      ['navigator', 'web'], ['scrape', 'web'], ['scraping', 'web'], ['puppeteer', 'web'],
-      ['playwright', 'web'], ['internet', 'web'], ['github', 'repository'], ['repos', 'repository'],
-      ['repo', 'repository'], ['investigate', 'research'], ['evaluate', 'research'],
-      ['study', 'research'], ['integrate', 'integration'], ['activate', 'integration'],
-      ['autonomous', 'autonomy'], ['agentic', 'autonomy'], ['capability', 'capability']
-    ]);
-
-    const stop = new Set([
-      'this', 'that', 'with', 'from', 'into', 'using', 'based', 'would', 'could',
-      'should', 'current', 'currently', 'existing', 'system', 'soma', 'goal',
-      'goals', 'rationale', 'search', 'query', 'ability', 'able', 'allow',
-      'allows', 'directly', 'robust', 'well', 'good', 'basic'
-    ]);
-
-    const tokens = new Set(
-      text
-        .replace(/[^a-z0-9 ]/g, ' ')
-        .split(/\s+/)
-        .filter(w => w.length > 3 && !stop.has(w))
-        .map(w => synonymMap.get(w) || w.replace(/s$/, ''))
-    );
-
-    const keyTokens = Array.from(tokens)
-      .filter(w => ['web', 'research', 'integration', 'autonomy', 'repository', 'capability', 'memory', 'learning', 'causality', 'audio', 'vision', 'code'].includes(w))
-      .sort();
-
-    return {
-      tokens,
-      key: keyTokens.length >= 2 ? `${goal.category || ''}:${keyTokens.join('|')}` : ''
-    };
-  }
-
-  _setOverlap(a, b) {
-    if (!a?.size || !b?.size) return 0;
-    let hits = 0;
-    for (const token of a) {
-      if (b.has(token)) hits++;
-    }
-    return hits / Math.min(a.size, b.size);
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -1386,7 +1768,7 @@ Rules:
   // ═══════════════════════════════════════════════════════════
 
   async assignGoalTasks(goal) {
-    if (goal.assignedTo.length === 0) {
+    if (!goal.assignedTo || goal.assignedTo.length === 0) {
       this.logger.warn(`[${this.name}] No arbiters assigned to goal: ${goal.title}`);
       return;
     }
@@ -1420,7 +1802,8 @@ Rules:
             title: goal.title,
             description: goal.description,
             category: goal.category,
-            metrics: goal.metrics
+            metrics: goal.metrics,
+            metadata: goal.metadata
           }
         }
       });
@@ -2010,6 +2393,10 @@ Rules:
       // Decay priority on goals that have made no progress for >1 week
       this._decayStaleGoalPriorities();
 
+      // Convert one high-value, low-risk proposal into a strict executable
+      // mission whenever the bounded autonomous lane is empty.
+      await this.missionDirector.ensureMission();
+
       // Dispatch the highest-priority pending goal
       await this._dispatchHighestPriorityGoal();
 
@@ -2068,11 +2455,12 @@ Rules:
 
   // Pick the highest-priority pending (or proposed) goal and dispatch it
   async _dispatchHighestPriorityGoal() {
-    // Include 'proposed' goals — NEMESIS already vetted them; waiting for human approval is too slow
-    // for autonomous operation. High-priority goals get dispatched regardless of proposed/pending.
+    // Only admitted pending work executes. Proposals are ideas in the Work
+    // Governor backlog and never become executable merely because they are old
+    // or high priority.
     const pending = Array.from(this.activeGoals)
       .map(id => this.goals.get(id))
-      .filter(g => g && (g.status === 'pending' || g.status === 'proposed') && this.areDependenciesSatisfied(g))
+      .filter(g => g && g.status === STATUS.PENDING && this.areDependenciesSatisfied(g))
       .sort((a, b) => b.priority - a.priority);
 
     if (pending.length === 0) return;
@@ -2089,7 +2477,7 @@ Rules:
         // Re-select the top pending goal after adding sub-goals
         const newPending = Array.from(this.activeGoals)
           .map(id => this.goals.get(id))
-          .filter(g => g && (g.status === 'pending' || g.status === 'proposed') && this.areDependenciesSatisfied(g))
+          .filter(g => g && g.status === STATUS.PENDING && this.areDependenciesSatisfied(g))
           .sort((a, b) => b.priority - a.priority);
         if (newPending.length === 0) return;
         top = newPending[0];
@@ -2127,7 +2515,8 @@ Rules:
       const timeSinceUpdate = now - (goal.updatedAt || goal.startedAt || goal.createdAt || now);
       const progress = goal.metrics?.progress ?? 0;
 
-      if (timeSinceUpdate > limit && progress < 100) {
+      // Auto-pruning stale goals stuck at 0% progress after 7 days
+      if (timeSinceUpdate > limit && progress <= 0) {
         pruned.push(goal);
       }
     }
@@ -2150,9 +2539,72 @@ Rules:
     this.monitoringInterval = setInterval(async () => {
       await this.reviewStalledGoals();
       await this._verifyHighProgressGoals();
+      await this._reconcileParkedGoals();
     }, 60 * 60 * 1000);
-    
+
     this.logger.info(`[${this.name}] Monitoring loop started (every 1h)`);
+  }
+
+  /**
+   * Delegated/deferred goals were a black hole: parents decomposed into
+   * subgoals were parked and nothing ever checked the children again — and
+   * the children could even be pruned from the store, orphaning the parent
+   * forever (this is why "delegated and running" claims had zero work behind
+   * them). This pass closes the loop:
+   *  - all children completed        → complete the parent
+   *  - children missing/terminal     → requeue the parent as pending
+   *  - parked > 7 days with no children → requeue as pending
+   */
+  async _reconcileParkedGoals() {
+    const PARKED = new Set([STATUS.DELEGATED, STATUS.DEFERRED]);
+    const now = Date.now();
+    let reconciled = 0;
+    for (const goal of this.goals.values()) {
+      if (!goal || !PARKED.has(normalizeStatus(goal.status))) continue;
+      const childIds = goal.metadata?.childGoalIds || [];
+      const parkedAt = goal.metadata?.lastTransition?.at || goal.startedAt || goal.createdAt || now;
+
+      if (childIds.length > 0) {
+        const children = childIds.map(id => this.goals.get(id));
+        const allCompleted = children.every(c => c && normalizeStatus(c.status) === STATUS.COMPLETED);
+        const anyAlive = children.some(c => c && !isTerminal(c.status) && normalizeStatus(c.status) !== STATUS.BROKEN);
+        if (allCompleted) {
+          this.logger.info(`[${this.name}] 🔗 All children of parked goal complete → completing parent: "${goal.title}"`);
+          await this.completeGoal(goal.id, {
+            summary: `All ${children.length} decomposed child goals completed. Parent reconciled by parked-goal sweep.`
+          }).catch(err => this.logger.warn(`[${this.name}] Parent completion failed: ${err.message}`));
+          reconciled++;
+          continue;
+        }
+        if (!anyAlive) {
+          // Children vanished from the store or all died — parent waits on ghosts.
+          this.transitionGoal(goal.id, STATUS.PENDING, {
+            reason: 'requeued_children_missing_or_dead',
+            actor: this.name,
+            force: true
+          });
+          this.logger.warn(`[${this.name}] 👻 Parked goal waited on missing/dead children → requeued: "${goal.title}"`);
+          reconciled++;
+          continue;
+        }
+        continue; // children still in flight — leave parked
+      }
+
+      if (now - parkedAt > 7 * 86400000) {
+        this.transitionGoal(goal.id, STATUS.PENDING, {
+          reason: 'requeued_parked_over_7_days',
+          actor: this.name,
+          force: true
+        });
+        this.logger.warn(`[${this.name}] ⏰ Goal parked >7d with no children → requeued: "${goal.title}"`);
+        reconciled++;
+      }
+    }
+    if (reconciled > 0) {
+      this._dirty = true;
+      this._saveToDisk();
+    }
+    return reconciled;
   }
 
   async _verifyHighProgressGoals() {
@@ -2240,8 +2692,8 @@ Rules:
   }
 
   compactDeferredGoals(options = {}) {
-    const maxRetained = Math.max(1, Number(options.maxRetained || process.env.SOMA_MAX_DEFERRED_GOALS || 100));
-    const olderThanMs = Math.max(24 * 60 * 60_000, Number(options.olderThanMs || 30 * 24 * 60 * 60_000));
+    const maxRetained = Math.max(1, Number(options.maxRetained || process.env.SOMA_MAX_DEFERRED_GOALS || 10));
+    const olderThanMs = Math.max(24 * 60 * 60_000, Number(options.olderThanMs || 7 * 24 * 60 * 60_000));
     const now = Number(options.now || Date.now());
     const deferred = Array.from(this.goals.values())
       .filter(goal => goal.status === STATUS.DEFERRED && !this.activeGoals.has(goal.id))
@@ -2260,6 +2712,54 @@ Rules:
     for (const goal of archive) this.goals.delete(goal.id);
     this._dirty = true;
     return { archived: archive.length, retained: deferred.length - archive.length, path: archivePath };
+  }
+
+  compactDuplicateAndTerminalGoals(options = {}) {
+    const now = Number(options.now || Date.now());
+    const maxTerminalRetained = Math.max(5, Number(options.maxTerminalRetained || process.env.SOMA_MAX_TERMINAL_GOALS || 25));
+    const candidates = Array.from(this.goals.values()).filter(goal =>
+      !this.activeGoals.has(goal.id)
+      && [STATUS.DEFERRED, STATUS.BROKEN, STATUS.VERIFICATION_FAILED, STATUS.FAILED, STATUS.REJECTED].includes(goal.status)
+    );
+    const archiveById = new Map();
+    const groups = new Map();
+    for (const goal of candidates) {
+      const signature = this._goalIntentSignature(goal)?.key
+        || String(goal.title || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+      if (!groups.has(signature)) groups.set(signature, []);
+      groups.get(signature).push(goal);
+    }
+
+    for (const rows of groups.values()) {
+      rows.sort((a, b) => {
+        if (isHumanGoal(a) !== isHumanGoal(b)) return isHumanGoal(a) ? -1 : 1;
+        return Number(b.createdAt || 0) - Number(a.createdAt || 0) || Number(b.priority || 0) - Number(a.priority || 0);
+      });
+      for (const duplicate of rows.slice(1)) {
+        archiveById.set(duplicate.id, { goal: duplicate, reason: 'duplicate_goal_compaction' });
+      }
+    }
+
+    const terminal = candidates
+      .filter(goal => [STATUS.BROKEN, STATUS.VERIFICATION_FAILED, STATUS.FAILED, STATUS.REJECTED].includes(goal.status))
+      .filter(goal => !archiveById.has(goal.id))
+      .sort((a, b) => Number(b.completedAt || b.createdAt || 0) - Number(a.completedAt || a.createdAt || 0));
+    for (const old of terminal.slice(maxTerminalRetained)) {
+      archiveById.set(old.id, { goal: old, reason: 'terminal_goal_retention_compaction' });
+    }
+    if (!archiveById.size) return { archived: 0, retained: candidates.length, path: null };
+
+    const archiveDir = path.join(this.dataDir, 'goal-archives');
+    const archivePath = path.join(archiveDir, `compacted-${new Date(now).toISOString().slice(0, 7)}.jsonl`);
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.appendFileSync(archivePath, Array.from(archiveById.values()).map(entry => JSON.stringify({
+      archivedAt: now,
+      reason: entry.reason,
+      goal: entry.goal
+    })).join('\n') + '\n', 'utf8');
+    for (const id of archiveById.keys()) this.goals.delete(id);
+    this._dirty = true;
+    return { archived: archiveById.size, retained: candidates.length - archiveById.size, path: archivePath };
   }
 
   async runLifecycleCanary() {
@@ -2573,7 +3073,7 @@ Rules:
       // ("Active goal limit reached (20)") because nothing evicted them.
       if (snapshot.activeGoals) {
         const restored = snapshot.activeGoals.filter(id => this.goals.has(id));
-        const live = restored.filter(id => !GoalPlannerArbiter.TERMINAL_STATUSES.has(this.goals.get(id)?.status));
+        const live = restored.filter(id => [STATUS.PROPOSED, STATUS.PENDING, STATUS.ACTIVE, STATUS.DELEGATED].includes(this.goals.get(id)?.status));
         if (live.length < restored.length) {
           this.logger.warn(`[${this.name}] 🧹 Evicted ${restored.length - live.length} terminal-status goal(s) from the active set on restore`);
           this._dirty = true;
@@ -2645,6 +3145,10 @@ Rules:
         }
       }
 
+      const historyCompaction = this.compactDuplicateAndTerminalGoals();
+      if (historyCompaction.archived > 0) {
+        this.logger.info(`[${this.name}] Archived ${historyCompaction.archived} duplicate/terminal goal(s) to ${historyCompaction.path}`);
+      }
       const deferredCompaction = this.compactDeferredGoals();
       if (deferredCompaction.archived > 0) {
         this.logger.info(`[${this.name}] Archived ${deferredCompaction.archived} deferred goal(s) to ${deferredCompaction.path}`);
@@ -2984,3 +3488,4 @@ Rules:
 }
 
 module.exports = GoalPlannerArbiter;
+module.exports.GoalPlannerArbiter = GoalPlannerArbiter;
