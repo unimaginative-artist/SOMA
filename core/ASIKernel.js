@@ -171,9 +171,26 @@ export class ASIKernel extends EventEmitter {
             // ── Phase 5: Generate an improvement goal ────────────────────
             const goal = await this._generateGoal(target, milestone, cycle.id, preparation);
             if (goal) {
-                cycle.phases.goal = { title: goal.title };
-                console.log(`[ASIKernel] 📋 Goal created: "${goal.title}"`);
-                writeMonologue(`Self-improvement goal created: "${goal.title}". Delegating execution to AutonomousHeartbeat.`, 'ASIKernel');
+                cycle.phases.goal = { title: goal.title, proposed: !!goal.__proposed };
+                console.log(`[ASIKernel] 📋 Improvement goal ${goal.__proposed ? 'proposed (awaiting approval)' : 'created'}: "${goal.title}"`);
+                writeMonologue(`Self-improvement goal ${goal.__proposed ? 'proposed for approval' : 'created'}: "${goal.title}".`, 'ASIKernel');
+            }
+
+            // ── Phase 5.5: Proposal-gated self-evolution ─────────────────
+            // Autonomous improvement goals require approval (WorkGovernor). A
+            // proposal is correct, safe behavior — not a failure. Record it as
+            // pending_approval with the proposal id so the approval → execution
+            // handoff can be reconciled later, instead of lying about failure.
+            if (goal?.__proposed) {
+                cycle.result = 'pending_approval';
+                cycle.phases.execute = {
+                    delegated: false,
+                    proposed: true,
+                    proposalId: goal.proposalId,
+                    note: 'Self-improvement goal submitted as a proposal; awaiting approval (MAX / mission director / capability contract). This is the safety gate working, not a failure.',
+                };
+                this.emit('proposed', { cycle: cycle.id, proposalId: goal.proposalId, target: target.dimension });
+                return this._finalize(cycle, cycleStart);
             }
 
             // ── Phase 6: Constitutional check before executing ───────────
@@ -334,6 +351,19 @@ Return ONLY JSON: {"dimension": "...", "reason": "..."}`;
                 };
                 console.warn('[ASIKernel] Goal planner rejected improvement goal:', this._lastGoalRejection.reason);
                 return null;
+            }
+            // Autonomous self-evolution goals are proposal-only by design (the
+            // WorkGovernor safety gate). A proposal is a SUCCESS, not a failure:
+            // the goal is queued for approval (MAX / mission director / a
+            // capability contract), not dropped. Surface it honestly so the loop
+            // stops reporting failed_to_queue for correct safety behavior.
+            if (response.proposalOnly || response.proposalId) {
+                return {
+                    __proposed: true,
+                    proposalId: response.proposalId || null,
+                    title: response.proposal?.title || `ASI: Improve ${humanDesc}`,
+                    reason: response.reason || 'autonomous_sources_are_proposal_only',
+                };
             }
             return response.goal || goalPlanner.goals?.get?.(response.goalId) || (response.goalId ? { id: response.goalId, title: `ASI: Improve ${humanDesc}`, status: 'pending' } : null);
         } catch (err) {

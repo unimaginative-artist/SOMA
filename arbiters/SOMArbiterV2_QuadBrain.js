@@ -217,9 +217,15 @@ export class SOMArbiterV2_QuadBrain extends BaseArbiterV4 {
       const complexity = isComplex ? 'high' : 'simple';
 
       if (context.activeLobe) {
-        // Lobe already chosen upstream (callBrain) — go direct to provider
-        const raw = await this._callProviderCascade(query, context);
-        response = { ...raw, brain: context.activeLobe };
+        // Lobe already chosen upstream (callBrain / V3) — go direct to provider.
+        // This is the LIVE chat path, so grounding must happen here too, not only
+        // in _runLobe. Ground the reasoner in her own facts (repo/memory/verify).
+        const retrieved = await this._retrieveLobeContext(context.activeLobe, query);
+        const groundedQuery = retrieved
+          ? `[${context.activeLobe} SPECIALIST CONTEXT — grounded in SOMA's own code/memory]\n${retrieved}\n\n[USER QUERY]\n${query}`
+          : query;
+        const raw = await this._callProviderCascade(groundedQuery, context);
+        response = { ...raw, brain: context.activeLobe, groundedFromRepo: !!retrieved };
       } else {
         // Selective lobe activation
         let activeLobes = this._selectLobes(query, context);
@@ -488,8 +494,8 @@ export class SOMArbiterV2_QuadBrain extends BaseArbiterV4 {
       try {
         const content = await fs.readFile(path.join(__REPO_ROOT, file), 'utf8');
         const lines = content.split('\n');
-        const start = Math.max(0, anchorLine - 8);
-        const end = Math.min(lines.length, anchorLine + 14);
+        const start = Math.max(0, anchorLine - 6);
+        const end = Math.min(lines.length, anchorLine + 9);
         const snippet = lines.slice(start, end).map((l, i) => `${start + i + 1}: ${l}`).join('\n');
         excerpts.push(`-- ${file} (around ${rarestTerm} @ line ${anchorLine}, ${rec.totalHits} total match${rec.totalHits > 1 ? 'es' : ''}) --\n${snippet}`);
       } catch { /* file vanished, skip */ }
@@ -524,7 +530,10 @@ export class SOMArbiterV2_QuadBrain extends BaseArbiterV4 {
       }
     }
 
-    return `Grounded in SOMA's own codebase (retrieved live, not recalled from training):\n\n${excerpts.join('\n\n')}${experience}${verify}`;
+    // Hard cap so grounding never bloats the prompt / worsens latency under a
+    // slow provider. Keep the verify signal (cheap, high-value) at the end.
+    const body = `${excerpts.join('\n\n')}${experience}`.slice(0, 1500);
+    return `Grounded in SOMA's own codebase (retrieved live, not recalled from training):\n\n${body}${verify}`;
   }
 
   /** Run a single lobe against the query — returns its perspective */
