@@ -168,22 +168,36 @@ Think strategically — long-term consequences, goal alignment, execution paths.
         let provider = 'deepseek';
         const localModel = requestedLobe ? (this.lobeModels?.[requestedLobe] || this.ollamaModel) : this.ollamaModel;
         const persona = SOMArbiterV3.BRAIN_PERSONAS[requestedLobe] || SOMArbiterV3.BRAIN_PERSONAS.LOGOS;
+        // Ground the fast path in HER OWN facts too. Regular chat routes HERE
+        // (System 1), bypassing QuadBrain — so grounding must live here, not only
+        // in the slow path. _retrieveLobeContext returns null cheaply for
+        // non-code / non-LOGOS queries, so greetings stay instant.
+        const retrieved = requestedLobe ? await this._retrieveLobeContext(requestedLobe, queryStr).catch(() => null) : null;
+        const groundedQuery = retrieved
+          ? `[${requestedLobe} SPECIALIST CONTEXT — grounded in SOMA's own code/memory]\n${retrieved}\n\n[USER QUERY]\n${queryStr}`
+          : queryStr;
         const mustUseLocal = context.forceLocal === true || Date.now() < this._deepSeekUnavailableUntil;
         if (mustUseLocal) {
-            fastResult = await this._callOllama(queryStr, localModel, context.temperature ?? 0.7, context.maxTokens ?? 2048, persona, context.history || [], context.signal || null, context.images || []);
+            fastResult = await this._callOllama(groundedQuery, localModel, context.temperature ?? 0.7, context.maxTokens ?? 2048, persona, context.history || [], context.signal || null, context.images || []);
             provider = 'local';
         } else {
             try {
-                fastResult = await this._callDeepSeek(queryStr, context.temperature ?? 0.7, context.maxTokens ?? 2048, persona, context.tools, context.history || []);
+                fastResult = await this._callDeepSeek(groundedQuery, context.temperature ?? 0.7, context.maxTokens ?? 2048, persona, context.tools, context.history || []);
                 this._deepSeekFailureReason = '';
             } catch (providerError) {
                 const reason = String(providerError?.message || providerError);
-                if (/insufficient balance|quota|billing|payment|required|rate limit/i.test(reason)) {
-                    this._deepSeekUnavailableUntil = Date.now() + 30 * 60 * 1000;
+                // Only a genuine billing/balance/quota failure should open the local
+                // circuit. Bare "required" / "rate limit" are far too broad and were
+                // forcing ALL chat onto the slow local 14B for 30 min on transient
+                // errors. Transient errors just fall back once, no circuit.
+                if (/insufficient balance|quota exceeded|billing|payment required|account (?:suspend|disabled)/i.test(reason)) {
+                    this._deepSeekUnavailableUntil = Date.now() + 10 * 60 * 1000;
                     this._deepSeekFailureReason = reason;
-                    console.warn(`[${this.name}] DeepSeek circuit open for 30 minutes: ${reason}`);
+                    console.warn(`[${this.name}] DeepSeek circuit open for 10 minutes (billing/balance): ${reason}`);
+                } else {
+                    console.warn(`[${this.name}] DeepSeek fast-path error (transient, NOT opening circuit): ${reason}`);
                 }
-                fastResult = await this._callOllama(queryStr, localModel, context.temperature ?? 0.7, context.maxTokens ?? 2048, persona, context.history || [], context.signal || null, context.images || []);
+                fastResult = await this._callOllama(groundedQuery, localModel, context.temperature ?? 0.7, context.maxTokens ?? 2048, persona, context.history || [], context.signal || null, context.images || []);
                 provider = 'local';
             }
         }
@@ -193,6 +207,7 @@ Think strategically — long-term consequences, goal alignment, execution paths.
             text: fastResult.text,
             brain: requestedLobe || (provider === 'deepseek' ? 'SOMA_INTERFACE' : 'HEARTBEAT'),
             provider,
+            groundedFromRepo: !!retrieved,
             model: fastResult.model || (provider === 'deepseek' ? 'deepseek-chat' : localModel),
             routing: effectiveContext.routingDecision || {
               lobe: requestedLobe || null,
