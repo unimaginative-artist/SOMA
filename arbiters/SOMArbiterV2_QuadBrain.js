@@ -850,6 +850,14 @@ INTEGRATED RESPONSE:`;
         : undefined;
     const source = String(usageContext.source || usageContext.action || 'chat');
     const priority = ['chat', 'ct_terminal', 'discord', 'voice_chat', 'user'].includes(source) ? 'human' : 'background';
+    // Yield to interactive chat: while a user is talking, defer background
+    // cognition (discovery/distillation/curiosity swarms) so it doesn't saturate
+    // the API + GPU mid-conversation. Bounded (max ~6s) so background never starves.
+    if (priority === 'background' && global.__SOMA_CHAT_ACTIVE) {
+      for (let i = 0; i < 30 && global.__SOMA_CHAT_ACTIVE; i++) {
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
     const actor = usageContext.actor || usageContext.source || 'QuadBrain';
     const action = usageContext.action || usageContext.source || 'chat';
 

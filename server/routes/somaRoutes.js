@@ -24,7 +24,7 @@ import walkForwardEngine from '../finance/WalkForwardEngine.js';
 import somaImageGeneration from '../social/SomaImageGenerationEngine.js';
 import { buildSomaContext } from '../context/SomaContextKernel.js';
 import { guardPublicText } from '../context/ClaimVerifier.js';
-import { analyzeImageFile, formatImageAnalysisForIngestion } from '../utils/LocalVisionFileAnalyzer.js';
+import { analyzeImageFile, analyzeImageFileTwoStage, formatImageAnalysisForIngestion } from '../utils/LocalVisionFileAnalyzer.js';
 import { describeContracts } from '../../core/AgentCapabilityContracts.js';
 import { readTruthLedger } from '../../core/TruthLedger.js';
 import resourceJobScheduler from '../../core/ResourceJobScheduler.js';
@@ -38,6 +38,22 @@ const presenceAwareness = require('../../core/PresenceAwarenessState.cjs');
 // Prevents re-analyzing the same unmodified file on every financial chat message.
 const _excelCache = new Map(); // key -> { report, analysis, cachedAt }
 const EXCEL_CACHE_TTL = 10 * 60 * 1000;
+const CHAT_IMAGE_DIR = path.join(process.cwd(), '.soma', 'vision_temp', 'chat');
+
+function saveChatImageAttachment(attachment = {}) {
+    const raw = attachment.imageData || attachment.data || '';
+    const match = String(raw).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
+    const mimeType = String(attachment.mimeType || match?.[1] || '').toLowerCase();
+    if (!mimeType.startsWith('image/')) throw new Error('Only image attachments are supported by vision chat');
+    const buffer = Buffer.from(match?.[2] || raw, 'base64');
+    if (!buffer.length) throw new Error('The attached image was empty');
+    if (buffer.length > 12 * 1024 * 1024) throw new Error('The attached image exceeds the 12 MB limit');
+    const ext = mimeType.includes('jpeg') ? '.jpg' : mimeType.includes('webp') ? '.webp' : mimeType.includes('gif') ? '.gif' : '.png';
+    fs.mkdirSync(CHAT_IMAGE_DIR, { recursive: true });
+    const filePath = path.join(CHAT_IMAGE_DIR, `chat-image-${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`);
+    fs.writeFileSync(filePath, buffer);
+    return { filePath, mimeType };
+}
 
 function _getCachedAnalysis(fp) {
     const entry = _excelCache.get(fp);
@@ -323,6 +339,34 @@ const fingerprint = require('../../arbiters/UserFingerprintArbiter.cjs');
 const soul        = require('../../arbiters/SoulArbiter.cjs');
 
 export default function(system) {
+    router.get('/audio/status', (_req, res) => {
+        if (!system.audioDaemon) return res.status(503).json({ success: false, error: 'AudioDaemon unavailable' });
+        res.json({ success: true, ...system.audioDaemon.getStatus() });
+    });
+
+    router.post('/audio/arm', (_req, res) => {
+        if (!system.audioDaemon) return res.status(503).json({ success: false, error: 'AudioDaemon unavailable' });
+        const started = system.audioDaemon.arm();
+        res.json({ success: true, started, ...system.audioDaemon.getStatus() });
+    });
+
+    router.post('/audio/mute', (_req, res) => {
+        if (!system.audioDaemon) return res.status(503).json({ success: false, error: 'AudioDaemon unavailable' });
+        system.audioDaemon.mute();
+        res.json({ success: true, ...system.audioDaemon.getStatus() });
+    });
+
+    router.post('/audio/unmute', (_req, res) => {
+        if (!system.audioDaemon) return res.status(503).json({ success: false, error: 'AudioDaemon unavailable' });
+        system.audioDaemon.unmute();
+        res.json({ success: true, ...system.audioDaemon.getStatus() });
+    });
+
+    router.post('/audio/disarm', (_req, res) => {
+        if (!system.audioDaemon) return res.status(503).json({ success: false, error: 'AudioDaemon unavailable' });
+        system.audioDaemon.disarm();
+        res.json({ success: true, ...system.audioDaemon.getStatus() });
+    });
     // Helper to get active brain
     const getBrain = () => system.quadBrain || system.somArbiter || system.kevinArbiter || system.brain || system.superintelligence;
 
@@ -445,13 +489,12 @@ export default function(system) {
     router.post('/modification-result', async (req, res) => {
         try {
             const broker = require('../../core/MessageBroker.cjs');
-            await broker.sendMessage({
+            await broker.publish('soma.selfmod.legacy_result_ignored', {
                 from: 'MAX',
-                to: 'SelfModificationArbiter',
-                type: 'modification_result',
-                payload: req.body
+                payload: req.body,
+                reason: 'Legacy MAX execution callbacks are retired; changes must enter SelfModificationPipeline.'
             });
-            res.json({ received: true });
+            res.json({ received: true, retired: true, applied: false });
         } catch (err) {
             res.status(500).json({ error: err.message });
         }
@@ -743,7 +786,7 @@ Write a closing thought â€" 1-2 sentences. Something genuine that shows you a
             const goals = Array.from(gp?.goals?.values?.() || []);
             const learning = defaultLearningSpine.getStatus(12);
             const trainingAudit = defaultLearningSpine.auditTrainingExports(250);
-            const selfMod = system.selfModificationArbiter || system.selfModification || system.selfMod;
+            const selfMod = system.selfModPipeline || system.selfModificationArbiter || system.selfModification || system.selfMod;
             const selfModStatus = selfMod?.getStatus
                 ? { online: true, ...(await selfMod.getStatus()) }
                 : { online: false, recentEntries: [], contestedCount: 0, implemented: 0 };
@@ -1433,7 +1476,9 @@ ${memoryContext || "No specific memories found for this query."}
         const clearWall = () => clearTimeout(wallTimer);
 
         try {
-            const { message, deepThinking, sessionId, contextFiles, history, voiceMode, context: reqContext } = req.body;
+            const { deepThinking, sessionId, contextFiles, history, voiceMode, context: reqContext } = req.body;
+            const attachment = req.body?.attachment || req.body?.attachments?.[0] || null;
+            const message = String(req.body?.message || (attachment ? 'Describe and analyze this image.' : '')).trim();
             if (!message) { clearWall(); return res.status(400).json({ success: false, error: 'Message is required' }); }
             trace.mark('validated');
 
@@ -1637,9 +1682,47 @@ ${contextStr}`;
                     realTimeVisionBlock += ` Screen text reads: "${vc.ocrText.substring(0, 500)}".`;
                 }
             }
+            let attachmentAnalysis = null;
+            if (attachment) {
+                try {
+                    const saved = saveChatImageAttachment(attachment);
+                    attachmentAnalysis = await analyzeImageFileTwoStage(saved.filePath, {
+                        mimeType: saved.mimeType,
+                        prompt: message,
+                        mode: attachment.analysisMode || (/\b(read|text|ocr|code|exact)\b/i.test(message) ? 'ocr' : 'auto'),
+                        deep: deepThinking === true,
+                        auditType: 'chat_image_analysis',
+                        auditSource: reqContext?.source || 'web-chat',
+                    });
+                    const tracked = system.visualObjectMemory?.ingest?.({
+                        objects: attachmentAnalysis.perception?.objects || [],
+                        timestamp: Date.now(),
+                        channel: reqContext?.source || 'web-chat',
+                        imagePath: saved.filePath,
+                    }) || [];
+                    if (attachmentAnalysis.perception) attachmentAnalysis.perception.objects = tracked;
+                    system.visionContext = {
+                        channel: 'upload',
+                        imagePath: saved.filePath,
+                        objects: tracked,
+                        ocrText: attachmentAnalysis.ocrText || '',
+                        summary: attachmentAnalysis.summary,
+                        source: 'chat-image-upload',
+                        perception: attachmentAnalysis.perception,
+                        timestamp: Date.now(),
+                    };
+                } catch (err) {
+                    clearWall();
+                    return res.status(400).json({ success: false, error: `Image analysis failed: ${err.message}` });
+                }
+            }
+
             const visualContextParts = [];
             if (stagedContext) visualContextParts.push(`\n[RECENT VISUAL CONTEXT]\n${stagedContext}\n`);
             if (realTimeVisionBlock) visualContextParts.push(`\n[CURRENT SCREEN/VISUAL STATE]\n${realTimeVisionBlock}\n`);
+            if (attachmentAnalysis?.perception) {
+                visualContextParts.push(`\n[USER-UPLOADED IMAGE - TRUSTED SERVER ANALYSIS]\n${JSON.stringify(attachmentAnalysis.perception)}\nUse visible claims as observations. Clearly label inference and remembered context. Never claim an identity from appearance alone.\n[/USER-UPLOADED IMAGE]\n`);
+            }
             const visualContext = visualContextParts.join('\n');
 
             // ── Professional Mode Engine: activation / deactivation ──────────────
@@ -1777,6 +1860,18 @@ ${contextStr}`;
                     role: h.role,
                     content: h.content || h.text || ''
                 }));
+            } else if (system.conversationHistory) {
+                try {
+                    const dbHistory = await system.conversationHistory.getRecentMessages(15, sessionId ? { sessionId } : {});
+                    if (dbHistory && dbHistory.length > 0) {
+                        conversationHistory = dbHistory.map(h => ({
+                            role: h.role,
+                            content: h.content || h.text || ''
+                        })).reverse();
+                    }
+                } catch (dbErr) {
+                    console.warn('[SOMA] Failed to load conversation history from database:', dbErr.message);
+                }
             }
 
             // Cap history to last 20 turns  --  prevents context overflow on long conversations.
@@ -1946,14 +2041,13 @@ ${contextStr}`;
                     console.log(`[SkillRegistry] 📚 Dynamically selected ${dynamicTools.length} tools for this intent.`);
                 } catch { /* non-blocking  --  tools are advisory */ }
             }
-            // Pass tools for any non-trivial query — greetings/simple chats excluded.
-            // SkillRegistry handles intent-filtered selection when loaded; this is the safety net.
-            if (!dynamicTools?.length && system.toolRegistry?.getToolsManifest) {
-                const GREETING_RE = /^(hey|hi|hello|yo|sup|what's up|how are you|good morning|good afternoon|good evening|thanks|thank you|ok|okay|sure|yep|nope|yes|no|cool|got it|sounds good)[\s!?.]*$/i;
-                const isPlainGreeting = GREETING_RE.test(message.trim());
-                if (!isPlainGreeting || req.body?.isAgentic) {
-                    dynamicTools = system.toolRegistry.getToolsManifest();
-                }
+            // Attach the full 74-tool manifest ONLY for explicit agentic requests.
+            // SkillRegistry already does intent-filtered selection above when loaded;
+            // and genuine action requests get routed to the agentic lane. Attaching
+            // all 74 tool schemas (~4k tokens) to plain conversational chat forced a
+            // function-calling round on every message — pure latency for no benefit.
+            if (!dynamicTools?.length && req.body?.isAgentic && system.toolRegistry?.getToolsManifest) {
+                dynamicTools = system.toolRegistry.getToolsManifest();
             }
 
             // ── ThoughtNetwork: inject SOMA's live knowledge graph into every prompt ──
@@ -2205,6 +2299,33 @@ ${contextStr}`;
                 trace.mark('reasoning_started');
                 if (deepThinking && system.crona) {
                     return system.crona.reason(finalPrompt, { sessionId, history: conversationHistory, deepThinking, preferredBrain: personaBrain || 'auto', systemContext: bgSystemCtx });
+                } else if (system.chatRuntime || system.cognitiveRuntime) {
+                    const runtime = system.chatRuntime;
+                    const runtimeInput = {
+                        channel: 'web_chat',
+                        message,
+                        prompt: finalPrompt,
+                        sessionId,
+                        quickResponse: isSimpleChat,
+                        forceAgentic: req.body?.isAgentic === true,
+                        options: {
+                            temperature: deepThinking ? 0.7 : 0.4,
+                            sessionId,
+                            history: conversationHistory,
+                            deepThinking,
+                            quickResponse: isSimpleChat,
+                            preferredBrain: personaBrain || 'auto',
+                            activeGoals: contextActiveGoals,
+                            tools: dynamicTools,
+                            systemContext: bgSystemCtx,
+                            onToken: streamOnToken,
+                            ...queryMeta,
+                            perception: attachmentAnalysis?.perception || null,
+                        }
+                    };
+                    return runtime
+                        ? runtime.handle(runtimeInput)
+                        : system.cognitiveRuntime.run(runtimeInput);
                 } else {
                     return brain.reason(finalPrompt, {
                         temperature: deepThinking ? 0.7 : 0.4,
@@ -2217,7 +2338,8 @@ ${contextStr}`;
                         tools: dynamicTools,
                         systemContext: bgSystemCtx,
                         onToken: streamOnToken,
-                        ...queryMeta
+                        ...queryMeta,
+                        perception: attachmentAnalysis?.perception || null,
                     });
                 }
             })();
@@ -2398,10 +2520,24 @@ ${personaContext}${characterContext}`.trim()
                     // Simple chat: 4s cap — conversational replies rarely need deep linguistic review.
                     // Deep thinking: keep 8s — user explicitly asked for thorough analysis.
                     const nemesisCap = deepThinking ? 8000 : 4000;
-                    nemesisVerdict = await Promise.race([
+                    const _nemesisEval = Promise.race([
                         nemesis.evaluateResponse(result?.brain || 'LOGOS', message, result || { text: responseText }, geminiCallback, visualContext),
                         new Promise((_, reject) => setTimeout(() => reject(new Error('nemesis timeout')), nemesisCap))
                     ]).catch(() => null);
+                    // Deep thinking blocks for in-turn revision. Fast chat ships the answer
+                    // NOW and runs NEMESIS eval + pattern-learning in the background — a
+                    // revision can't reach the user post-send, so blocking cost 4-16s for
+                    // nothing. Learning (recordBadPattern) still happens either way.
+                    if (deepThinking) {
+                        nemesisVerdict = await _nemesisEval;
+                    } else {
+                        _nemesisEval.then(v => {
+                            if (v?.needsRevision && !v.patternHit && v.reason && nemesis.recordBadPattern) {
+                                nemesis.recordBadPattern(v.reason.substring(0, 120), v.reason, Math.max(0.10, 1.0 - (v.score || 0.70))).catch(() => null);
+                            }
+                        });
+                        nemesisVerdict = null;
+                    }
 
                     if (nemesisVerdict?.needsRevision) {
                         const critique = nemesisVerdict.linguistic?.summary || nemesisVerdict.reason || 'Response lacked grounding or had logical issues';
@@ -2627,6 +2763,7 @@ ${personaContext}${characterContext}`.trim()
                 response: responseText,
                 toolCall: result?.toolCall || null,
                 characterSuggestion,
+                perception: attachmentAnalysis?.perception || null,
                 activeCharacter: system.activeCharacter ? { name: system.activeCharacter.name, shortName: system.activeCharacter.shortName, domain: system.activeCharacter.domain } : null,
                 metadata: {
                     confidence,
@@ -3431,6 +3568,7 @@ ${personaContext}${characterContext}`.trim()
                 urgency:       drive.urgency            ?? false,
                 satisfaction:  drive.satisfaction       ?? 0
             },
+            resources: hb.getResourceStatus?.() || null,
             scheduledJobs: (hb.scheduledJobs || []).map(j => ({
                 id: j.id, name: j.name, enabled: j.enabled,
                 schedule: j.schedule, nextRunAt: j.state?.nextRunAt
@@ -3865,7 +4003,7 @@ ${personaContext}${characterContext}`.trim()
     // GET /api/soma/selfmod/status — used by SelfModFeed component
     router.get('/selfmod/status', async (req, res) => {
         try {
-            const selfMod = system.selfModificationArbiter || system.selfModification || system.selfMod;
+            const selfMod = system.selfModPipeline || system.selfModificationArbiter || system.selfModification || system.selfMod;
             let status = null;
             if (selfMod?.getStatus) {
                 status = await selfMod.getStatus();
@@ -4946,6 +5084,25 @@ ${personaContext}${characterContext}`.trim()
         }
     });
 
+    router.get('/knowledge/spine/evidence-graph', (req, res) => {
+        try {
+            res.json({
+                success: true,
+                graph: knowledgeSpine.evidenceGraph({ limit: req.query?.limit })
+            });
+        } catch (e) {
+            res.status(500).json({ success: false, error: e.message });
+        }
+    });
+
+    router.post('/knowledge/spine/evidence-graph/backfill', requireEnterpriseAuth, (req, res) => {
+        try {
+            res.json(knowledgeSpine.backfillEvidenceGraph());
+        } catch (e) {
+            res.status(500).json({ success: false, error: e.message });
+        }
+    });
+
     router.post('/knowledge/ingest', async (req, res) => {
         try {
             const payload = req.body || {};
@@ -5556,7 +5713,12 @@ ${personaContext}${characterContext}`.trim()
             profitPass: meanPnl > 0,
             drawdownPass: maxDrawdown <= 0.18,
             profitFactorPass: profitFactor >= 1.25,
-            walkForwardPass: !walkForward || walkForward.grade !== 'OVERFITTED',
+            // Missing validation is a failure, never a pass. Synthetic trials
+            // remain useful for exploration but cannot nominate paper capital.
+            realDataPass: dataSource === 'real' && (realSeries?.length || 0) >= 360,
+            walkForwardPass: walkForward?.passes === true
+                && (walkForward?.oos?.trades || 0) >= 30
+                && (walkForward?.oos?.totalPnl || 0) > 0,
             paperOnly: true,
         };
         const promoted = Object.entries(promotionCriteria)
