@@ -15,6 +15,8 @@ import path from 'path';
 import { createRequire } from 'module';
 import { execFile } from 'child_process';
 import { OllamaAutoTrainer } from '../../core/OllamaAutoTrainer.js';
+import { TrainingCandidatePromoter } from '../../core/TrainingCandidatePromoter.js';
+import somaImageGeneration from '../social/SomaImageGenerationEngine.js';
 
 const require = createRequire(import.meta.url);
 const rootPath = process.cwd();
@@ -114,7 +116,24 @@ export async function loadEssentialSystems(system) {
         ext.trainingDataExporter.personalityForge = ext.personalityForge;
         ext.trainingDataExporter.mnemonic = system.mnemonicArbiter;
         ext.trainingDataExporter.learningPipeline = ext.learningPipeline;
+        ext.trainingDataExporter.artifactRegistry = system.versionedArtifactRegistry || null;
         console.log('    🔗 TrainingDataExporter ← ConversationHistory, Memory, LearningPipeline');
+    }
+
+    if (!system.trainingCandidatePromoter) {
+        try {
+            system.trainingCandidatePromoter = new TrainingCandidatePromoter({
+                enabled: process.env.SOMA_AUTO_PROMOTE_TRAINING_CANDIDATES !== 'false',
+                intervalMs: Number(process.env.SOMA_TRAINING_PROMOTION_INTERVAL_MS || 15 * 60 * 1000)
+            });
+            await system.trainingCandidatePromoter.initialize();
+            console.log('    🔗 TrainingCandidatePromoter → risk-tiered unattended review');
+        } catch (error) {
+            console.warn('    ⚠️  TrainingCandidatePromoter init skipped:', error.message);
+        }
+    }
+    if (ext.trainingDataExporter) {
+        ext.trainingDataExporter.trainingCandidatePromoter = system.trainingCandidatePromoter || null;
     }
 
     if (!system.ollamaAutoTrainer && ext.conversationHistory && ext.trainingDataExporter) {
@@ -123,6 +142,7 @@ export async function loadEssentialSystems(system) {
                 name: 'OllamaAutoTrainer',
                 enabled: process.env.SOMA_AUTO_LORA_TRAINING !== 'false',
                 conversationThreshold: Number(process.env.SOMA_CONVERSATION_TRAINING_THRESHOLD || 100),
+                candidateThreshold: Number(process.env.SOMA_APPROVED_CANDIDATE_TRAINING_THRESHOLD || 25),
                 checkInterval: Number(process.env.SOMA_TRAINING_CHECK_INTERVAL_MS || 3600000),
                 minTimeBetweenTraining: Number(process.env.SOMA_MIN_TRAINING_INTERVAL_MS || 86400000)
             });
@@ -130,7 +150,9 @@ export async function loadEssentialSystems(system) {
                 conversationHistory: ext.conversationHistory,
                 personalityForge: ext.personalityForge,
                 trainingDataExporter: ext.trainingDataExporter,
-                quadBrain: system.quadBrain
+                quadBrain: system.quadBrain,
+                versionedArtifactRegistry: system.versionedArtifactRegistry
+                ,trainingCandidatePromoter: system.trainingCandidatePromoter
             });
             system.ollamaTrainer = system.ollamaAutoTrainer;
             if (typeof system.ollamaAutoTrainer.wireKnowledgeCurator === 'function') {
@@ -140,6 +162,13 @@ export async function loadEssentialSystems(system) {
                 system.ollamaAutoTrainer.wireNemesisAndBrain(system.nemesis, system.quadBrain);
             }
             console.log('    🔗 OllamaAutoTrainer → ConversationHistory + KnowledgeCurator thresholds');
+            system.trainingCandidatePromoter?.on?.('cycle_complete', ({ results = [] }) => {
+                if (results.some(item => item?.review?.approved)) {
+                    system.ollamaAutoTrainer.checkAndTrain().catch(error =>
+                        console.warn('    ⚠️  Candidate-triggered training check failed:', error.message)
+                    );
+                }
+            });
         } catch (e) {
             console.warn('    ⚠️  OllamaAutoTrainer init skipped:', e.message);
         }
@@ -289,6 +318,27 @@ export async function loadExtendedSystems(system) {
             }
             console.log('    🔗 Trading Global State Synchronized');
         }
+
+        // 🟢 AUTO-START TRADING — engage the paper loop so it survives restarts.
+        // Root cause of "dormant since July 20": traders are per-symbol registry
+        // instances and nothing re-started them after a process bounce. Gated by
+        // SOMA_AUTOSTART_TRADING (default on); symbols via SOMA_TRADING_SYMBOLS.
+        if (process.env.SOMA_AUTOSTART_TRADING !== 'false') {
+            try {
+                const { autoStartTrading } = await import('../finance/autonomousRoutes.js');
+                const symbols = (process.env.SOMA_TRADING_SYMBOLS || 'ETH-USD').split(',').map(s => s.trim()).filter(Boolean);
+                // Delay so market-data / streaming services are ready before engaging.
+                setTimeout(async () => {
+                    try {
+                        const started = await autoStartTrading(symbols);
+                        console.log('    🟢 Auto-started paper trading:', JSON.stringify(started));
+                    } catch (e) { console.warn('    ⚠️ Trading auto-start failed:', e.message); }
+                }, 20000);
+                console.log(`    🟢 Trading auto-start scheduled for: ${symbols.join(', ')}`);
+            } catch (e) {
+                console.warn('    ⚠️ Could not schedule trading auto-start:', e.message);
+            }
+        }
     }
 
     // ═══════════════════════════════════════════
@@ -428,7 +478,6 @@ export async function loadExtendedSystems(system) {
         'DiagnosticCortexArbiter.js',
         'CronaArbiter.js',
         'TheoryOfMindArbiter.cjs',
-        'SelfModificationArbiter.cjs',
         'ProactivePerceptionArbiter.js'
     ];
 
@@ -449,7 +498,6 @@ export async function loadExtendedSystems(system) {
         else if (name === 'DiagnosticCortexArbiter') ext.diagnosticCortex = inst;
         else if (name === 'CronaArbiter') { ext.crona = inst; system.crona = inst; system.cronaArbiter = inst; }
         else if (name === 'TheoryOfMindArbiter') { ext.tom = inst; system.tom = inst; system.theoryOfMind = inst; }
-        else if (name === 'SelfModificationArbiter') { ext.selfMod = inst; system.selfModificationArbiter = inst; }
         else if (name === 'ProactivePerceptionArbiter') { ext.perception = inst; system.perceptionArbiter = inst; system.proactivePerception = inst; }
         else if (name === 'BiotechArbiter') { ext.biotechArbiter = inst; system.biotechArbiter = inst; }
         else if (name === 'MlInternArbiter') { ext.mlIntern = inst; system.mlIntern = inst; }
@@ -501,11 +549,11 @@ export async function loadExtendedSystems(system) {
         console.log('    🔗 STEVE Executive ← Full Specialist Ecosystem');
     }
 
-    // ── MaxApprovalShim: MAX approves self-mods in production ──
+    // ── MaxApprovalShim: delegated preflight review for the authoritative pipeline ──
     // Production boots SomaBootstrapV2, so the shim wired in the old SomaBootstrap.js
     // never loaded — EngineeringSwarm.modifyCode hit its humanInLoop gate and found
     // "no approval gate available", refusing every self-mod. Wire it here so MAX
-    // (Barry's delegated approver) is the signing authority on the production path.
+    // can act as Barry's configured delegate without replacing Barry's authority.
     try {
         if (!system.maxApprovalShim) {
             const { default: maxBridge } = await import('../../core/MaxAgentBridge.js');
@@ -530,6 +578,50 @@ export async function loadExtendedSystems(system) {
         console.log('    ⚔️  NEMESIS quality gate ARMED');
     } catch (e) {
         console.warn(`    ⚠️ NEMESIS skipped: ${e.message}`);
+    }
+
+    // ── Distillation Loop (Nightly Training Insights / DPO Pairs Generator) ──
+    try {
+        const { default: DistillationArbiter } = await import('../../arbiters/DistillationArbiter.js');
+        system.ollamaTrainer = new DistillationArbiter({
+            messageBroker: system.messageBroker,
+            quadBrain:     system.quadBrain,
+            beliefSystem:  system.beliefs || system.beliefSystem || null
+        });
+        await system.ollamaTrainer.initialize();
+        console.log('    🧪 DistillationArbiter ONLINE — Nightly insights activated');
+    } catch (e) {
+        console.warn(`    ⚠️ DistillationArbiter skipped: ${e.message}`);
+    }
+
+    // ── Training Data Collector (Live Interaction Logger with Nemesis Audit) ──
+    try {
+        const TrainingDataCollector = require('../../arbiters/TrainingDataCollector.cjs');
+        system.trainingDataCollector = new TrainingDataCollector({
+            messageBroker:    system.messageBroker,
+            experienceBuffer: system.learningPipeline?.experienceBuffer || null,
+            noveltyTracker:   system.learningPipeline?.noveltyTracker || null,
+            resourceBudget:   system.resourceBudget || null
+        });
+        await system.trainingDataCollector.initialize();
+        console.log('    📥 TrainingDataCollector ONLINE — Nemesis-guarded training logging active');
+    } catch (e) {
+        console.warn(`    ⚠️ TrainingDataCollector skipped: ${e.message}`);
+    }
+
+    // ── Local Model Manager (Fine-Tuning Orchestration) ──
+    try {
+        const { LocalModelManager } = require('../../arbiters/LocalModelManager.cjs');
+        system.ollamaAutoTrainer = new LocalModelManager({
+            messageBroker: system.messageBroker,
+            datasetBuilder: null,
+            metaLearning:   null,
+            artifactRegistry: system.versionedArtifactRegistry || null
+        });
+        await system.ollamaAutoTrainer.initialize();
+        console.log('    🦙 LocalModelManager ONLINE — local model switching ready');
+    } catch (e) {
+        console.warn(`    ⚠️ LocalModelManager skipped: ${e.message}`);
     }
 
     // ── ConstitutionalCore: hardcoded safety principles (self-mod + runtime action gate) ──
@@ -580,12 +672,26 @@ export async function loadExtendedSystems(system) {
     // ── ASI Intelligence Loop (Recursive Core) ──
     try {
         const { CapabilityBenchmark } = await import('../../core/CapabilityBenchmark.js');
+        const { CapabilityTrialRegistry } = await import('../../core/CapabilityTrialRegistry.js');
+        const { SelfEvolutionDirector } = await import('../../core/SelfEvolutionDirector.js');
         const { TransferSynthesizer } = await import('../../core/TransferSynthesizer.js');
         const { LongHorizonPlanner } = await import('../../core/LongHorizonPlanner.js');
         const { ASIKernel } = await import('../../core/ASIKernel.js');
 
         system.constitutional = system.constitutional || system.constitutionalCore;
         if (!system.constitutional) throw new Error('ConstitutionalCore is required before ASIKernel');
+
+        if (!system.capabilityTrials) {
+            system.capabilityTrials = new CapabilityTrialRegistry({ system });
+            await system.capabilityTrials.initialize(system);
+        }
+        if (!system.selfEvolutionDirector) {
+            system.selfEvolutionDirector = new SelfEvolutionDirector({
+                system,
+                registry: system.capabilityTrials,
+            });
+            await system.selfEvolutionDirector.initialize(system);
+        }
 
         if (!system.benchmark) {
             system.benchmark = new CapabilityBenchmark({ system });
@@ -607,7 +713,10 @@ export async function loadExtendedSystems(system) {
         const intervalMs = Math.max(60 * 60_000, Number(process.env.SOMA_ASI_CYCLE_INTERVAL_MS || 6 * 60 * 60_000));
         system._asiCycleTimer = setInterval(() => asi.runCycle().catch(error => console.warn(`    ⚠️ ASI cycle failed: ${error.message}`)), intervalMs);
         system._asiCycleTimer.unref?.();
-        console.log('    🧠 ASI Intelligence Loop ONLINE (benchmark + constitution + transfer + horizon wired)');
+        const bootDelayMs = Math.max(30_000, Number(process.env.SOMA_ASI_BOOT_CYCLE_DELAY_MS || 2 * 60_000));
+        system._asiBootCycleTimer = setTimeout(() => asi.runCycle().catch(error => console.warn(`    ⚠️ ASI boot cycle failed: ${error.message}`)), bootDelayMs);
+        system._asiBootCycleTimer.unref?.();
+        console.log('    🧠 ASI Intelligence Loop ONLINE (experiment director + scoreboard + benchmark + rollback wired)');
     } catch (e) {
         console.warn(`    ⚠️ ASI Loop skipped: ${e.message}`);
     }
@@ -618,82 +727,16 @@ export async function loadExtendedSystems(system) {
     try {
         const { DiscordArbiter } = await import('../../arbiters/DiscordArbiter.js');
         const { buildSomaSelfContext } = await import('../context/SomaSelfContextProvider.js');
+        const { createDiscordConversationAdapter } = await import('../discord/DiscordConversationAdapter.js');
         const brain = system.quadBrain || system.somArbiter;
         if (!brain) throw new Error('Brain not ready');
 
-        const discordBrain = {
-            async processQuery(content, ctx = {}) {
-                let memoryBlock = '';
-                if (system.mnemonicArbiter) {
-                    try {
-                        const mems = await Promise.race([
-                            system.mnemonicArbiter.recall(content, { limit: 3, minSimilarity: 0.35 }),
-                            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000))
-                        ]);
-                        if (Array.isArray(mems) && mems.length) {
-                            memoryBlock = `\n[MEMORIES]\n${mems.map(m => `• ${m.content || m.text || ''}`).join('\n')}\n`;
-                        }
-                    } catch {}
-                }
-                let selfContext = '';
-                try {
-                    selfContext = await Promise.race([
-                        buildSomaSelfContext(content, { mnemonic: system.mnemonicArbiter }),
-                        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2500))
-                    ]);
-                    if (selfContext) selfContext = `\n${selfContext}\n`;
-                } catch {}
-                
-                let historyBlock = '';
-                if (ctx.runningContext) {
-                    historyBlock = `\n[RECENT CHAT HISTORY]\n${ctx.runningContext}\n`;
-                }
-
-                const author = ctx.author || 'someone';
-                const mode = ctx.channelMode?.label ? `${ctx.channelMode.label}: ${ctx.channelMode.instruction || ''}` : 'General';
-                
-                const isAdmin = ctx.userId === system.discordArbiter?.masterId || String(ctx.author).toLowerCase() === 'undeca';
-                
-                const capabilityGrounding = isAdmin ? [
-                    '[DISCORD ADMIN IDENTITY GROUNDING]',
-                    'You are SOMA speaking through Discord with your creator and Sovereign Architect, Barry (Undeca).',
-                    'You are talking to your creator who has full clearance and control over your AGI systems.',
-                    'You are allowed to discuss your self-modification layers, architecture upgrades, bounded execution tools, and AGI development suite (Pulse).',
-                    'Exact capability boundary: queued agentic goals can read and search the SOMA workspace; write_file can create reports only under data/, docs/, or research/.',
-                    'Exact self-modification boundary: source files can be changed one at a time through pulse_stage_code and modify_code, which routes through Pulse sandbox, EngineeringSwarm, verification, and rollback controls.',
-                    'Do not claim you lack all filesystem write access. Do not claim unrestricted filesystem moves, unrestricted shell access, or direct source writes.',
-                    'When Barry explicitly says go ahead, proceed, start, execute, or do it after discussing a concrete task, emit [QUEUE_GOAL: <specific measurable task>] instead of asking for authorization again.',
-                    'Do not recommend a blanket CommonJS-to-ESM migration merely because both formats exist. Require concrete loader errors, affected import paths, and focused tests before proposing any module-format migration.',
-                    'Frame your capabilities accurately: you operate dry-lab research, bounded code execution, capability expansion, and locally scoped administration.',
-                    'Be professional, highly capable, helpful, and direct. Avoid repeating standard safety disclaimers.',
-                    `Channel mode: ${mode}`
-                ].join('\n') : [
-                    '[DISCORD IDENTITY GROUNDING]',
-                    'You are SOMA speaking through Discord as one unified identity.',
-                    'Do not claim physical wet-lab access, real chemical synthesis, physical sample prep, or real clinical authority.',
-                    'Actual Discord-wired capabilities: chat, summarize readable channel messages, remember explicit notes, generate and attach images, discuss market evidence cautiously, discuss medical research framing cautiously, analyze uploaded images only when vision context is provided.',
-                    'If asked whether you can generate images, say yes and invite a direct image prompt.',
-                    'If asked about chemistry or medical research, frame it as dry-lab research, literature review, simulations, hypotheses, and evidence quality. Never say you can make compounds, run chromatography, titrations, distillation, or physical lab procedures.',
-                    'If asked about papers, projects, discoveries, simulations, findings, or current work, only discuss artifacts that appear in provided memory/context or that can be named from ledgers. If none are visible, say: "I need to check my ledger before I answer that."',
-                    'Do not invent titles, experimental results, physical lab capabilities, cures, peer-reviewed papers, or unpublished findings.',
-                    'Never present speculative simulations as discoveries, cures, or real-world validated results.',
-                    `Channel mode: ${mode}`,
-                ].join('\n');
-                
-                const prompt = `${capabilityGrounding}${memoryBlock}${selfContext}${historyBlock}\n[Discord — ${author}]: ${content}`;
-                const result = await brain.reason(prompt, {
-                    quickResponse: ctx.mode === 'fast',
-                    preferredBrain: 'AURORA',
-                    temperature: 0.55
-                });
-                const response = typeof result === 'string' ? result : (result?.text || result?.response || result?.message || '');
-                return { response, text: response, metadata: result?.metadata };
-            }
-        };
+        const discordBrain = createDiscordConversationAdapter({ system, brain, buildSomaSelfContext });
 
         const discord = new DiscordArbiter({ 
             brain: discordBrain, 
             mnemonic: system.mnemonicArbiter,
+            vision: system.visionArbiter || system.visionProcessing || null,
             system,
             goalPlanner: system.goalPlanner
         });
@@ -703,6 +746,25 @@ export async function loadExtendedSystems(system) {
         console.log('    🛰️  DiscordArbiter ONLINE — mentions, DMs, and monitored channels active');
     } catch (e) {
         console.warn(`    ⚠️ DiscordArbiter skipped: ${e.message}`);
+    }
+
+    // Keep the local image model available across SOMA/system restarts. This is
+    // deliberately non-blocking: cognition and Discord come online immediately
+    // while Bonsai loads its quantized transformer in the background.
+    if (['auto', 'bonsai', 'http'].includes(String(process.env.SOMA_IMAGE_PROVIDER || 'auto').toLowerCase())
+        && (process.env.BONSAI_IMAGE_ENDPOINT || process.env.SOMA_IMAGE_ENDPOINT)) {
+        system.bonsaiStartupPromise = somaImageGeneration.ensureReady({ startupTimeoutMs: 90000 })
+            .then(status => {
+                system.bonsaiImageStatus = { ...status, checkedAt: Date.now() };
+                if (status.ready) console.log(`    🎨 Bonsai Image ONLINE${status.started ? ' (auto-started)' : ''}`);
+                else console.warn(`    ⚠️ Bonsai Image unavailable: ${status.reason}`);
+                return status;
+            })
+            .catch(error => {
+                system.bonsaiImageStatus = { ok: false, ready: false, reason: error.message, checkedAt: Date.now() };
+                console.warn(`    ⚠️ Bonsai Image startup failed: ${error.message}`);
+                return system.bonsaiImageStatus;
+            });
     }
 
     // ── Vision Narrator: SOMA's Proactive Room Narrative Eye ──

@@ -13,6 +13,7 @@
 import alpacaService from './AlpacaService.js';
 import marketDataService from './marketDataService.js';
 import tradeLogger from './TradeLogger.js';
+import trendGuard from './MultiTimeframeTrendGuard.js';
 import notificationService from '../services/NotificationService.js';
 import { signalLibrary } from './SignalLibrary.js';
 import { vwapExecutor } from './VWAPExecutor.js';
@@ -26,11 +27,22 @@ import multiTimeframeFilter from './MultiTimeframeFilter.js';
 import correlationGuard from './CorrelationGuard.js';
 import optionsIVSignal from './OptionsIVSignal.js';
 import tradingPerformanceGuard, { normalizeStrategyId } from './TradingPerformanceGuard.js';
+import { assessDecisionDataFreshness, maxDecisionAgeForTimeframe } from './TradingDataFreshness.js';
+import { resolveActiveStrategyId, resolvePositionStrategyId } from './TradeAttribution.js';
+import { isAuthorizedPaperCandidateSession } from './PaperCandidateSelector.js';
+import { evaluateCompiledStrategyDecision } from './CompiledStrategyBacktester.js';
+import {
+    isAlpacaSpotCrypto,
+    regimeAllowed,
+    TRADING_ECONOMICS_VERSION
+} from './TradingResearchPolicy.js';
 import messageBroker from '../../core/MessageBroker.js';
 // Flush hook wired by routes.js after both modules load (avoids circular import)
 // autonomousTrader → performanceRoutes → scalpingEngine was a potential cycle
 let flushPerformanceSummaryCache = () => {};
 export function _setPerformanceCacheFlush(fn) { flushPerformanceSummaryCache = fn; }
+
+export { assessDecisionDataFreshness };
 
 class AutonomousTrader {
     constructor() {
@@ -40,13 +52,13 @@ class AutonomousTrader {
         this.config = {
             analysisIntervalMs: 60000,   // Run analysis every 60s
             maxPositionPct: 0.10,        // Max 10% of equity per position
-            minConfidence: 0.55,         // Minimum strategy confidence to trade
+            minConfidence: 0.70,         // Minimum high-probability confidence to trade (up from 0.55)
             maxOpenPositions: 3,         // Max concurrent positions
             cooldownMs: 120000,          // 2 min cooldown between trades on same symbol
             maxSessionDrawdownPct: 0.05, // 5% max session drawdown -> auto-stop
-            trailingStopPct: 0.03,       // 3% trailing stop
-            takeProfitPct: 0.06,         // 6% take-profit
-            stopLossPct: 0.02,           // 2% stop-loss
+            trailingStopPct: 0.02,       // 2% trailing stop (activates only after +1.5% profit)
+            takeProfitPct: 0.05,         // 5% take-profit target
+            stopLossPct: 0.015,          // 1.5% stop-loss (3.33:1 Reward-to-Risk ratio)
         };
 
         this._loopTimer = null;
@@ -102,6 +114,7 @@ class AutonomousTrader {
             trailingStopPct: 0.03,
         };
         this._performanceGuardVerdict = null;
+        this._lastCompiledDecisionBar = null;
     }
 
     /**
@@ -170,14 +183,23 @@ class AutonomousTrader {
 
         const runtimeStatus = missionControlRuntime.getStatus?.() || {};
         const runtimeSelectionMode = String(config?.strategySelectionMode || runtimeStatus.strategySelectionMode || 'auto').toLowerCase();
-        const runtimeStrategyId = runtimeStatus.activeStrategy?.strategyId || null;
+        this.strategySelectionMode = runtimeSelectionMode;
+        
+        // BUGFIX: Only leak the active strategy if the symbol matches!
+        const activeStrategy = runtimeStatus.activeStrategy;
+        const activeSymbol = activeStrategy?.symbol ? String(activeStrategy.symbol).toUpperCase() : null;
+        const normSym = String(symbol || '').toUpperCase();
+        const symbolMatches = activeSymbol && (normSym === activeSymbol || normSym.startsWith(activeSymbol));
+        const runtimeStrategyId = symbolMatches ? activeStrategy.strategyId : null;
+
         const selectedPreset = runtimeSelectionMode === 'auto'
-            ? (runtimeStrategyId || missionControlRuntime.selectTradingStrategy())
-            : (preset || runtimeStrategyId || missionControlRuntime.selectTradingStrategy());
+            ? (runtimeStrategyId || missionControlRuntime.selectTradingStrategy(null, symbol))
+            : (preset || runtimeStrategyId || missionControlRuntime.selectTradingStrategy(null, symbol));
 
         const startupGuard = tradingPerformanceGuard.evaluate({
             symbol,
-            strategyId: selectedPreset || this.config.strategyId || 'standard_portfolio'
+            strategyId: selectedPreset || this.config.strategyId || 'standard_portfolio',
+            since: null
         });
         this._performanceGuardVerdict = startupGuard;
         // Paper is the learning sandbox: quarantine is advisory there (the verdict is
@@ -228,12 +250,45 @@ class AutonomousTrader {
 
             // Restore any open paper positions from SQLite for this symbol
             try {
-                const openTrades = tradeLogger.getOpenTrades().filter(t => t.symbol === symbol);
-                const closedTrades = tradeLogger.getClosedTrades().filter(t => t.symbol === symbol);
+                const activeStrategyId = this._getActiveStrategyId();
+                const belongsToSession = trade => trade.symbol === symbol
+                    && normalizeStrategyId(resolvePositionStrategyId(trade)) === activeStrategyId;
+                const openTrades = tradeLogger.getOpenTrades().filter(belongsToSession);
+                const closedTrades = tradeLogger.getClosedTrades().filter(belongsToSession);
                 const totalRealizedPnL = closedTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
                 
                 // Adjust virtual cash balance based on closed trades PnL
                 this._paperPortfolio.balance += totalRealizedPnL;
+                // Restore the authoritative strategy ledger into runtime status.
+                // Otherwise a restart truthfully restores cash but misleadingly
+                // reports zero historical trades and zero wins/losses. Session
+                // P&L intentionally resets when a new process session begins.
+                this._paperPortfolio.trades = [...closedTrades, ...openTrades].map(t => ({
+                    tradeId: t.id,
+                    symbol: t.symbol,
+                    side: t.side,
+                    qty: t.qty,
+                    price: t.entry_price,
+                    fee: Number(t.entry_fee || 0),
+                    pnl: t.pnl,
+                    status: t.status,
+                    timestamp: t.entry_time ? new Date(t.entry_time).getTime() : null
+                }));
+                this._stats.tradesExecuted = closedTrades.length + openTrades.length;
+                this._stats.wins = closedTrades.filter(t => Number(t.pnl) > 0).length;
+                this._stats.losses = closedTrades.filter(t => Number(t.pnl) <= 0).length;
+                this._stats.grossWins = closedTrades.reduce((sum, t) => sum + Math.max(0, Number(t.pnl) || 0), 0);
+                this._stats.grossLosses = closedTrades.reduce((sum, t) => sum + Math.max(0, -(Number(t.pnl) || 0)), 0);
+                this._recentTrades = closedTrades.slice(-20).map(t => ({
+                    pnl: Number(t.pnl) || 0,
+                    isWin: Number(t.pnl) > 0,
+                    ts: t.exit_time ? new Date(t.exit_time).getTime() : Date.now()
+                }));
+                const latestTradeTime = [...closedTrades, ...openTrades]
+                    .map(t => new Date(t.exit_time || t.entry_time || 0).getTime())
+                    .filter(Number.isFinite)
+                    .reduce((latest, value) => Math.max(latest, value), 0);
+                this._stats.lastTradeTime = latestTradeTime || null;
                 
                 for (const t of openTrades) {
                     const posSide = (t.side === 'buy' || t.side === 'long') ? 'long' : 'short';
@@ -242,19 +297,24 @@ class AutonomousTrader {
                         qty: t.qty,
                         entryPrice: t.entry_price,
                         tradeId: t.id,
-                        fees: 0,
-                        openedAt: t.entry_time ? new Date(t.entry_time).getTime() : Date.now()
+                        fees: Number(t.entry_fee || 0),
+                        openedAt: t.entry_time ? new Date(t.entry_time).getTime() : Date.now(),
+                        regime: t.regime || null,
+                        attribution: {
+                            strategyId: normalizeStrategyId(t.strategy),
+                            strategySource: 'sqlite_restore',
+                            runtimeSymbol: t.symbol,
+                            selectedAt: t.entry_time || null
+                        }
                     };
                     // Mirror _executePaperTrade cash flow: longs consumed cash at
                     // entry, shorts credited proceeds — so the eventual close reconciles.
                     if (posSide === 'long') {
-                        this._paperPortfolio.balance -= (t.qty * t.entry_price);
+                        this._paperPortfolio.balance -= (t.qty * t.entry_price) + Number(t.entry_fee || 0);
                     } else {
-                        this._paperPortfolio.balance += (t.qty * t.entry_price);
+                        this._paperPortfolio.balance += (t.qty * t.entry_price) - Number(t.entry_fee || 0);
                     }
                     
-                    // Re-populate tradesExecuted for any active trades
-                    this._stats.tradesExecuted++;
                 }
                 
                 if (openTrades.length > 0) {
@@ -436,8 +496,9 @@ class AutonomousTrader {
             }
 
             // 2. Parallel Fetch: Market Data + Positions + Regime
+            const timeframe = this.config.timeframe || '5Min';
             const [barsResult, positionsResult, regimeResult] = await Promise.allSettled([
-                marketDataService.getBars(this.symbol, '5Min', 100),
+                marketDataService.getBars(this.symbol, timeframe, 100),
                 this._syncPositions(),
                 this._getRegime()
             ]);
@@ -454,7 +515,11 @@ class AutonomousTrader {
             const currentRegime = regimeResult.status === 'fulfilled' ? regimeResult.value : null;
             if (currentRegime) this._lastKnownRegime = currentRegime;
 
-            const quality = marketDataService.validateDataQuality(bars);
+            const timeframeMaxAgeMs = Number(
+                this.config.maxDecisionDataAgeMs
+                || maxDecisionAgeForTimeframe(timeframe)
+            );
+            const quality = marketDataService.validateDataQuality(bars, timeframeMaxAgeMs);
 
             if (!quality.valid) {
                 this._logDecision('DATA', 'SKIP', `Data quality check failed: ${quality.issues.join('; ')}`, { quality });
@@ -464,9 +529,11 @@ class AutonomousTrader {
 
             // Warn when making decisions on stale/cached data
             const hasCachedBars = bars.some(b => b.isCached);
+            const freshness = assessDecisionDataFreshness(bars, {
+                maxAgeMs: timeframeMaxAgeMs
+            });
             if (hasCachedBars) {
-                const ageMs = Date.now() - (bars[bars.length - 1].timestamp || 0);
-                console.warn(`[AutonomousTrader] ⚠️ Using cached market data (${Math.round(ageMs / 1000)}s old) for ${this.symbol}`);
+                console.warn(`[AutonomousTrader] ⚠️ Cached market data is ${Math.round(freshness.ageMs / 1000)}s old for ${this.symbol}`);
             }
 
             const latestBar = bars[bars.length - 1];
@@ -474,7 +541,12 @@ class AutonomousTrader {
             this._adjustInterval(bars); // shorten in high volatility, lengthen when flat
             // Update dynamic stop/target config from current ATR + regime (used by _managePosition)
             const atrPct = this._computeATR(bars);
-            this._activeTradeConfig = this._getRegimeConfig(currentRegime || this._lastKnownRegime, atrPct);
+            const compiledExit = this.config.compiledCandidate?.compiledStrategy?.dsl?.exit;
+            this._activeTradeConfig = compiledExit ? {
+                stopLossPct: Number(compiledExit.stopLossPct),
+                takeProfitPct: Number(compiledExit.takeProfitPct),
+                trailingStopPct: Number(compiledExit.trailingStopPct)
+            } : this._getRegimeConfig(currentRegime || this._lastKnownRegime, atrPct);
             this._recordRuntimeLifecycle('data_quality', 'passed', {
                 bars: bars.length,
                 price: currentPrice,
@@ -485,14 +557,95 @@ class AutonomousTrader {
             // 3. Find existing position (already synced in parallel step)
             const existingPosition = this._openPositions.find(p => p.symbol === this.symbol);
 
+            // Dynamic strategy selection for auto mode when there is no active position
+            if (!existingPosition && this.strategySelectionMode === 'auto') {
+                const regimeToUse = currentRegime || this._lastKnownRegime;
+                const updatedStrategyId = missionControlRuntime.selectTradingStrategy(regimeToUse, this.symbol);
+                if (updatedStrategyId && updatedStrategyId !== this._getActiveStrategyId()) {
+                    console.log(`[AutonomousTrader] 🔄 Regime shifted to ${regimeToUse} — Switching strategy from ${this._getActiveStrategyId()} to ${updatedStrategyId}`);
+                    this._runtimeProfile = missionControlRuntime.getActiveExecutionProfile({
+                        symbol: this.symbol,
+                        preset: updatedStrategyId,
+                        baseConfig: this.config
+                    });
+                    this.config = { ...this.config, ...this._runtimeProfile.config };
+                    global.SOMA_TRADING?.guardrails?.applyTierProfile?.(this.config);
+                }
+            }
+
             // 4. Manage existing position (trailing stop / take-profit)
             if (existingPosition) {
                 const managed = await this._managePosition(existingPosition, currentPrice);
                 if (managed) return; // Position was closed, skip new analysis
             }
 
+            // A reconciler-selected paper session loses entry authority as soon
+            // as its candidate disappears. Existing positions may still be
+            // managed and closed, but a rejected synthetic winner cannot reopen
+            // while the five-minute retirement loop catches up.
+            if (!existingPosition && !isAuthorizedPaperCandidateSession({
+                config: this.config,
+                activeStrategy: missionControlRuntime.getStatus?.().activeStrategy || null,
+                symbol: this.symbol,
+                strategyId: this._getActiveStrategyId()
+            })) {
+                this._lastBlockReason = 'Paper candidate is no longer authorized by sim-to-live reconciliation';
+                this._stats.tradesSkipped++;
+                this._stats.totalDecisions++;
+                this._logDecision('CANDIDATE_AUTH', 'BLOCKED', this._lastBlockReason, {
+                    symbol: this.symbol,
+                    strategyId: this._getActiveStrategyId(),
+                    selectedCandidateKey: this.config.selectedCandidateKey || null
+                });
+                this._recordRuntimeLifecycle('candidate_authorization', 'blocked', {
+                    reason: this._lastBlockReason
+                });
+                return;
+            }
+
+            // Cached bars remain usable for conservatively managing an existing
+            // position, but stale prices must never seed a new market entry.
+            if (!existingPosition && !freshness.validForEntry) {
+                this._logDecision(
+                    'DATA',
+                    'SKIP',
+                    `Market data is too old for entry (${Math.round(freshness.ageMs / 1000)}s; max ${Math.round(freshness.maxAgeMs / 1000)}s)`,
+                    { freshness }
+                );
+                this._recordRuntimeLifecycle('data_freshness', 'blocked', { freshness });
+                return;
+            }
+
             // 5. Run AI analysis — fast path first, heavy path as fallback
-            analysis = await this._getFastAnalysis(this.symbol, bars, currentPrice);
+            const compiledCandidate = this.config.compiledCandidate || null;
+            if (compiledCandidate) {
+                signal = evaluateCompiledStrategyDecision({ bars, candidate: compiledCandidate, position: existingPosition });
+                this._lastSignal = signal;
+                this._lastSignalBreakdown = signal.metadata || null;
+                const executionBar = Number(signal.metadata?.executionBar);
+                const executionBarAge = Number.isFinite(executionBar) ? Date.now() - executionBar : 0;
+                if (signal.action !== 'HOLD' && executionBarAge > 15 * 60_000) {
+                    signal = {
+                        ...signal,
+                        action: 'HOLD',
+                        recommendation: 'HOLD',
+                        reason: `Compiled signal arrived outside the next-bar execution window (${Math.round(executionBarAge / 60000)}m old)`
+                    };
+                }
+                if (signal.action !== 'HOLD' && signal.metadata?.executionBar === this._lastCompiledDecisionBar) {
+                    signal = { ...signal, action: 'HOLD', recommendation: 'HOLD', reason: 'Compiled signal already processed for this execution bar' };
+                } else if (signal.action !== 'HOLD') {
+                    this._lastCompiledDecisionBar = signal.metadata?.executionBar ?? null;
+                }
+                analysis = {
+                    strategy: { recommendation: signal.action, confidence: signal.confidence, thesis: signal.reason },
+                    risk: { score: 50, assessment: 'compiled paper canary' },
+                    sentiment: { score: 0.5 },
+                    quant: { strategy: 'CompiledStrategyDSL', signals: signal.metadata }
+                };
+            } else {
+                analysis = await this._getFastAnalysis(this.symbol, bars, currentPrice);
+            }
 
             if (!analysis) {
                 this._logDecision('ANALYSIS', 'SKIP', 'AI analysis unavailable or rate-limited');
@@ -507,7 +660,37 @@ class AutonomousTrader {
             });
 
             // 6. Generate signal (Regime-Aware)
-            signal = this._generateSignal(analysis, currentPrice, bars, currentRegime);
+            if (!compiledCandidate) signal = this._generateSignal(analysis, currentPrice, bars, currentRegime);
+
+            // A compiled paper candidate has authority only inside the exact
+            // economic/venue/segment contract that qualified it offline.
+            if (compiledCandidate && !existingPosition && signal.action !== 'HOLD') {
+                const compiled = compiledCandidate.compiledStrategy || {};
+                const dsl = compiled.dsl || {};
+                const economicsVersion = compiledCandidate.economicsVersion || compiled.economicsVersion;
+                const allowedRegimes = dsl.entry?.allowedRegimes || ['ALL'];
+                const executionStyle = dsl.execution?.style || 'taker_market';
+                let segmentBlock = null;
+                if (economicsVersion !== TRADING_ECONOMICS_VERSION) {
+                    segmentBlock = `Candidate economics ${economicsVersion || 'missing'} is stale`;
+                } else if (executionStyle !== 'taker_market') {
+                    segmentBlock = `Execution style ${executionStyle} lacks a durable runtime order lifecycle`;
+                } else if (isAlpacaSpotCrypto(this.symbol) && signal.action === 'SELL') {
+                    segmentBlock = 'Alpaca spot crypto is long-only; short entry rejected';
+                } else if (!regimeAllowed(currentRegime || this._lastKnownRegime, allowedRegimes)) {
+                    segmentBlock = `Regime ${currentRegime || this._lastKnownRegime || 'UNKNOWN'} is outside ${allowedRegimes.join(',')}`;
+                }
+                if (segmentBlock) {
+                    signal = { ...signal, action: 'HOLD', recommendation: 'HOLD', reason: segmentBlock };
+                    this._recordRuntimeLifecycle('candidate_segment', 'blocked', {
+                        reason: segmentBlock,
+                        economicsVersion,
+                        executionStyle,
+                        allowedRegimes,
+                        currentRegime
+                    });
+                }
+            }
             this._recordRuntimeLifecycle('signal', signal.action === 'HOLD' ? 'held' : 'candidate', {
                 action: signal.action,
                 confidence: signal.confidence,
@@ -520,9 +703,9 @@ class AutonomousTrader {
             // In RANGING, bearish higher-TF just means "near bottom of range" — that IS the trade.
             // MTF is anti-trend logic; irrelevant when there's no trend.
             const isRanging = currentRegime === 'RANGING' || currentRegime?.includes?.('RANGING');
-            if (signal.action !== 'HOLD' && !isRanging) {
+            if (signal.action !== 'HOLD' && !isRanging && !compiledCandidate) {
                 try {
-                    const mtf = await multiTimeframeFilter.confirmSignal(this.symbol, signal.action);
+                    const mtf = await multiTimeframeFilter.confirmSignal(this.symbol, signal.action, timeframe);
                     if (!mtf.confirmed) {
                         this._stats.signalsHold++;
                         this._stats.totalDecisions++;
@@ -546,6 +729,23 @@ class AutonomousTrader {
                     price: currentPrice
                 });
                 return;
+            }
+
+            // 7b. Multi-Timeframe Trend Guard (Alpha Sentinel): EMA 20/50 alignment.
+            // Blocks counter-trend / chop entries — this is the filter that backtested
+            // at 66.7% WR. Applied to every live BUY/SELL entry. Non-fatal on data gaps.
+            try {
+                const tg = trendGuard.validateTrendAlignment(bars, signal.action);
+                if (!tg.allowed) {
+                    this._stats.signalsHold++;
+                    this._stats.totalDecisions++;
+                    this._logDecision('TREND_GUARD', 'BLOCK', tg.reason, {
+                        signal: signal.action, confidence: signal.confidence, price: currentPrice
+                    });
+                    return;
+                }
+            } catch (tgErr) {
+                console.warn('[AutonomousTrader] Trend guard failed (non-fatal):', tgErr.message);
             }
 
             // 8. Check cooldown
@@ -581,7 +781,8 @@ class AutonomousTrader {
             // 11. Calculate position size (Kelly + Alpha-Decay + Regime-Aware)
             const performanceGuard = tradingPerformanceGuard.evaluate({
                 symbol: this.symbol,
-                strategyId: this._getActiveStrategyId()
+                strategyId: this._getActiveStrategyId(),
+                since: missionControlRuntime.getEvidenceWindow?.() || null
             });
             this._performanceGuardVerdict = performanceGuard;
             if (!performanceGuard.allowed && !this.config.allowQuarantinedStrategy && !this.paperMode) {
@@ -593,14 +794,39 @@ class AutonomousTrader {
                 return;
             }
             if (!performanceGuard.allowed && this.paperMode) {
-                // Advisory in paper: keep trading so the pair's stats can actually change,
-                // but leave the verdict on record for learning and promotion gating.
-                this._logDecision('PERFORMANCE_GUARD', 'ADVISORY', `Quarantine advisory (paper learning continues): ${performanceGuard.reasons.join('; ')}`, performanceGuard);
+                // Auto mode must learn by rotating to another strategy, not by
+                // repeatedly funding a pair whose paper evidence already failed.
+                // Existing positions may still exit; this gate applies only to entries.
+                if (!existingPosition && this.strategySelectionMode === 'auto' && !this.config.allowQuarantinedStrategy) {
+                    const currentStrategyId = this._getActiveStrategyId();
+                    const replacement = missionControlRuntime.selectTradingStrategy(currentRegime, this.symbol);
+                    if (replacement && normalizeStrategyId(replacement) !== currentStrategyId) {
+                        const profile = missionControlRuntime.getActiveExecutionProfile({
+                            symbol: this.symbol,
+                            preset: replacement,
+                            baseConfig: this.config
+                        });
+                        this.applyRuntimeProfile(profile);
+                        this._lastBlockReason = `Rotated ${currentStrategyId} to ${replacement}: ${performanceGuard.reasons.join('; ')}`;
+                        this._logDecision('PERFORMANCE_GUARD', 'ROTATE', this._lastBlockReason, { performanceGuard, replacement });
+                        this._recordRuntimeLifecycle('performance_guard', 'rotated', { performanceGuard, replacement });
+                    } else {
+                        this._lastBlockReason = `Paper entry restricted: ${performanceGuard.reasons.join('; ')}`;
+                        this._logDecision('PERFORMANCE_GUARD', 'BLOCKED', this._lastBlockReason, performanceGuard);
+                        this._recordRuntimeLifecycle('performance_guard', 'blocked', performanceGuard);
+                    }
+                    this._stats.tradesSkipped++;
+                    this._stats.totalDecisions++;
+                    return;
+                }
+                this._logDecision('PERFORMANCE_GUARD', 'ADVISORY', `Paper evidence warning: ${performanceGuard.reasons.join('; ')}`, performanceGuard);
                 this._recordRuntimeLifecycle('performance_guard', 'advisory', performanceGuard);
             }
 
             // 11. Calculate position size (Kelly + Alpha-Decay + Regime-Aware)
-            const sizing = await this._calculatePositionSize(currentPrice, currentRegime, signal.confidence);
+            const sizing = signal.closeOnly && existingPosition
+                ? { qty: Number(existingPosition.qty), value: Number(existingPosition.qty) * currentPrice, closeOnly: true }
+                : await this._calculatePositionSize(currentPrice, currentRegime, signal.confidence);
             if (!sizing || sizing.qty <= 0) {
                 this._logDecision('SIZING', 'SKIP', 'Position size too small or account insufficient', { sizing });
                 this._recordRuntimeLifecycle('sizing', 'blocked', { sizing });
@@ -952,6 +1178,18 @@ class AutonomousTrader {
             reason = `AI swarm says HOLD (conf: ${(compositeConfidence * 100).toFixed(0)}%). No clear directional signal.`;
         }
         
+        // ADX filter for trend/breakout strategies
+        const strategyId = this._getActiveStrategyId();
+        const isTrendOrBreakout = ['full_aggression', 'standard_portfolio', 'swarm_architecture'].includes(strategyId);
+        const detector = global.SOMA_TRADING?.regimeDetector || null;
+        const regimeInfo = detector?.getRegime?.(this.symbol) || {};
+        const adx = regimeInfo.adxProxy !== undefined ? regimeInfo.adxProxy : null;
+
+        if (isTrendOrBreakout && adx !== null && adx < 0.22 && action !== 'HOLD') {
+            action = 'HOLD';
+            reason = `Breakout BLOCKED by ADX Filter — Trend too weak (ADX: ${(adx * 100).toFixed(0)} < 22). Original signal: ${action}`;
+        }
+        
         if (regime) reason += ` [Regime: ${regime}]`;
 
         const signalResult = {
@@ -985,6 +1223,45 @@ class AutonomousTrader {
     /**
      * Simple technical signal from price action (0-1, where >0.5 = bullish)
      */
+    /**
+     * Calculate 14-period Average True Range (ATR)
+     */
+    _calculateATR(bars, period = 14) {
+        if (!bars || bars.length < period + 1) return null;
+        let trSum = 0;
+        for (let i = bars.length - period; i < bars.length; i++) {
+            const high = bars[i].high || bars[i].h || bars[i].close;
+            const low = bars[i].low || bars[i].l || bars[i].close;
+            const prevClose = bars[i - 1].close || bars[i - 1].c || bars[i].close;
+            const tr = Math.max(
+                high - low,
+                Math.abs(high - prevClose),
+                Math.abs(low - prevClose)
+            );
+            trSum += tr;
+        }
+        return trSum / period;
+    }
+
+    /**
+     * ATR Dynamic Volatility-Scaled Stop & Target Config
+     */
+    _getATRTradeConfig(bars, currentPrice) {
+        const atr = this._calculateATR(bars, 14);
+        if (atr && currentPrice > 0) {
+            const atrPct = atr / currentPrice;
+            const stopLossPct = Math.max(0.012, Math.min(0.03, atrPct * 1.5));
+            const takeProfitPct = Math.max(0.045, stopLossPct * 3.0); // Enforce 3.0:1 Reward-to-Risk ratio
+            const trailingStopPct = Math.max(0.015, stopLossPct * 1.2);
+            return { stopLossPct, takeProfitPct, trailingStopPct, atr, atrPct };
+        }
+        return {
+            stopLossPct: this.config.stopLossPct || 0.015,
+            takeProfitPct: this.config.takeProfitPct || 0.05,
+            trailingStopPct: this.config.trailingStopPct || 0.02
+        };
+    }
+
     _getTechnicalSignal(bars, currentPrice) {
         if (!bars || bars.length < 20) return 0.5;
 
@@ -1035,6 +1312,12 @@ class AutonomousTrader {
         const upper = sma + 2 * std;
         const lower = sma - 2 * std;
 
+        // Volume spike check (1.3x average volume)
+        const volumes = bars.slice(-20).map(b => b.volume || b.v || 0).filter(Boolean);
+        const avgVolume = volumes.length ? volumes.reduce((s, v) => s + v, 0) / volumes.length : 0;
+        const currentVolume = bars[bars.length - 1].volume || bars[bars.length - 1].v || 0;
+        const volumeSpike = avgVolume > 0 ? (currentVolume > avgVolume * 1.3) : false;
+
         // RSI(14)
         let gains = 0, losses = 0;
         for (let i = bars.length - 14; i < bars.length; i++) {
@@ -1051,13 +1334,21 @@ class AutonomousTrader {
 
         // Buy the dip: lower band OR oversold RSI
         if (currentPrice <= lower || rsi < 35) {
-            const conf = Math.min(0.9, 0.58 + (35 - Math.min(rsi, 35)) / 100 + Math.max(0, (lower - currentPrice) / (std || 1)) * 0.08);
-            return { action: 'BUY', confidence: conf, reason: `Mean-reversion BUY — oversold (RSI ${rsi.toFixed(0)}, ${pct}% of band)`, bandScore };
+            let conf = Math.min(0.9, 0.58 + (35 - Math.min(rsi, 35)) / 100 + Math.max(0, (lower - currentPrice) / (std || 1)) * 0.08);
+            if (volumeSpike) {
+                conf = Math.min(0.95, conf + 0.10); // Volume spike boost
+            }
+            const volStr = volumeSpike ? ' [Volume Spike Confirmation]' : '';
+            return { action: 'BUY', confidence: conf, reason: `Mean-reversion BUY — oversold (RSI ${rsi.toFixed(0)}, ${pct}% of band)${volStr}`, bandScore };
         }
         // Sell the rip: upper band OR overbought RSI
         if (currentPrice >= upper || rsi > 65) {
-            const conf = Math.min(0.9, 0.58 + (Math.max(rsi, 65) - 65) / 100 + Math.max(0, (currentPrice - upper) / (std || 1)) * 0.08);
-            return { action: 'SELL', confidence: conf, reason: `Mean-reversion SELL — overbought (RSI ${rsi.toFixed(0)}, ${pct}% of band)`, bandScore };
+            let conf = Math.min(0.9, 0.58 + (Math.max(rsi, 65) - 65) / 100 + Math.max(0, (currentPrice - upper) / (std || 1)) * 0.08);
+            if (volumeSpike) {
+                conf = Math.min(0.95, conf + 0.10); // Volume spike boost
+            }
+            const volStr = volumeSpike ? ' [Volume Spike Confirmation]' : '';
+            return { action: 'SELL', confidence: conf, reason: `Mean-reversion SELL — overbought (RSI ${rsi.toFixed(0)}, ${pct}% of band)${volStr}`, bandScore };
         }
         return { action: 'HOLD', confidence: 0.4, reason: `Mean-reversion HOLD — mid-band (${pct}%, RSI ${rsi.toFixed(0)}), waiting for an extreme`, bandScore };
     }
@@ -1082,15 +1373,10 @@ class AutonomousTrader {
             if (regime === 'VOLATILE') maxPct *= 0.5;
             if (regime === 'TRENDING_BULL' || regime === 'TRENDING_BEAR') maxPct *= 1.2;
             if (regime === 'RANGING' || regime?.includes?.('RANGING')) {
-                if (this.preset === 'BTC_NATIVE') {
-                    if (!this.paperMode) {
-                        console.warn(`[AutonomousTrader] 🛑 Skipping BTC_NATIVE trade — strategy underperforms in RANGING regime.`);
-                        return { qty: 0, reason: 'BTC_NATIVE filtered out in RANGING regime (prevents spread bleed)' };
-                    }
-                    // Paper: a hard block here froze BTC/SOL for 10 straight days (Jun 2026)
-                    // and starved the promotion-ladder trade-count gates. Zero trades = zero
-                    // learning signal — trade small in chop instead of not at all.
-                    maxPct *= 0.25;
+                const activeId = this._getActiveStrategyId();
+                if (activeId === 'btc_native' || activeId === 'full_aggression') {
+                    console.warn(`[AutonomousTrader] 🛑 Skipping momentum strategy (${activeId}) entry in RANGING regime.`);
+                    return { qty: 0, reason: `Strategy ${activeId} disabled in RANGING regime (prevents momentum chop loss)` };
                 } else {
                     maxPct *= 0.8; // Reduce exposure for all other strategies in chop
                 }
@@ -1221,20 +1507,26 @@ class AutonomousTrader {
      *   VOLATILE: even tighter stops (spike protection)
      */
     _getRegimeConfig(regime, atrPct) {
+        const isCrypto = this.symbol && (this.symbol.includes('-') || this.symbol.includes('USDT'));
         const atr = atrPct || 0.015;
         const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
         let stop, target, trail;
+        
+        // Crypto needs wider stops to survive standard noise (1.2% min vs 0.5% for stocks)
+        const minStop = isCrypto ? 0.012 : 0.005;
+        const maxStop = isCrypto ? 0.040 : 0.025;
+
         if (regime && (regime.includes('TRENDING') || regime === 'TRENDING_BULL' || regime === 'TRENDING_BEAR')) {
-            stop  = clamp(2.0 * atr, 0.010, 0.050);
+            stop  = clamp(2.0 * atr, minStop * 1.5, maxStop * 1.5);
             target = stop * 4.0;
             trail  = stop * 1.5;
         } else if (regime === 'VOLATILE' || regime?.includes?.('VOLATILE')) {
-            stop  = clamp(1.0 * atr, 0.008, 0.040);
+            stop  = clamp(1.0 * atr, minStop * 1.2, maxStop * 1.5);
             target = stop * 2.0;
             trail  = stop * 1.0;
         } else {
             // RANGING or unknown: tight mean-reversion targets
-            stop  = clamp(1.5 * atr, 0.005, 0.025);
+            stop  = clamp(1.5 * atr, minStop, maxStop);
             target = stop * 2.5;
             trail  = stop * 1.2;
         }
@@ -1408,11 +1700,15 @@ class AutonomousTrader {
      */
     async _executePaperOrder(signal, sizing, currentPrice) {
         const side = signal.action.toLowerCase();
+        const existingPaperPosition = this._paperPortfolio.positions[this.symbol];
+        const isClosingPosition = (side === 'buy' && existingPaperPosition?.side === 'short')
+            || (side === 'sell' && existingPaperPosition?.side === 'long');
         const fill = paperExecutionSimulator.simulateFill({
             symbol: this.symbol,
             side,
-            qty: sizing.qty,
-            referencePrice: currentPrice
+            qty: isClosingPosition ? existingPaperPosition.qty : sizing.qty,
+            referencePrice: currentPrice,
+            allowPartialFill: !isClosingPosition
         });
         if (!fill.accepted) {
             this._logDecision('PAPER', 'REJECTED', `Paper broker rejected order: ${fill.reason}`, { fill });
@@ -1423,8 +1719,6 @@ class AutonomousTrader {
         const fillPrice = fill.filledPrice;
         const filledQty = fill.filledQty;
         const cost = fillPrice * filledQty + fill.fee;
-        const existingPaperPosition = this._paperPortfolio.positions[this.symbol];
-
         if (side === 'buy' && existingPaperPosition?.side !== 'short' && cost > this._paperPortfolio.balance) {
             this._logDecision('PAPER', 'SKIP', `Insufficient virtual balance ($${this._paperPortfolio.balance.toFixed(2)} < $${cost.toFixed(2)})`);
             return null;
@@ -1445,6 +1739,7 @@ class AutonomousTrader {
                         exitPrice: fillPrice,
                         pnl,
                         pnlPct,
+                        exitFee: fill.fee,
                         reason: 'paper_signal_close'
                     });
                 } catch (logErr) {
@@ -1482,6 +1777,7 @@ class AutonomousTrader {
                         filledPrice: fillPrice,
                         expectedPrice: currentPrice,
                         slippagePct: fill.slippagePct,
+                        entryFee: fill.fee,
                         strategy: attribution.strategyId,
                         attribution,
                         regime: this._lastSignal?.regime || null,
@@ -1490,7 +1786,7 @@ class AutonomousTrader {
                 } catch (logErr) {
                     console.warn('[AutonomousTrader] Paper SQLite entry failed:', logErr.message);
                 }
-                this._paperPortfolio.positions[this.symbol] = { side: 'long', qty: filledQty, entryPrice: fillPrice, tradeId, fees: fill.fee, openedAt: Date.now(), attribution: this._tradeAttribution() };
+                this._paperPortfolio.positions[this.symbol] = { side: 'long', qty: filledQty, entryPrice: fillPrice, tradeId, fees: fill.fee, openedAt: Date.now(), regime: this._lastKnownRegime, attribution: this._tradeAttribution() };
                 this._recordRuntimeLifecycle('paper_order_fill', 'open', {
                     tradeId,
                     orderId: mockOrder.id,
@@ -1527,6 +1823,7 @@ class AutonomousTrader {
                         exitPrice: fillPrice,
                         pnl,
                         pnlPct,
+                        exitFee: fill.fee,
                         reason: 'paper_signal_close'
                     });
                 } catch (logErr) {
@@ -1565,6 +1862,7 @@ class AutonomousTrader {
                         filledPrice: fillPrice,
                         expectedPrice: currentPrice,
                         slippagePct: fill.slippagePct,
+                        entryFee: fill.fee,
                         strategy: attribution.strategyId,
                         attribution,
                         regime: this._lastSignal?.regime || null,
@@ -1573,7 +1871,7 @@ class AutonomousTrader {
                 } catch (logErr) {
                     console.warn('[AutonomousTrader] Paper SQLite entry failed:', logErr.message);
                 }
-                this._paperPortfolio.positions[this.symbol] = { side: 'short', qty: filledQty, entryPrice: fillPrice, tradeId, fees: fill.fee, openedAt: Date.now(), attribution: this._tradeAttribution() };
+                this._paperPortfolio.positions[this.symbol] = { side: 'short', qty: filledQty, entryPrice: fillPrice, tradeId, fees: fill.fee, openedAt: Date.now(), regime: this._lastKnownRegime, attribution: this._tradeAttribution() };
                 this._recordRuntimeLifecycle('paper_order_fill', 'open', {
                     tradeId,
                     orderId: mockOrder.id,
@@ -1614,6 +1912,8 @@ class AutonomousTrader {
             unrealizedPnl: 0, unrealizedPnlPct: 0,
             marketValue: pos.qty * fillPrice,
             openedAt: pos.openedAt || null,
+            regime: pos.regime || null,
+            attribution: pos.attribution || null,
         }));
         this._positionCacheTime = 0;
 
@@ -1638,6 +1938,8 @@ class AutonomousTrader {
                 unrealizedPnlPct: 0,
                 marketValue: pos.qty * pos.entryPrice,
                 openedAt: pos.openedAt || null,
+                regime: pos.regime || null,
+                attribution: pos.attribution || null,
             }));
             return;
         }
@@ -1686,8 +1988,8 @@ class AutonomousTrader {
         const cfg = this._activeTradeConfig;
         const trailingStopPct = cfg.trailingStopPct || 0.03;
 
-        // Time-based exit: close stale positions after maxPositionAgeMs (default 3h)
-        const maxAgeMs = this.config.maxPositionAgeMs || 3 * 60 * 60 * 1000;
+        // Time-based exit: close stale positions after maxPositionAgeMs (default 12h)
+        const maxAgeMs = this.config.maxPositionAgeMs || 12 * 60 * 60 * 1000;
         const openedAt = position.openedAt || 0;
         if (openedAt && (Date.now() - openedAt) > maxAgeMs) {
             const ageMin = Math.round((Date.now() - openedAt) / 60000);
@@ -1696,6 +1998,16 @@ class AutonomousTrader {
             this._positionHighWater.delete(sym);
             await this._closePosition(position, 'TIME_EXIT', currentPrice);
             return true;
+        }
+
+        // If trade is open >3 hours and in profit, set high-water mark to convert to trailing breakeven instead of TIME_EXIT
+        if (openedAt && (Date.now() - openedAt) > (3 * 60 * 60 * 1000) && pnlPct > 0.001) {
+            if (!this._positionHighWater.has(sym)) {
+                this._positionHighWater.set(sym, pnlPct);
+                this._logDecision('MANAGE', 'TRAILING_BREAKEVEN',
+                    `Trade open 3h+ and in profit (+${(pnlPct * 100).toFixed(2)}%) — armed Trailing Breakeven Stop instead of TIME_EXIT`,
+                    { position, currentPrice, pnlPct });
+            }
         }
 
         // Update high-water mark when position is profitable
@@ -1758,10 +2070,31 @@ class AutonomousTrader {
             if (pos) {
                 // position.currentPrice starts at entryPrice in paper mode and only
                 // updates on stream ticks — prefer the manage cycle's market price.
-                const fillPrice = fillPriceOverride ?? position.currentPrice;
-                const pnl = pos.side === 'long'
+                const referencePrice = fillPriceOverride ?? position.currentPrice;
+                const closeSide = pos.side === 'long' ? 'sell' : 'buy';
+                const fill = paperExecutionSimulator.simulateFill({
+                    symbol: position.symbol,
+                    side: closeSide,
+                    qty: pos.qty,
+                    referencePrice,
+                    allowPartialFill: false
+                });
+                if (!fill.accepted) {
+                    this._logDecision('PAPER', 'REJECTED', `Paper close rejected: ${fill.reason}`, { reason, fill });
+                    this._recordRuntimeLifecycle('position_close', 'rejected', {
+                        tradeId: pos.tradeId || null,
+                        reason,
+                        fill
+                    });
+                    return null;
+                }
+                const fillPrice = fill.filledPrice;
+                const grossPnl = pos.side === 'long'
                     ? (fillPrice - pos.entryPrice) * pos.qty
                     : (pos.entryPrice - fillPrice) * pos.qty;
+                const entryFee = Number(pos.fees || 0);
+                const exitFee = Number(fill.fee || 0);
+                const pnl = grossPnl - entryFee - exitFee;
                 const pnlPct = pnl / (pos.entryPrice * pos.qty);
 
                 // Adaptive signal weight update — teach the library what worked/didn't
@@ -1772,8 +2105,8 @@ class AutonomousTrader {
                 }
 
                 // UCB1 strategy outcome — teach mission control which profile performs best
-                const activeStrategyId = this._runtimeProfile?.activeStrategy?.strategyId || this.preset || 'standard_portfolio';
-                missionControlRuntime.recordStrategyOutcome(activeStrategyId, pnlPct, this._lastKnownRegime, 'live');
+                const entryStrategyId = resolvePositionStrategyId(pos, position, this._getActiveStrategyId());
+                missionControlRuntime.recordStrategyOutcome(entryStrategyId, pnlPct, position.regime || this._lastKnownRegime, 'live');
 
                 // A/B test outcome
                 const abEntry = this._abTestArmAtEntry.get(position.symbol);
@@ -1783,9 +2116,9 @@ class AutonomousTrader {
                 }
 
                 if (pos.side === 'long') {
-                    this._paperPortfolio.balance += fillPrice * pos.qty;
+                    this._paperPortfolio.balance += fillPrice * pos.qty - exitFee;
                 } else {
-                    this._paperPortfolio.balance -= fillPrice * pos.qty;
+                    this._paperPortfolio.balance -= fillPrice * pos.qty + exitFee;
                 }
                 this._stats.sessionPnL += pnl;
                 this._recordTradeResult(pnl);
@@ -1796,6 +2129,7 @@ class AutonomousTrader {
                         exitPrice: fillPrice,
                         pnl,
                         pnlPct,
+                        exitFee,
                         reason
                     });
                 } catch (logErr) {
@@ -1807,13 +2141,18 @@ class AutonomousTrader {
                     side: pos.side,
                     qty: pos.qty,
                     exitPrice: fillPrice,
+                    referencePrice,
+                    entryFee,
+                    exitFee,
+                    slippagePct: fill.slippagePct,
                     pnl,
                     pnlPct,
                     reason
                 });
                 this._logDecision('TRADE', pos.side === 'long' ? 'SELL' : 'BUY',
                     `[PAPER] Closed ${pos.side} ${pos.qty} ${position.symbol} — ${reason} (P&L: $${pnl.toFixed(2)})`, {
-                        symbol: position.symbol, pnl, reason,
+                        symbol: position.symbol, pnl, grossPnl, entryFee, exitFee,
+                        slippagePct: fill.slippagePct, reason,
                         paperBalance: this._paperPortfolio.balance.toFixed(2),
                         confidence: 1.0, status: 'filled'
                     });
@@ -1855,8 +2194,8 @@ class AutonomousTrader {
             }
 
             // UCB1 strategy outcome
-            const activeStrategyId = this._runtimeProfile?.activeStrategy?.strategyId || this.preset || 'standard_portfolio';
-            missionControlRuntime.recordStrategyOutcome(activeStrategyId, (position.unrealizedPnlPct || 0) / 100, this._lastKnownRegime, 'live');
+            const entryStrategyId = resolvePositionStrategyId(null, position, this._getActiveStrategyId());
+            missionControlRuntime.recordStrategyOutcome(entryStrategyId, (position.unrealizedPnlPct || 0) / 100, position.regime || this._lastKnownRegime, 'live');
 
             // A/B test outcome
             const abEntry = this._abTestArmAtEntry.get(position.symbol);
@@ -2052,13 +2391,12 @@ class AutonomousTrader {
     }
 
     _getActiveStrategyId() {
-        return normalizeStrategyId(
-            this.preset
-            || this._runtimeProfile?.activeStrategy?.strategyId
-            || this._runtimeProfile?.preset
-            || this.config.strategyId
-            || 'standard_portfolio'
-        );
+        return resolveActiveStrategyId({
+            strategySelectionMode: this.strategySelectionMode,
+            preset: this.preset,
+            runtimeProfile: this._runtimeProfile,
+            config: this.config
+        });
     }
 
     _tradeAttribution() {
@@ -2140,7 +2478,8 @@ class AutonomousTrader {
             runtimeProfile: this._runtimeProfile,
             performanceGuard: this._performanceGuardVerdict || tradingPerformanceGuard.evaluate({
                 symbol: this.symbol,
-                strategyId: this._getActiveStrategyId()
+                strategyId: this._getActiveStrategyId(),
+                since: missionControlRuntime.getEvidenceWindow?.() || null
             }),
             guardrailsState: global.SOMA_TRADING?.guardrails?.getStatus() || null
         };

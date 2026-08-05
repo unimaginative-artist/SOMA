@@ -12,6 +12,9 @@ import strategyHuntDaemon from '../../daemons/StrategyHuntDaemon.js';
 import notificationService from '../services/NotificationService.js';
 import lowLatencyEngine from './lowLatencyEngine.js';
 import missionControlRuntime from './MissionControlRuntime.js';
+import tradeLogger from './TradeLogger.js';
+import { normalizeStrategyId } from './TradingPerformanceGuard.js';
+import { selectExecutablePaperCandidate, selectQualifiedOfflinePaperCandidate } from './PaperCandidateSelector.js';
 
 const router = express.Router();
 
@@ -95,6 +98,23 @@ function resolveAutonomousStartRequest({ symbol, preset, config = {} } = {}) {
 // re-engaging real money always requires an explicit human start.
 
 const INTENT_PATH = path.join(process.cwd(), 'data', 'trading', 'trading-intent.json');
+const SIM_TO_LIVE_REPORT_PATH = path.join(process.cwd(), 'data', 'trading', 'sim-to-live-report.json');
+const OFFLINE_EVOLUTION_REPORT_PATH = path.join(process.cwd(), 'data', 'market-lab', 'offline-evolution-latest.json');
+const AUTOMATED_CANDIDATE_SOURCES = new Set(['mission_control_sim_to_live', 'offline_forward_qualified']);
+
+function currentAutomatedCandidate() {
+    try {
+        const report = JSON.parse(fs.readFileSync(SIM_TO_LIVE_REPORT_PATH, 'utf8'));
+        const candidate = selectExecutablePaperCandidate(report || {});
+        if (candidate) return { candidate, selectedBy: 'mission_control_sim_to_live' };
+    } catch {}
+    try {
+        const report = JSON.parse(fs.readFileSync(OFFLINE_EVOLUTION_REPORT_PATH, 'utf8'));
+        const candidate = selectQualifiedOfflinePaperCandidate(report || {});
+        if (candidate) return { candidate, selectedBy: 'offline_forward_qualified' };
+    } catch {}
+    return null;
+}
 
 function _readIntent() {
     try {
@@ -135,6 +155,17 @@ async function resumeEngagedSessions() {
             console.warn(`[Autonomous] ⏭ Skipping auto-resume of ${sym} — not explicitly paper mode. Live resume requires a human.`);
             continue;
         }
+        if (AUTOMATED_CANDIDATE_SOURCES.has(config?.selectedBy)) {
+            const current = currentAutomatedCandidate();
+            const sameCandidate = current
+                && current.selectedBy === config.selectedBy
+                && (!config.selectedCandidateKey || current.candidate.key === config.selectedCandidateKey);
+            if (!sameCandidate) {
+                console.warn(`[Autonomous] ⏭ Retiring stale automated intent for ${sym}; its economic evidence is no longer current.`);
+                recordDisengaged(sym);
+                continue;
+            }
+        }
         try {
             const existing = _registry.get(sym);
             if (existing?.isRunning) continue;
@@ -148,10 +179,112 @@ async function resumeEngagedSessions() {
         }
     }
     ensureStreaming();
+    try {
+        if (!tradeLogger.db) tradeLogger.initialize();
+        const activeOrderIds = [..._registry.values()].flatMap(instance =>
+            (instance.getStatus?.().openPositions || []).map(position => position.orderId || position.order_id).filter(Boolean)
+        );
+        const reconciliation = tradeLogger.reconcileStaleOpenTrades({ activeOrderIds });
+        if (reconciliation.reconciled.length) {
+            console.warn(`[Autonomous] Reconciled ${reconciliation.reconciled.length} stale trade row(s) not present in runtime state.`);
+        }
+    } catch (error) {
+        console.warn('[Autonomous] Trade-state reconciliation failed:', error.message);
+    }
 }
 
 // Give the bootstrap and extended loaders time to settle before resuming.
-setTimeout(() => { resumeEngagedSessions().catch(() => {}); }, 75_000);
+const resumeIntentTimer = setTimeout(() => { resumeEngagedSessions().catch(() => {}); }, 75_000);
+resumeIntentTimer.unref?.();
+
+/**
+ * Keep one exact sim-to-live candidate gathering paper evidence. Previously the
+ * queue nominated pairs such as standard_portfolio/TLT while the durable intent
+ * kept running full_aggression/ETH, so the candidate could never graduate.
+ */
+export async function reconcilePaperCandidateExecution() {
+    const current = currentAutomatedCandidate();
+    const candidate = current?.candidate || null;
+    const selectedBy = current?.selectedBy || null;
+    if (!candidate) {
+        const intent = _readIntent();
+        const retired = [];
+        const deferred = [];
+        for (const [runningSymbol, instance] of _registry.entries()) {
+            const engaged = intent.engaged?.[runningSymbol];
+            if (!instance?.isRunning || !AUTOMATED_CANDIDATE_SOURCES.has(engaged?.config?.selectedBy)) continue;
+            if ((instance.getStatus?.().openPositions || []).length > 0) {
+                deferred.push(runningSymbol);
+                continue;
+            }
+            instance.stop();
+            _registry.delete(runningSymbol);
+            recordDisengaged(runningSymbol);
+            retired.push(runningSymbol);
+        }
+        if (retired.length) {
+            ensureStreaming();
+            flushCache();
+        }
+        return {
+            skipped: true,
+            reason: deferred.length ? 'no_candidate_waiting_for_flat' : 'no_paper_candidate',
+            retired,
+            deferred
+        };
+    }
+
+    const symbol = normalizeTradeSymbol(candidate.symbol);
+    const strategyId = String(candidate.strategyId).trim().toLowerCase();
+    const existing = _registry.get(symbol);
+    if (existing?.isRunning
+        && normalizeStrategyId(existing._getActiveStrategyId?.() || existing.preset) === normalizeStrategyId(strategyId)) {
+        return { skipped: true, reason: 'candidate_already_running', symbol, strategyId };
+    }
+
+    // Retire only prior automatically-selected sessions, and never while they
+    // still own a position. Human/manual sessions remain untouched.
+    const intent = _readIntent();
+    for (const [runningSymbol, instance] of _registry.entries()) {
+        const engaged = intent.engaged?.[runningSymbol];
+        if (!instance?.isRunning || !AUTOMATED_CANDIDATE_SOURCES.has(engaged?.config?.selectedBy)) continue;
+        if ((instance.getStatus?.().openPositions || []).length > 0) {
+            return { skipped: true, reason: 'prior_candidate_has_open_position', symbol: runningSymbol };
+        }
+        instance.stop();
+        _registry.delete(runningSymbol);
+        recordDisengaged(runningSymbol);
+    }
+
+    const instance = getOrCreateInstance(symbol);
+    const config = {
+        forcePaper: true,
+        paperMode: true,
+        strategySelectionMode: 'manual',
+        selectedBy,
+        selectedStrategyId: strategyId,
+        selectedCandidateId: candidate.id || null,
+        selectedCandidateKey: candidate.key || null,
+        compiledCandidate: selectedBy === 'offline_forward_qualified' ? candidate : null
+    };
+    const result = await instance.start(symbol, strategyId, config);
+    if (!result?.success) return { success: false, symbol, strategyId, error: result?.error || 'start_failed' };
+    recordEngaged(symbol, strategyId, config);
+    ensureStreaming();
+    flushCache(symbol);
+    return { success: true, symbol, strategyId, candidateId: candidate.id || null };
+}
+
+const candidateExecutionTimer = setInterval(() => {
+    reconcilePaperCandidateExecution().catch(error => {
+        console.warn('[Autonomous] Candidate execution reconciliation failed:', error.message);
+    });
+}, 5 * 60_000);
+candidateExecutionTimer.unref?.();
+const initialCandidateExecution = setTimeout(() => {
+    reconcilePaperCandidateExecution().catch(() => {});
+}, 90_000);
+initialCandidateExecution.unref?.();
 
 // ─── Streaming tick bridge ────────────────────────────────────────────────────
 // lowLatencyEngine ticks (Alpaca crypto WS, ~ms latency) feed each running
@@ -480,6 +613,36 @@ router.post('/hunt/unlock', (req, res) => {
  * The singleton (autonomousTrader default export) is never started; all active
  * traders live in _registry. These exports let websocket.js stay current.
  */
+/**
+ * Boot auto-start: engage paper trading on the given symbols so the loop survives
+ * restarts instead of going dormant (root cause of "no trades since July 20" — the
+ * singleton is never started and nothing re-engaged it after a restart). Called
+ * from extended.js Phase D once the trading pipeline is loaded.
+ */
+export async function autoStartTrading(symbols = ['ETH-USD']) {
+    const results = [];
+    for (const symbol of symbols) {
+        try {
+            const resolved = resolveAutonomousStartRequest({ symbol, preset: null, config: { paperMode: true } });
+            const sym = resolved.symbol;
+            const existing = _registry.get(sym);
+            if (existing?.isRunning) { results.push({ symbol: sym, alreadyRunning: true }); continue; }
+            const instance = getOrCreateInstance(sym);
+            const result = await instance.start(sym, resolved.preset, resolved.config || {});
+            if (result?.success) {
+                recordEngaged(sym, resolved.preset, resolved.config || {});
+                ensureStreaming();
+                results.push({ symbol: sym, started: true });
+            } else {
+                results.push({ symbol: sym, started: false, error: result?.error || 'unknown' });
+            }
+        } catch (e) {
+            results.push({ symbol, started: false, error: e.message });
+        }
+    }
+    return results;
+}
+
 export function getAggregateStatus() {
     if (_registry.size === 0) return { success: true, isRunning: false };
     const instances = [..._registry.entries()].map(([sym, inst]) => ({
