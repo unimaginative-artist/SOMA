@@ -78,6 +78,26 @@ function combineSignal(signal, timeoutMs) {
 class DeepSeekGateway {
     constructor() {
         this.endpoint = process.env.DEEPSEEK_ENDPOINT || ENDPOINT;
+        // Background concurrency limiter. Autonomous cognition (swarms) can fire
+        // 15+ concurrent calls and rate-limit the whole account, starving the
+        // user's chat (same greeting: 7s idle vs 55s under load). Cap background
+        // calls so the account stays under the rate limit and HUMAN calls (chat)
+        // always have headroom — human requests are never limited here.
+        this._bgInFlight = 0;
+        this._bgQueue = [];
+        this._bgMax = Math.max(1, Number(process.env.SOMA_DS_BG_CONCURRENCY || 3));
+    }
+
+    async _acquireBackgroundSlot() {
+        if (this._bgInFlight < this._bgMax) { this._bgInFlight++; return; }
+        await new Promise(resolve => this._bgQueue.push(resolve));
+        this._bgInFlight++;
+    }
+
+    _releaseBackgroundSlot() {
+        this._bgInFlight = Math.max(0, this._bgInFlight - 1);
+        const next = this._bgQueue.shift();
+        if (next) next();
     }
 
     _loadState() {
@@ -164,6 +184,8 @@ class DeepSeekGateway {
         if (toolChoice) body.tool_choice = toolChoice;
         if (responseFormat) body.response_format = responseFormat;
 
+        const _bg = priority === 'background';
+        if (_bg) await this._acquireBackgroundSlot();
         try {
             const response = await fetch(this.endpoint, {
                 method: 'POST',
@@ -186,6 +208,8 @@ class DeepSeekGateway {
         } catch (error) {
             costLedger.releaseReservation(prepared.reservation.id);
             throw error;
+        } finally {
+            if (_bg) this._releaseBackgroundSlot();
         }
     }
 
