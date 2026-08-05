@@ -20,6 +20,25 @@ import { loadCOSSystems } from '../server/loaders/cos.js';
 import { BrainBridge } from '../server/BrainBridge.js';
 import { registry } from '../server/SystemRegistry.js';
 import { SomaAgenticExecutor } from './SomaAgenticExecutor.js';
+import { CognitiveRuntime } from './CognitiveRuntime.js';
+import { SpecialistRegistry, registerCoreSpecialists } from './SpecialistRegistry.js';
+import { AgencyMetrics } from './AgencyMetrics.js';
+import { ChatRuntimeAdapter } from './ChatRuntimeAdapter.js';
+import { SomaStateGateway } from './SomaStateGateway.js';
+import { CanonicalStateProjector } from './CanonicalStateProjector.js';
+import { SocialIdentityService } from './SocialIdentityService.js';
+import { AudioDaemon } from './AudioDaemon.js';
+import { WorkingMemory } from './WorkingMemory.js';
+import { SomaBeingKernel } from './SomaBeingKernel.js';
+import { EmbodimentRuntime } from './EmbodimentRuntime.js';
+import { RotarySensorHead } from './RotarySensorHead.js';
+import { ProceduralMemory } from './ProceduralMemory.js';
+import { SkillCompiler } from './SkillCompiler.js';
+import { DesktopWorldModel } from './DesktopWorldModel.js';
+import { AdaptiveCognitionPolicy } from './AdaptiveCognitionPolicy.js';
+import { ProactivePresence } from './ProactivePresence.js';
+import { AutonomyReliability } from './AutonomyReliability.js';
+import { RealityLoopDirector } from './RealityLoopDirector.js';
 import { wireSelfModificationRuntime } from './SelfModificationRuntime.js';
 import { ExpertiseRegistry } from './ExpertiseRegistry.js';
 import { ComputerControlArbiter } from '../arbiters/ComputerControlArbiter.js';
@@ -29,6 +48,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const AutonomousHeartbeat = require('../server/services/AutonomousHeartbeat.cjs');
+const { AgencyProvingGround } = require('./AgencyProvingGround.cjs');
 
 export class SomaBootstrapV2 {
     constructor() {
@@ -93,14 +113,20 @@ export class SomaBootstrapV2 {
                 // Get tools manifest to pass to worker
                 const toolsManifest = this.system.toolRegistry?.getToolsManifest() || [];
 
-                // Start worker non-blocking
-                bridge.startWorker({ toolsManifest })
-                    .then(() => registry.markReady('BrainWorker'))
-                    .catch(err => {
-                        registry.markFailed('BrainWorker', err);
-                        console.warn('[SOMA V2] BrainWorker failed to start, using direct brain:', err.message);
-                    });
-                console.log('[SOMA V2] BrainBridge active — worker starting in background');
+                // Start worker non-blocking (gated: SOMA_BRAIN_WORKER=off routes
+                // reasoning to the main-thread brain, where DeepSeek + grounding live)
+                if (process.env.SOMA_BRAIN_WORKER === 'off') {
+                    registry.markReady('BrainWorker');
+                    console.log('[SOMA V2] BrainWorker DISABLED (SOMA_BRAIN_WORKER=off) — using direct main-thread brain');
+                } else {
+                    bridge.startWorker({ toolsManifest })
+                        .then(() => registry.markReady('BrainWorker'))
+                        .catch(err => {
+                            registry.markFailed('BrainWorker', err);
+                            console.warn('[SOMA V2] BrainWorker failed to start, using direct brain:', err.message);
+                        });
+                    console.log('[SOMA V2] BrainBridge active — worker starting in background');
+                }
             }
 
             // PHASE 2.3: Cognitive Operating System (COS) - CNS & Perception
@@ -242,6 +268,47 @@ export class SomaBootstrapV2 {
     }
 
     async _wireAutonomyRuntime(system) {
+        if (!system.stateGateway) {
+            system.stateGateway = await new SomaStateGateway().initialize();
+        }
+        if (!system.workingMemory) {
+            system.workingMemory = new WorkingMemory({ gateway: system.stateGateway });
+            await system.workingMemory.load();
+            system.workingMemory.startAutosave();
+        }
+        if (system.workingMemory && !system.workingMemory.gateway) system.workingMemory.gateway = system.stateGateway;
+        if (!system.beingKernel) {
+            system.beingKernel = await new SomaBeingKernel().initialize(system);
+            console.log('[SOMA V2] ✅ SomaBeingKernel wired — one persistent identity, attention, commitment, and experience state');
+        }
+        if (!system.stateProjector) {
+            system.stateProjector = new CanonicalStateProjector({ system });
+            system.stateProjector.start();
+        }
+        if (!system.socialIdentity && system.visualObjectMemory) {
+            system.socialIdentity = new SocialIdentityService({
+                objectMemory: system.visualObjectMemory,
+                stateGateway: system.stateGateway,
+                mnemonic: system.mnemonicArbiter || system.mnemonic
+            });
+            system.messageBroker?.subscribe?.('audio_transcribed', envelope => {
+                const payload = envelope?.payload || envelope || {};
+                const transcript = payload.text || payload.transcript?.text || payload.transcript || '';
+                system.socialIdentity.processIntroduction(transcript, { source: 'audio_transcribed', timestamp: payload.timestamp || Date.now() }).catch(() => {});
+            });
+        }
+        if (!system.audioDaemon) {
+            const enabled = process.env.SOMA_AUDIO_WAKE_ENABLED !== 'false';
+            const configuredDevice = process.env.SOMA_AUDIO_INPUT_DEVICE;
+            system.audioDaemon = new AudioDaemon({
+                system,
+                enabled,
+                device: configuredDevice == null || configuredDevice === '' ? null : Number(configuredDevice)
+            });
+            if (enabled) system.audioDaemon.start();
+            console.log(`[SOMA V2] ✅ AudioDaemon ${enabled ? 'starting — local "Hey Soma" phrase gate' : 'disabled by configuration'}`);
+        }
+
         if (!system.agenticExecutor) {
             const maxIterations = parseInt(process.env.SOMA_AGENTIC_MAX_ITERATIONS || '15', 10);
             const executor = new SomaAgenticExecutor({
@@ -255,7 +322,79 @@ export class SomaBootstrapV2 {
                 pool: system.microAgentPool || system.agentPool || null
             });
             system.agenticExecutor = executor;
+            system.computerWorkspace = executor._computerWorkspaces;
             console.log('[SOMA V2] ✅ SomaAgenticExecutor wired — goals can use real tools');
+        }
+
+        system.computerWorkspace ||= system.agenticExecutor?._computerWorkspaces || null;
+
+        if (!system.proceduralMemory) system.proceduralMemory = await new ProceduralMemory().initialize();
+        if (!system.skillCompiler) system.skillCompiler = await new SkillCompiler({ proceduralMemory: system.proceduralMemory }).initialize();
+        if (!system.adaptiveCognition) system.adaptiveCognition = new AdaptiveCognitionPolicy({ system }).initialize(system);
+        if (!system.autonomyReliability) system.autonomyReliability = await new AutonomyReliability().initialize();
+        if (!system.proactivePresence) system.proactivePresence = await new ProactivePresence({ system }).initialize(system);
+        if (!system.desktopWorldModel) {
+            system.desktopWorldModel = await new DesktopWorldModel({ system, workspaceService: system.computerWorkspace }).initialize(system);
+        }
+
+        if (!system.cognitiveRuntime) {
+            system.specialistRegistry ||= registerCoreSpecialists(new SpecialistRegistry(), system);
+            if (!system.agencyMetrics) system.agencyMetrics = await new AgencyMetrics().initialize();
+            system.cognitiveRuntime = new CognitiveRuntime().initialize(system);
+            system.chatRuntime = new ChatRuntimeAdapter({ system });
+            console.log('[SOMA V2] ✅ CognitiveRuntime wired — specialist lifecycle and evidence-grounded agency metrics active');
+        }
+        system.chatRuntime ||= new ChatRuntimeAdapter({ system });
+
+        if (!system.agencyProvingGround) system.agencyProvingGround = new AgencyProvingGround({ root: process.cwd() });
+        if (!system.realityLoop) {
+            system.realityLoop = await new RealityLoopDirector({
+                system,
+                provingGround: system.agencyProvingGround,
+                proceduralMemory: system.proceduralMemory,
+                skillCompiler: system.skillCompiler,
+                desktopWorldModel: system.desktopWorldModel,
+                adaptiveCognition: system.adaptiveCognition,
+                proactivePresence: system.proactivePresence,
+                reliability: system.autonomyReliability,
+                intervalMs: Number(process.env.SOMA_REALITY_LOOP_INTERVAL_MS || 6 * 60 * 60_000),
+                bootDelayMs: Number(process.env.SOMA_REALITY_LOOP_BOOT_DELAY_MS || 5 * 60_000)
+            }).initialize(system, { autoStart: process.env.SOMA_REALITY_LOOP_ENABLED !== 'false' });
+            console.log('[SOMA V2] ✅ RealityLoop ONLINE — capability gym, procedural learning, skill compilation, world state, adaptive cognition, presence, and SLOs');
+        }
+
+        if (!system.embodimentRuntime) {
+            system.embodimentRuntime = new EmbodimentRuntime({
+                simulation: process.env.SOMA_EMBODIMENT_HARDWARE !== 'true'
+            });
+            system.embodimentRuntime.connectAffectiveBroker(system.messageBroker);
+            if (system.visionDaemon) {
+                system.embodimentRuntime.registerSensor('vision', {
+                    read: async () => {
+                        const perception = system.visionDaemon.lastPerception;
+                        return {
+                            channel: system.visionDaemon.channel,
+                            perception,
+                            framePath: perception?.imagePath || system.visionDaemon.lastIngestedFramePath || null,
+                            perceptionCount: system.visionDaemon.perceptionCount || 0,
+                            timestamp: Number(
+                                perception?.timestamp ||
+                                perception?.scene?.timestamp ||
+                                system.visionDaemon.lastIngestedFrameTime ||
+                                0
+                            )
+                        };
+                    }
+                });
+            }
+            console.log('[SOMA V2] ✅ EmbodimentRuntime wired — simulation-first, disarmed, e-stop latched safety available');
+        }
+        if (!system.rotarySensorHead) {
+            system.rotarySensorHead = new RotarySensorHead({
+                simulation: process.env.SOMA_ROTARY_HEAD_HARDWARE !== 'true',
+                maxRpm: Number(process.env.SOMA_ROTARY_HEAD_MAX_RPM || 600)
+            });
+            console.log('[SOMA V2] ✅ RotarySensorHead wired — paired optical stations and indexed scan simulation ready');
         }
 
         // Wire brain into GoalPlannerArbiter so it can decompose complex goals
