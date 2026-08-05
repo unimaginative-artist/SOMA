@@ -209,11 +209,15 @@ export class SOMArbiterV2_QuadBrain extends BaseArbiterV4 {
       if (isInternalTask) { context.forceLocal = true; }
 
       let response;
-      // 🔱 ODIN UNIVERSAL GATE: Determine depth based on complexity/intent
-      const isComplex = !context.bypassOdin && 
-                        context.role !== 'creative' && 
-                        !context.quickResponse && 
-                        (context.deepThinking || this._scoreLobe('LOGOS', query) > 0.5 || query.length > 200);
+      // 🔱 ODIN UNIVERSAL GATE: ODIN's multi-pass recurrence is expensive (many
+      // serial DeepSeek calls → 30s+). It belongs to deliberate Deep Thinking
+      // (Brain button, 110s budget), NOT regular chat. Regular chat — even long
+      // or code-heavy — takes the single-lobe fast path (~2s) which is already
+      // grounded via _runLobe. This is what was timing out every complex query.
+      const isComplex = !context.bypassOdin &&
+                        context.role !== 'creative' &&
+                        !context.quickResponse &&
+                        context.deepThinking === true;
       const complexity = isComplex ? 'high' : 'simple';
 
       if (context.activeLobe) {
