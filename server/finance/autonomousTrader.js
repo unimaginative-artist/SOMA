@@ -1988,25 +1988,38 @@ class AutonomousTrader {
         const cfg = this._activeTradeConfig;
         const trailingStopPct = cfg.trailingStopPct || 0.03;
 
-        // Time-based exit: close stale positions after maxPositionAgeMs (default 12h)
+        // Time-based exit: close STALE positions after maxPositionAgeMs — but ONLY
+        // when they are not meaningfully in profit. Force-closing winners at the time
+        // limit (they averaged +0.70% vs the +6% take-profit target) was the #1 reason
+        // realized reward:risk was 1.37:1 instead of 3:1 across 168 trades. Aged winners
+        // are now allowed to run toward take-profit, protected by a peak-give-back lock
+        // plus the trailing/breakeven logic below. Losing/flat stale trades still exit.
         const maxAgeMs = this.config.maxPositionAgeMs || 12 * 60 * 60 * 1000;
         const openedAt = position.openedAt || 0;
-        if (openedAt && (Date.now() - openedAt) > maxAgeMs) {
+        const isAged = openedAt && (Date.now() - openedAt) > maxAgeMs;
+        const AGED_PROFIT_MIN = 0.003; // 0.3% — "meaningfully in profit"
+        if (isAged && pnlPct <= AGED_PROFIT_MIN) {
             const ageMin = Math.round((Date.now() - openedAt) / 60000);
             this._logDecision('MANAGE', 'TIME_EXIT',
-                `Time exit: position open ${ageMin}m (limit ${Math.round(maxAgeMs/60000)}m)`, { position, currentPrice, ageMin });
+                `Time exit: stale & not in profit — open ${ageMin}m (${(pnlPct*100).toFixed(2)}%, limit ${Math.round(maxAgeMs/60000)}m)`,
+                { position, currentPrice, ageMin, pnlPct });
             this._positionHighWater.delete(sym);
             await this._closePosition(position, 'TIME_EXIT', currentPrice);
             return true;
         }
-
-        // If trade is open >3 hours and in profit, set high-water mark to convert to trailing breakeven instead of TIME_EXIT
-        if (openedAt && (Date.now() - openedAt) > (3 * 60 * 60 * 1000) && pnlPct > 0.001) {
-            if (!this._positionHighWater.has(sym)) {
-                this._positionHighWater.set(sym, pnlPct);
-                this._logDecision('MANAGE', 'TRAILING_BREAKEVEN',
-                    `Trade open 3h+ and in profit (+${(pnlPct * 100).toFixed(2)}%) — armed Trailing Breakeven Stop instead of TIME_EXIT`,
-                    { position, currentPrice, pnlPct });
+        if (isAged && pnlPct > AGED_PROFIT_MIN) {
+            // Aged winner: track the peak and let it run to take-profit. Never let it
+            // round-trip into a loss — lock the win if it gives back >60% of the peak.
+            const prev = this._positionHighWater.get(sym) || 0;
+            if (pnlPct > prev) this._positionHighWater.set(sym, pnlPct);
+            const peak = this._positionHighWater.get(sym) || pnlPct;
+            if (pnlPct <= Math.max(0.001, peak * 0.4)) {
+                this._logDecision('MANAGE', 'TRAILING_STOP',
+                    `Aged winner protected: peak +${(peak*100).toFixed(2)}% → +${(pnlPct*100).toFixed(2)}%, locking gain`,
+                    { position, currentPrice, peak });
+                this._positionHighWater.delete(sym);
+                await this._closePosition(position, 'TRAILING_STOP', currentPrice);
+                return true;
             }
         }
 
