@@ -18,11 +18,23 @@ import { WebSocketServer } from 'ws';
 dotenvConfig();
 const apiKeysPath = join(dirname(fileURLToPath(import.meta.url)), 'config', 'api-keys.env');
 if (fs.existsSync(apiKeysPath)) dotenvConfig({ path: apiKeysPath, override: true });
+process.env.SOMA_PROCESS_TYPE = 'backend';
+process.env.NODE_ENV = 'development';
+process.env.SOMA_MOCK_VISION_MODEL = 'false';
 
 import { CONFIG } from './core/SomaConfig.js';
 import { SomaBootstrapV2 as SomaBootstrap } from './core/SomaBootstrapV2.js';
 import { SystemValidator } from './core/SystemValidator.js';
 import { logger } from './core/Logger.js';
+import { ensureOperatorCredential } from './server/loaders/operatorCredential.js';
+
+import beingKernel from './core/BeingKernel.js';
+import commitmentEngine from './core/CommitmentEngine.js';
+import memorySpine from './core/MemorySpine.js';
+
+// Provision a dedicated operator credential before protected governance and
+// social-review routes begin accepting requests. Never reuse social tokens.
+ensureOperatorCredential();
 
 const DEBUG_LOG = join(process.cwd(), 'logs', 'launcher_debug.log');
 const logSync = (msg) => {
@@ -191,11 +203,14 @@ async function main() {
         app.use(express.json({ limit: '50mb' }));
         app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-        // CORS for frontend
+        // CORS for frontend (incl. mobile Studio on :8088, which sends
+        // x-studio-device-* and x-axis-user-* headers on every request —
+        // reflect whatever the preflight asks for and answer OPTIONS directly)
         app.use((req, res, next) => {
             res.header('Access-Control-Allow-Origin', '*');
-            res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH');
-            res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+            res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+            res.header('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] || 'Content-Type, Authorization');
+            if (req.method === 'OPTIONS') return res.sendStatus(204);
             next();
         });
 
@@ -256,11 +271,28 @@ async function main() {
         await bootstrap.initialize(app, server, wss);
         global.__SOMA_SYSTEM = bootstrap.system;
 
+        // API clients must always receive JSON. Letting unknown /api requests
+        // fall through to Express's HTML 404 page causes response.json() to
+        // fail with "Unexpected token '<'".
+        app.use('/api', (req, res) => {
+            res.status(404).json({
+                ok: false,
+                code: 'API_ROUTE_NOT_FOUND',
+                error: `API route not found: ${req.method} ${req.originalUrl}`,
+            });
+        });
+
         // React SPA fallback: direct browser navigation to UI paths should
         // return the Command Bridge instead of Express' 404 handler.
         const frontendIndex = join(__dirname, 'frontend', 'dist', 'index.html');
         app.get(/^\/(?!api\/|health$|socket\.io|ws).*/, (req, res, next) => {
             if (req.method !== 'GET') return next();
+            // Static-asset requests (anything with a file extension) must NEVER get
+            // the SPA shell. If express.static didn't find it above, it's a missing
+            // file and must 404 — serving index.html (HTML) for a missing .js chunk
+            // after a redeploy is what causes the browser's "Failed to fetch
+            // dynamically imported module" crash (it gets HTML where it expects JS).
+            if (/\.[a-zA-Z0-9]+$/.test(req.path)) return next();
             if (!fs.existsSync(frontendIndex)) return next();
             res.sendFile(frontendIndex);
         });
@@ -282,6 +314,21 @@ async function main() {
         global.__SOMA_SERVER_READY = true;
         cLog('ULTRA', 'SOMA Fully Operational');
 
+        // 📚 RECURSIVE KNOWLEDGE CONSOLIDATION TICK (Medical & SOMA Sagas Story Master Volumes)
+        try {
+            const { default: recursiveConsolidationEngine } = await import('./server/services/RecursiveConsolidationEngine.js');
+            setInterval(() => {
+                try {
+                    recursiveConsolidationEngine.runConsolidationCycle();
+                } catch (e) {
+                    cLog('WARN', `Consolidation tick error: ${e.message}`);
+                }
+            }, 15 * 60 * 1000); // Every 15 minutes
+            recursiveConsolidationEngine.runConsolidationCycle();
+        } catch (e) {
+            cLog('WARN', `Consolidation engine init skipped: ${e.message}`);
+        }
+
         // Start MessageBroker network bridge — lets external agents (MAX, etc.)
         // register as virtual arbiters and participate in the signal flow
         try {
@@ -292,6 +339,21 @@ async function main() {
             broker.startNetworkBridge(bridgePort);
         } catch (e) {
             cLog('WARN', `Network bridge skipped: ${e.message}`);
+        }
+
+        // 🌌 DORMANT ARCHITECTURES INITIALIZATION: GameTheory, QuantumSimulation, Medical Discovery
+        try {
+            const { QuantumSimulationArbiter } = await import('./arbiters/QuantumSimulationArbiter.js');
+            const { DiscoveryGradeMedicalCortex } = await import('./arbiters/DiscoveryGradeMedicalCortex.js');
+            const { default: gameTheoryArbiter } = await import('./arbiters/GameTheoryArbiter.js').catch(() => ({ default: null }));
+
+            const quantum = new QuantumSimulationArbiter();
+            const medicalCortex = new DiscoveryGradeMedicalCortex();
+            await medicalCortex.onInitialize();
+
+            cLog('ULTRA', '⚛️ Quantum Simulation Engine, Game Theory Arbiter & Discovery Medical Cortex ACTIVE 🟢');
+        } catch (e) {
+            cLog('WARN', `Dormant architecture init note: ${e.message}`);
         }
 
     } catch (error) {
