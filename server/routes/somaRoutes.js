@@ -2,7 +2,9 @@ import express from 'express';
 import { exec, execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { requireEnterpriseAuth } from '../loaders/authMiddleware.js';
+import { requireStudioSession } from '../studio/StudioSessionAuth.js';
 import { createRequire } from 'module';
 import { registry } from '../SystemRegistry.js';
 import { SOMA_VALUES_PROMPT } from '../../core/SomaValues.js';
@@ -10,6 +12,7 @@ import { barryMind, getUserMind } from '../../core/BarryMindModel.js';
 import { calibrator }  from '../../core/ConfidenceCalibrator.js';
 import { scrapeMarketData, getCachedMarketData } from '../scrapers/MarketDataScraper.js';
 import citationGuard from '../finance/FinancialCitationGuard.js';
+import computeScheduler from '../core/ComputeScheduler.js';
 import missionControlRuntime from '../finance/MissionControlRuntime.js';
 import { compileMarketLabEntry, compileMarketLabLedger } from '../finance/MarketStrategyCompiler.js';
 import simulationLearningEngine from '../finance/SimulationLearningEngine.js';
@@ -25,9 +28,11 @@ import somaImageGeneration from '../social/SomaImageGenerationEngine.js';
 import { buildSomaContext } from '../context/SomaContextKernel.js';
 import { guardPublicText } from '../context/ClaimVerifier.js';
 import { analyzeImageFile, analyzeImageFileTwoStage, formatImageAnalysisForIngestion } from '../utils/LocalVisionFileAnalyzer.js';
+import { ContentExtractor } from '../utils/ContentExtractor.js';
 import { describeContracts } from '../../core/AgentCapabilityContracts.js';
 import { readTruthLedger } from '../../core/TruthLedger.js';
 import resourceJobScheduler from '../../core/ResourceJobScheduler.js';
+import createCtRoutes from './ctRoutes.js';
 import { getLastCapabilityAudit, runCapabilityAudit } from '../../core/CapabilityAuditRunner.js';
 import deepSeekGateway from '../core/DeepSeekGateway.js';
 const require = createRequire(import.meta.url);
@@ -39,6 +44,8 @@ const presenceAwareness = require('../../core/PresenceAwarenessState.cjs');
 const _excelCache = new Map(); // key -> { report, analysis, cachedAt }
 const EXCEL_CACHE_TTL = 10 * 60 * 1000;
 const CHAT_IMAGE_DIR = path.join(process.cwd(), '.soma', 'vision_temp', 'chat');
+const CT_UPLOAD_DIR = path.join(process.cwd(), '.soma', 'ct_uploads');
+const ctContentExtractor = new ContentExtractor();
 
 function saveChatImageAttachment(attachment = {}) {
     const raw = attachment.imageData || attachment.data || '';
@@ -306,6 +313,14 @@ const FINANCIAL_KEYWORDS = /\b(variance|reconcil|audit|tax\b|excel|spreadsheet|b
 
 const router = express.Router();
 
+// ── Compute scheduler observability: what the mind is spending its compute on ──
+// Live view of foreground vs background model-call arbitration. Pillar of the
+// "nervous system" — you (and SOMA) can finally see who's using the brain.
+router.get('/compute-scheduler', (req, res) => {
+    try { res.json({ ok: true, ...computeScheduler.getStatus() }); }
+    catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // ── In-memory rate limiter for /chat (no npm install needed) ──
 // Limits each IP to 30 chat requests per minute.
 const _chatWindows = new Map(); // ip -> { count, windowStart }
@@ -339,6 +354,8 @@ const fingerprint = require('../../arbiters/UserFingerprintArbiter.cjs');
 const soul        = require('../../arbiters/SoulArbiter.cjs');
 
 export default function(system) {
+    const requireCtSession = requireStudioSession({ allowTrustedLocal: true });
+    router.use('/ct', createCtRoutes({ requireSession: requireCtSession }));
     router.get('/audio/status', (_req, res) => {
         if (!system.audioDaemon) return res.status(503).json({ success: false, error: 'AudioDaemon unavailable' });
         res.json({ success: true, ...system.audioDaemon.getStatus() });
@@ -1089,7 +1106,7 @@ Write a closing thought â€" 1-2 sentences. Something genuine that shows you a
 
     // 🔱 GET /api/soma/history — Synchronize history across CT, Orb, and FloatingChat
     // sessionId is optional: with it, filters to that session; without it, returns recent global messages
-    router.get('/history', async (req, res) => {
+    router.get('/history', requireCtSession, async (req, res) => {
         try {
             const { sessionId, limit } = req.query;
             const n = Math.min(Math.max(1, parseInt(limit) || 20), 50);
@@ -1104,6 +1121,36 @@ Write a closing thought â€" 1-2 sentences. Something genuine that shows you a
             res.json({ success: true, messages: msgs, history: msgs }); // both keys for backward compat
         } catch (error) {
             res.status(500).json({ success: false, error: error.message });
+        }
+    });
+
+    // Read-only evidence viewer for goal cards. It is deliberately restricted to
+    // generated artifacts and execution receipts; arbitrary filesystem paths fail closed.
+    router.get('/work-evidence', (req, res) => {
+        try {
+            const requested = String(req.query.path || '').trim();
+            if (!requested) return res.status(400).json({ success: false, error: 'path is required' });
+            const resolved = path.resolve(requested);
+            const allowedRoots = [
+                path.resolve(process.cwd(), 'data', 'goal-receipts'),
+                path.resolve(os.homedir(), 'Documents', 'Soma', 'Artifacts')
+            ];
+            const normalizedResolved = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+            const allowed = allowedRoots.some(root => {
+                const normalizedRoot = process.platform === 'win32' ? root.toLowerCase() : root;
+                return normalizedResolved === normalizedRoot || normalizedResolved.startsWith(`${normalizedRoot}${path.sep}`);
+            });
+            const extension = path.extname(resolved).toLowerCase();
+            if (!allowed || !['.json', '.md', '.txt', '.html'].includes(extension)) {
+                return res.status(403).json({ success: false, error: 'Evidence path is outside approved artifact roots' });
+            }
+            if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+                return res.status(404).json({ success: false, error: 'Evidence file not found' });
+            }
+            res.setHeader('Content-Disposition', `inline; filename="${path.basename(resolved).replace(/"/g, '')}"`);
+            return res.sendFile(resolved);
+        } catch (error) {
+            return res.status(500).json({ success: false, error: error.message });
         }
     });
 
@@ -1432,7 +1479,7 @@ ${memoryContext || "No specific memories found for this query."}
         }
     });
 
-    router.post('/chat', chatRateLimit, async (req, res) => {
+    router.post('/chat', requireCtSession, chatRateLimit, async (req, res) => {
         const incomingBody = req.body || {};
         const isSilentUtility = Boolean(incomingBody.silent) || incomingBody.source === 'studio-utility' || /^studio-(avatar|cover|oracle|vibe|inspire)$/i.test(String(incomingBody.sessionId || ''));
 
@@ -1457,8 +1504,11 @@ ${memoryContext || "No specific memories found for this query."}
         trace.mark('received');
         const WALL_LIMIT = req.body?.deepThinking ? 110000 : Math.max(20000, chatBudgetMs + 38000);
         let wallFired = false;
+        const reasoningController = new AbortController();
+        let progressTimer = null;
         const wallTimer = setTimeout(() => {
             wallFired = true;
+            reasoningController.abort(new Error('Chat wall-clock deadline exceeded'));
             if (res.writableEnded) return;
             if (!res.headersSent) {
                 res.json({
@@ -1473,7 +1523,13 @@ ${memoryContext || "No specific memories found for this query."}
                 res.end();
             }
         }, WALL_LIMIT);
-        const clearWall = () => clearTimeout(wallTimer);
+        const clearWall = () => {
+            clearTimeout(wallTimer);
+            if (progressTimer) clearInterval(progressTimer);
+        };
+        res.on('close', () => {
+            if (!res.writableEnded) reasoningController.abort(new Error('Chat client disconnected'));
+        });
 
         try {
             const { deepThinking, sessionId, contextFiles, history, voiceMode, context: reqContext } = req.body;
@@ -2285,6 +2341,28 @@ ${contextStr}`;
                 res.setHeader('X-Accel-Buffering', 'no');
                 res.flushHeaders();
                 streamOnToken = (token) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify({ token })}\n\n`); };
+
+                // One evolving progress event, not a heartbeat flood. CT renders this
+                // as a replace-in-place working status and removes it on completion.
+                const progressSubject = message.replace(/\s+/g, ' ').slice(0, 90);
+                let progressBeat = 0;
+                const sendProgress = () => {
+                    if (res.writableEnded || reasoningController.signal.aborted) return;
+                    progressBeat += 1;
+                    const prefix = progressBeat === 1
+                        ? 'Hey, I’m still searching'
+                        : 'I’m still working through the evidence';
+                    res.write(`data: ${JSON.stringify({
+                        progress: true,
+                        phase: progressBeat === 1 ? 'searching' : 'reasoning',
+                        elapsedMs: Date.now() - reqStart,
+                        message: `${prefix} for “${progressSubject}”…`
+                    })}\n\n`);
+                };
+                progressTimer = setTimeout(() => {
+                    sendProgress();
+                    progressTimer = setInterval(sendProgress, 20_000);
+                }, 12_000);
             }
 
             const elapsed = Date.now() - reqStart;
@@ -2298,7 +2376,7 @@ ${contextStr}`;
             const reasonPromise = (async () => {
                 trace.mark('reasoning_started');
                 if (deepThinking && system.crona) {
-                    return system.crona.reason(finalPrompt, { sessionId, history: conversationHistory, deepThinking, preferredBrain: personaBrain || 'auto', systemContext: bgSystemCtx });
+                    return system.crona.reason(finalPrompt, { sessionId, history: conversationHistory, deepThinking, preferredBrain: personaBrain || 'auto', systemContext: bgSystemCtx, signal: reasoningController.signal });
                 } else if (system.chatRuntime || system.cognitiveRuntime) {
                     const runtime = system.chatRuntime;
                     const runtimeInput = {
@@ -2319,6 +2397,7 @@ ${contextStr}`;
                             tools: dynamicTools,
                             systemContext: bgSystemCtx,
                             onToken: streamOnToken,
+                            signal: reasoningController.signal,
                             ...queryMeta,
                             perception: attachmentAnalysis?.perception || null,
                         }
@@ -2338,6 +2417,7 @@ ${contextStr}`;
                         tools: dynamicTools,
                         systemContext: bgSystemCtx,
                         onToken: streamOnToken,
+                        signal: reasoningController.signal,
                         ...queryMeta,
                         perception: attachmentAnalysis?.perception || null,
                     });
@@ -2455,24 +2535,28 @@ ${personaContext}${characterContext}`.trim()
                 result = await Promise.race([reasonPromise, directGeminiPromise, timeoutPromise, clientGonePromise].filter(Boolean));
             } catch (timeoutErr) {
                 clearWall();
+                reasoningController.abort(timeoutErr);
                 global.__SOMA_CHAT_ACTIVE = false;
                 if (timeoutErr.message === 'client disconnected') {
                     console.warn(`[SOMA] Client disconnected mid-request, dropping: "${message.substring(0, 40)}"`);
                     return;
                 }
-                console.warn(`[SOMA] Reasoning timeout after ${Date.now() - reqStart}ms for: "${message.substring(0, 40)}"`);
+                const isTimeout = wallFired || /timed out|deadline/i.test(timeoutErr.message || '');
+                console.warn(`[SOMA] Reasoning ${isTimeout ? 'timeout' : 'failure'} after ${Date.now() - reqStart}ms for: "${message.substring(0, 40)}" — ${timeoutErr.message}`);
                 if (res.writableEnded) return;
+                const publicMessage = isTimeout
+                    ? "I'm still working, but this request exceeded my time budget. You can retry or continue it."
+                    : "I hit an internal reasoning error before I could finish. The failure was recorded and you can retry.";
                 if (!res.headersSent) {
-                    latencySpine.record(trace.finish('timeout', { error: timeoutErr.message }));
+                    latencySpine.record(trace.finish(isTimeout ? 'timeout' : 'error', { error: timeoutErr.message }));
                     return res.json({
-                        success: true,
-                        message: "I'm thinking hard but taking too long  --  my AI providers may be slow right now. Try again in a moment.",
-                        response: "I'm thinking hard but taking too long  --  my AI providers may be slow right now. Try again in a moment.",
-                        metadata: { confidence: 0.3, brain: 'TIMEOUT', error: timeoutErr.message }
+                        success: false,
+                        message: publicMessage,
+                        response: publicMessage,
+                        metadata: { confidence: 0.3, brain: isTimeout ? 'TIMEOUT' : 'RUNTIME_ERROR', errorCode: isTimeout ? 'REASONING_TIMEOUT' : 'REASONING_FAILURE' }
                     });
                 }
-                // SSE mode — send final event and close
-                res.write(`data: ${JSON.stringify({ done: true, response: "I'm thinking hard but taking too long — my AI providers may be slow right now. Try again in a moment.", timeout: true })}\n\n`);
+                res.write(`data: ${JSON.stringify({ done: true, response: publicMessage, timeout: isTimeout, error: !isTimeout, errorCode: isTimeout ? 'REASONING_TIMEOUT' : 'REASONING_FAILURE' })}\n\n`);
                 res.end();
                 return;
             }
@@ -3067,7 +3151,7 @@ ${personaContext}${characterContext}`.trim()
     });
 
     // POST /api/soma/shell/exec â€" with approval gate for risky commands
-    router.post('/shell/exec', async (req, res) => {
+    router.post('/shell/exec', requireCtSession, async (req, res) => {
         try {
             const { command } = req.body;
             if (!command || typeof command !== 'string') return res.status(400).json({ error: 'Invalid command' });
@@ -3115,17 +3199,20 @@ ${personaContext}${characterContext}`.trim()
     });
 
     // POST /api/soma/vision/analyze
-    router.post('/vision/analyze', async (req, res) => {
+    router.post('/vision/analyze', requireCtSession, async (req, res) => {
         try {
             const { query, file, filePath, path: requestedPath } = req.body;
             const targetPath = filePath || requestedPath || file?.path;
-            if (!targetPath) return res.status(400).json({ success: false, error: 'filePath is required for local vision analysis' });
-            const resolved = path.resolve(process.cwd(), targetPath);
+            const uploaded = !targetPath && file?.data
+                ? saveChatImageAttachment({ data: file.data, mimeType: file.mimeType || file.type })
+                : null;
+            if (!targetPath && !uploaded) return res.status(400).json({ success: false, error: 'filePath or base64 image data is required' });
+            const resolved = uploaded?.filePath || path.resolve(process.cwd(), targetPath);
             if (!resolved.startsWith(process.cwd())) {
                 return res.status(403).json({ success: false, error: 'Image path must be inside the SOMA workspace' });
             }
             const result = await analyzeImageFile(resolved, {
-                mimeType: file?.mimeType || file?.type,
+                mimeType: uploaded?.mimeType || file?.mimeType || file?.type,
                 prompt: query ? [
                     'Analyze this image for SOMA.',
                     `User focus: ${String(query).slice(0, 500)}`,
@@ -3136,9 +3223,39 @@ ${personaContext}${characterContext}`.trim()
             res.json({
                 success: true,
                 analysis: formatImageAnalysisForIngestion(result, resolved),
-                result
+                result,
+                source: uploaded ? 'uploaded_image' : 'workspace_file'
             });
         } catch (error) { res.status(500).json({ error: error.message }); }
+    });
+
+    // POST /api/soma/document/extract — bounded CT attachment extraction.
+    // The extracted text is returned to CT and then supplied to the authoritative
+    // chat runtime as context; the document itself never becomes executable code.
+    router.post('/document/extract', requireCtSession, async (req, res) => {
+        let tempPath = null;
+        try {
+            const file = req.body?.file || {};
+            const match = String(file.data || '').match(/^data:([^;]+);base64,(.+)$/s);
+            const buffer = Buffer.from(match?.[2] || file.data || '', 'base64');
+            if (!buffer.length) return res.status(400).json({ success: false, error: 'Attachment data is empty' });
+            if (buffer.length > 20 * 1024 * 1024) return res.status(413).json({ success: false, error: 'Attachment exceeds the 20 MB limit' });
+            const safeName = path.basename(String(file.name || 'attachment.txt')).replace(/[^a-zA-Z0-9._-]/g, '_');
+            const ext = path.extname(safeName).toLowerCase();
+            if (!ctContentExtractor.supportedExtensions.includes(ext) || ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'].includes(ext)) {
+                return res.status(415).json({ success: false, error: `Unsupported document type: ${ext || 'unknown'}` });
+            }
+            fs.mkdirSync(CT_UPLOAD_DIR, { recursive: true });
+            tempPath = path.join(CT_UPLOAD_DIR, `${Date.now()}-${Math.random().toString(36).slice(2, 9)}-${safeName}`);
+            fs.writeFileSync(tempPath, buffer);
+            const text = await ctContentExtractor.extract(tempPath, { originalName: safeName, mimeType: file.type || match?.[1] });
+            if (!text) return res.status(422).json({ success: false, error: 'No readable text could be extracted' });
+            res.json({ success: true, name: safeName, text: String(text).slice(0, 250_000), truncated: String(text).length > 250_000 });
+        } catch (error) {
+            res.status(500).json({ success: false, error: error.message });
+        } finally {
+            if (tempPath) fs.promises.unlink(tempPath).catch(() => {});
+        }
     });
 
     // GET /api/soma/vision/last
@@ -3268,7 +3385,7 @@ ${personaContext}${characterContext}`.trim()
     });
 
     // POST /api/soma/fs/read
-    router.post('/fs/read', async (req, res) => {
+    router.post('/fs/read', requireCtSession, async (req, res) => {
         try {
             const { path: fpath } = req.body;
             if (!fs.existsSync(fpath)) return res.status(404).json({ success: false, error: 'File not found' });
@@ -3297,7 +3414,7 @@ ${personaContext}${characterContext}`.trim()
     });
 
     // POST /api/soma/fs/search â€" real recursive search
-    router.post('/fs/search', async (req, res) => {
+    router.post('/fs/search', requireCtSession, async (req, res) => {
         try {
             const { query, directory, extensions } = req.body;
             if (!query) return res.status(400).json({ success: false, error: 'query required' });
@@ -3337,7 +3454,7 @@ ${personaContext}${characterContext}`.trim()
     });
 
     // POST /api/soma/fs/operate â€" file operations (create, rename, delete, copy)
-    router.post('/fs/operate', async (req, res) => {
+    router.post('/fs/operate', requireCtSession, async (req, res) => {
         try {
             const { operation, sourcePath, destPath, content } = req.body;
             const safe = (p) => {
@@ -3387,7 +3504,7 @@ ${personaContext}${characterContext}`.trim()
     });
 
      // POST /api/soma/code/task
-    router.post('/code/task', async (req, res) => {
+    router.post('/code/task', requireCtSession, async (req, res) => {
          try {
             const { task, files } = req.body;
             const result = await brain.reason(`Write code for: ${task}`, { code: true });
@@ -3590,7 +3707,7 @@ ${personaContext}${characterContext}`.trim()
     });
 
     // ── Goals ─────────────────────────────────────────────────────────────────
-    router.get('/goals', (req, res) => {
+    router.get('/goals', requireCtSession, (req, res) => {
         const gp = system.goalPlanner || system.goalPlannerArbiter;
         if (!gp) return res.json({ goals: [], activeCount: 0 });
         const activeIds  = Array.from(gp.activeGoals || []);
@@ -3606,7 +3723,7 @@ ${personaContext}${characterContext}`.trim()
     });
 
     // ── Create goal (from Goals UI) ──────────────────────────────────────────
-    router.post('/goals', async (req, res) => {
+    router.post('/goals', requireCtSession, async (req, res) => {
         const gp = system.goalPlanner || system.goalPlannerArbiter;
         if (!gp) return res.status(503).json({ error: 'GoalPlanner offline' });
         try {
@@ -3624,7 +3741,7 @@ ${personaContext}${characterContext}`.trim()
     });
 
     // ── Goal management ───────────────────────────────────────────────────────
-    router.post('/goals/:id/complete', async (req, res) => {
+    router.post('/goals/:id/complete', requireCtSession, async (req, res) => {
         const gp = system.goalPlanner || system.goalPlannerArbiter;
         if (!gp) return res.status(503).json({ error: 'GoalPlanner offline' });
         try {
@@ -3638,7 +3755,7 @@ ${personaContext}${characterContext}`.trim()
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    router.post('/goals/:id/retry', async (req, res) => {
+    router.post('/goals/:id/retry', requireCtSession, async (req, res) => {
         const gp = system.goalPlanner || system.goalPlannerArbiter;
         if (!gp?.retryGoal) return res.status(503).json({ error: 'Goal retry unavailable' });
         try {
@@ -3652,13 +3769,19 @@ ${personaContext}${characterContext}`.trim()
         }
     });
 
-    router.delete('/goals/:id', async (req, res) => {
+    router.delete('/goals/:id', requireCtSession, async (req, res) => {
         const gp = system.goalPlanner || system.goalPlannerArbiter;
         if (!gp) return res.status(503).json({ error: 'GoalPlanner offline' });
         try {
-            if (gp.goals) gp.goals.delete(req.params.id);
-            if (gp.activeGoals) gp.activeGoals.delete(req.params.id);
-            res.json({ success: true, id: req.params.id });
+            const result = gp.cancelGoal
+                ? await gp.cancelGoal(req.params.id, req.body?.reason || 'cancelled_from_soma_ct')
+                : null;
+            if (!result && gp.goals) {
+                const goal = gp.goals.get(req.params.id);
+                if (goal) goal.status = 'cancelled';
+                gp.activeGoals?.delete(req.params.id);
+            }
+            res.json({ success: true, id: req.params.id, result });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 

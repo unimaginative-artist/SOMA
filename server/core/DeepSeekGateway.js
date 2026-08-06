@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import costLedger from './CostLedger.js';
+import computeScheduler from './ComputeScheduler.js';
 
 const ENDPOINT = 'https://api.deepseek.com/v1/chat/completions';
 const STATE_PATH = path.join(process.cwd(), 'data', 'deepseek-gateway-state.json');
@@ -78,26 +79,9 @@ function combineSignal(signal, timeoutMs) {
 class DeepSeekGateway {
     constructor() {
         this.endpoint = process.env.DEEPSEEK_ENDPOINT || ENDPOINT;
-        // Background concurrency limiter. Autonomous cognition (swarms) can fire
-        // 15+ concurrent calls and rate-limit the whole account, starving the
-        // user's chat (same greeting: 7s idle vs 55s under load). Cap background
-        // calls so the account stays under the rate limit and HUMAN calls (chat)
-        // always have headroom — human requests are never limited here.
-        this._bgInFlight = 0;
-        this._bgQueue = [];
-        this._bgMax = Math.max(1, Number(process.env.SOMA_DS_BG_CONCURRENCY || 3));
-    }
-
-    async _acquireBackgroundSlot() {
-        if (this._bgInFlight < this._bgMax) { this._bgInFlight++; return; }
-        await new Promise(resolve => this._bgQueue.push(resolve));
-        this._bgInFlight++;
-    }
-
-    _releaseBackgroundSlot() {
-        this._bgInFlight = Math.max(0, this._bgInFlight - 1);
-        const next = this._bgQueue.shift();
-        if (next) next();
+        // All concurrency arbitration now lives in the ComputeScheduler (the CPU
+        // scheduler for SOMA's mind): human calls get reserved headroom, background
+        // cognition is capped and priority-drained. See ComputeScheduler.js.
     }
 
     _loadState() {
@@ -184,33 +168,33 @@ class DeepSeekGateway {
         if (toolChoice) body.tool_choice = toolChoice;
         if (responseFormat) body.response_format = responseFormat;
 
-        const _bg = priority === 'background';
-        if (_bg) await this._acquireBackgroundSlot();
-        try {
-            const response = await fetch(this.endpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-                body: JSON.stringify(body),
-                signal: combineSignal(signal, timeoutMs),
-            });
-            if (!response.ok) {
-                const payload = await response.json().catch(async () => ({ message: await response.text().catch(() => '') }));
-                throw new Error(payload?.error?.message || payload?.message || `DeepSeek HTTP ${response.status}`);
+        // Route through the compute scheduler so background cognition can never
+        // starve foreground (human) work. Priority classes: human | goal | idle.
+        return computeScheduler.schedule(priority, async () => {
+            try {
+                const response = await fetch(this.endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+                    body: JSON.stringify(body),
+                    signal: combineSignal(signal, timeoutMs),
+                });
+                if (!response.ok) {
+                    const payload = await response.json().catch(async () => ({ message: await response.text().catch(() => '') }));
+                    throw new Error(payload?.error?.message || payload?.message || `DeepSeek HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                const usage = data.usage || {};
+                costLedger.commitReservation(prepared.reservation.id, {
+                    inputTokens: usage.prompt_tokens || prepared.inputTokens,
+                    outputTokens: usage.completion_tokens || estimateTokens(data.choices?.[0]?.message?.content || ''),
+                    metadata: { requestModel: model, compacted: prepared.compactedMessages.length !== messages.length },
+                });
+                return { data, usage, messages: prepared.compactedMessages };
+            } catch (error) {
+                costLedger.releaseReservation(prepared.reservation.id);
+                throw error;
             }
-            const data = await response.json();
-            const usage = data.usage || {};
-            costLedger.commitReservation(prepared.reservation.id, {
-                inputTokens: usage.prompt_tokens || prepared.inputTokens,
-                outputTokens: usage.completion_tokens || estimateTokens(data.choices?.[0]?.message?.content || ''),
-                metadata: { requestModel: model, compacted: prepared.compactedMessages.length !== messages.length },
-            });
-            return { data, usage, messages: prepared.compactedMessages };
-        } catch (error) {
-            costLedger.releaseReservation(prepared.reservation.id);
-            throw error;
-        } finally {
-            if (_bg) this._releaseBackgroundSlot();
-        }
+        });
     }
 
     async openStream({ apiKey = process.env.DEEPSEEK_API_KEY, model = 'deepseek-chat', messages = [], maxTokens = 512, temperature = 0.7, priority = 'human', actor = 'SOMA', action = 'stream_chat', dailyCallLimit = null, timeoutMs = 45_000, signal = null } = {}) {
