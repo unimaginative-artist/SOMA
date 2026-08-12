@@ -26,8 +26,11 @@ def main():
         'errors': [],
     }
 
-    if sys.version_info >= (3, 13):
-        result['errors'].append('Python 3.13 is not approved for the SOMA Windows training environment')
+    # Python 3.13 is now approved: verified working end-to-end with
+    # torch 2.13.0+cu130 + bitsandbytes 4-bit on RTX 5070 (2026-08-11). The real
+    # gate is the package + GPU checks below, not the interpreter version.
+    if sys.version_info < (3, 10):
+        result['errors'].append(f'Python {sys.version_info.major}.{sys.version_info.minor} too old; need >= 3.10')
 
     for name in ['torch', 'torchvision', 'transformers', 'trl', 'peft', 'datasets', 'bitsandbytes']:
         result['packages'][name] = package_version(name)

@@ -121,8 +121,8 @@ def convert_to_gguf(merged_dir: Path, gguf_path: Path, llama_cpp_dir: Path) -> P
     return gguf_path
 
 
-def write_modelfile(lobe: str, gguf_path: Path, models_dir: Path) -> Path:
-    modelfile = models_dir / f'Modelfile.{lobe}'
+def write_modelfile(lobe: str, gguf_path: Path, models_dir: Path, modelfile_name: str = None) -> Path:
+    modelfile = models_dir / (modelfile_name or f'Modelfile.{lobe}')
     modelfile.write_text(
         f'FROM {gguf_path}\nSYSTEM """{SYSTEM_PROMPTS[lobe]}"""\n',
         encoding='utf-8'
@@ -131,18 +131,30 @@ def write_modelfile(lobe: str, gguf_path: Path, models_dir: Path) -> Path:
     return modelfile
 
 
-def export_lobe(lobe: str, base_model: str, root: Path, skip_merge: bool = False):
+def export_lobe(lobe: str, base_model: str, root: Path, skip_merge: bool = False,
+                adapter_dir: str = None, tag: str = None):
+    """Merge a lobe adapter → GGUF → Modelfile.
+
+    adapter_dir: override the adapter location. DPO adapters land in
+                 SOMA/models/lobe-{lobe}-dpo (not lobe-{lobe}); pass it here.
+    tag:         suffix for the GGUF/merged/Modelfile artifacts so a CANDIDATE
+                 export never clobbers the canonical soma-{lobe}.gguf / prod
+                 Modelfile. e.g. tag='cand-v123' → soma-{lobe}-cand-v123.gguf.
+    """
     models_dir = root / 'SOMA' / 'models'
-    lobe_dir   = models_dir / f'lobe-{lobe}'
-    merged_dir = models_dir / f'lobe-{lobe}-merged'
-    gguf_path  = models_dir / f'soma-{lobe}.gguf'
+    lobe_dir   = Path(adapter_dir) if adapter_dir else models_dir / f'lobe-{lobe}'
+    suffix     = f'-{tag}' if tag else ''
+    merged_dir = models_dir / f'lobe-{lobe}{suffix}-merged'
+    gguf_path  = models_dir / f'soma-{lobe}{suffix}.gguf'
+    modelfile_name = f'Modelfile.{lobe}{suffix}'
     llama_cpp_dir = root / 'llama.cpp'
 
     if not lobe_dir.exists():
         raise FileNotFoundError(f"No trained adapter at {lobe_dir} — run finetune_gemma3.py first.")
 
     print(f"\n{'='*56}")
-    print(f"  Exporting LOBE: {lobe.upper()}")
+    print(f"  Exporting LOBE: {lobe.upper()}{('  [' + tag + ']') if tag else ''}")
+    print(f"  Adapter: {lobe_dir}")
     print(f"{'='*56}")
 
     if not skip_merge:
@@ -154,10 +166,15 @@ def export_lobe(lobe: str, base_model: str, root: Path, skip_merge: bool = False
         get_llama_cpp_convert_script(root)
 
     convert_to_gguf(merged_dir, gguf_path, llama_cpp_dir)
-    modelfile = write_modelfile(lobe, gguf_path, models_dir)
+    modelfile = write_modelfile(lobe, gguf_path, models_dir, modelfile_name=modelfile_name)
 
+    ollama_tag = f'soma-{lobe}{suffix}' if tag else f'soma-{lobe}'
     print(f"\nDone. Register with Ollama:")
-    print(f"  ollama create soma-{lobe} -f {modelfile}")
+    print(f"  ollama create {ollama_tag} -f {modelfile}")
+    # Machine-readable line so callers (OllamaAutoTrainer) can locate artifacts.
+    print(f"__SOMA_GGUF_EXPORT__{{\"lobe\": \"{lobe}\", \"gguf\": \"{gguf_path.as_posix()}\", "
+          f"\"modelfile\": \"{Path(modelfile).as_posix()}\", \"ollama_tag\": \"{ollama_tag}\"}}")
+    return {'gguf': str(gguf_path), 'modelfile': str(modelfile), 'ollama_tag': ollama_tag}
 
 
 def main():
@@ -167,6 +184,10 @@ def main():
     parser.add_argument('--base', default=None, help='Override base model HF ID')
     parser.add_argument('--skip-merge', action='store_true',
                         help='Skip merge step (use existing merged dir)')
+    parser.add_argument('--adapter-dir', default=None,
+                        help='Override adapter location (e.g. SOMA/models/lobe-{lobe}-dpo for a DPO adapter)')
+    parser.add_argument('--tag', default=None,
+                        help='Artifact suffix so a candidate export never clobbers the canonical soma-{lobe}.gguf')
     args = parser.parse_args()
 
     if not args.lobe and not args.all:
@@ -178,7 +199,8 @@ def main():
 
     for lobe in lobes:
         base = args.base or DEFAULT_BASE[lobe]
-        export_lobe(lobe, base, root, skip_merge=args.skip_merge)
+        export_lobe(lobe, base, root, skip_merge=args.skip_merge,
+                    adapter_dir=args.adapter_dir, tag=args.tag)
 
     print(f"\nAll done. Start using in Ollama:")
     for lobe in lobes:

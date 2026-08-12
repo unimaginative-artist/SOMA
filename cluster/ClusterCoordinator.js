@@ -295,30 +295,66 @@ export class ClusterCoordinator extends EventEmitter {
   }
 
   aggregateGradients(updates) {
-    // Placeholder: average all gradients
+    // Federated averaging (FedAvg): per-key mean across all node updates.
+    // Handles BOTH scalar gradients and array/tensor gradients (element-wise
+    // mean). Updates whose shape disagrees for a key are skipped for that key
+    // rather than silently corrupting the aggregate (the old version assumed
+    // scalars and would concatenate numbers on arrays).
     if (updates.length === 0) return {};
 
-    const aggregated = {};
+    const byKey = new Map(); // key -> collected values (scalars or arrays)
     for (const update of updates) {
       for (const [key, value] of Object.entries(update.gradients || {})) {
-        if (!aggregated[key]) aggregated[key] = [];
-        aggregated[key].push(value);
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key).push(value);
       }
     }
 
-    for (const key in aggregated) {
-      const sum = aggregated[key].reduce((a, b) => a + b, 0);
-      aggregated[key] = sum / aggregated[key].length;
+    const aggregated = {};
+    for (const [key, values] of byKey) {
+      if (values.length === 0) continue;
+
+      if (Array.isArray(values[0])) {
+        // Element-wise mean across same-length vectors; drop mismatched shapes.
+        const dim = values[0].length;
+        const consistent = values.filter(v => Array.isArray(v) && v.length === dim);
+        if (consistent.length === 0) continue;
+        const mean = new Array(dim).fill(0);
+        for (const vec of consistent) {
+          for (let i = 0; i < dim; i++) mean[i] += vec[i];
+        }
+        for (let i = 0; i < dim; i++) mean[i] /= consistent.length;
+        aggregated[key] = mean;
+      } else {
+        // Scalar mean; ignore non-finite contributions.
+        const nums = values.filter(v => Number.isFinite(v));
+        if (nums.length === 0) continue;
+        aggregated[key] = nums.reduce((a, b) => a + b, 0) / nums.length;
+      }
     }
 
     return aggregated;
   }
 
   addDifferentialPrivacyNoise(gradients) {
-    // Add Gaussian noise for differential privacy
+    // Real Gaussian noise via Box-Muller — this is the mechanism that actually
+    // provides the (ε,δ) differential-privacy guarantee. The previous version
+    // added UNIFORM noise, which does not. Applies in place to scalar and
+    // array-valued gradients alike.
+    const gaussian = () => {
+      let u = 0, v = 0;
+      while (u === 0) u = Math.random(); // avoid log(0)
+      while (v === 0) v = Math.random();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    };
+
     for (const key in gradients) {
-      const noise = (Math.random() - 0.5) * 2 * this.noiseScale;
-      gradients[key] += noise;
+      const val = gradients[key];
+      if (Array.isArray(val)) {
+        for (let i = 0; i < val.length; i++) val[i] += gaussian() * this.noiseScale;
+      } else if (Number.isFinite(val)) {
+        gradients[key] = val + gaussian() * this.noiseScale;
+      }
     }
   }
 

@@ -32,6 +32,8 @@ The backend serves `frontend/dist`. If you edit any `.jsx` file and don't rebuil
 
 ## Lobe Specialist System (The Sandwich Pattern)
 
+> **⚠️ SUPERSEDED — read `docs/LOBE-SUBSTRATE.md` first.** The LoRA-trained `soma-{lobe}` model approach described below was **measured worse than the base model on every lobe** (bad SFT leaked format artifacts — this is the source of the `<extra_id_1>` sentinel leaks) and is **trust-gated OFF** (`data/lobe-trust.json`). The current design is the **retrieval substrate**: a lobe is not a weak model competing with DeepSeek, it's a specialist that hands DeepSeek facts it can't have (her own source code, past outcomes, verify signals) — grounding, not substitution. See `docs/LOBE-SUBSTRATE.md` for the current architecture and the ordered completion path (prove LOGOS end-to-end → alert on silent fallback → clone to 3 lobes → DPO-clean the local models via the cluster). The LoRA training pipeline below is retained as historical reference and for the eventual DPO retrain.
+
 SOMA routes queries through trained local lobe models BEFORE sending to DeepSeek. This gives DeepSeek specialist-grounded context without replacing it. DeepSeek stays as the reasoning/synthesis engine; lobes are its expert advisors.
 
 ### How it works
@@ -89,9 +91,15 @@ ollama create soma-logos -f SOMA/models/Modelfile.logos
 ```
 
 ### PyTorch / CUDA notes (RTX 5070 — Blackwell sm_120)
-- Requires PyTorch cu130: `pip install torch --index-url https://download.pytorch.org/whl/cu130 --force-reinstall`
+- Requires PyTorch cu130: `pip install torch --index-url https://download.pytorch.org/whl/cu130 --force-reinstall --no-deps` (use `--no-deps`; the cu130 index doesn't host torch's PyPI deps). Verified working: `torch 2.13.0+cu130`, CUDA True, `bitsandbytes 0.49.2` 4-bit forward works on sm_120.
+- **GOTCHA (2026-08-10):** after upgrading torch, `torchvision`/`torchaudio` left at the old `+cu128` build break transformers with `RuntimeError: operator torchvision::nms does not exist`. Fix: `pip uninstall -y torchvision torchaudio` (LLM text training doesn't need them) OR reinstall matching versions from the cu130 index. This is what "transformers Trainer won't import" actually means.
 - Also needs: `pip install peft trl`
 - transformers 5.x: `Trainer` uses `processing_class=tokenizer` not `tokenizer=tokenizer`
+
+### Federated training bridge (cluster/FederatedLearning.cjs → finetune_gemma3.py)
+- `finetune_gemma3.py` now supports `--yes` (non-interactive), `--json-result PATH` (machine-readable result), `--dry-run` (verify plumbing, no training), `--max-steps N` (cap steps for fast smoke tests). Emits real `train_loss`/`eval_loss`/`perplexity` — no fabricated metrics; fails loudly if the ML stack is broken.
+- Cross-node aggregation: `scripts/average_adapters.py` = CPU/numpy safetensors LoRA FedAvg (sample-weighted), wired via `_aggregateAdapters`.
+- Verify bridge (no GPU): `node scripts/test-real-federated-learning-bridge.mjs`. Real GPU round: `DRY_RUN=0 node scripts/test-real-federated-learning-bridge.mjs`.
 - GGUF export: llama.cpp's `convert_hf_to_gguf.py` needs `tokenizer.model` in merged dir — copy from HF cache at `~/.cache/huggingface/hub/models--nvidia--nemotron-mini-4b-instruct/snapshots/{hash}/tokenizer.model`
 
 ---

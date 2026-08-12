@@ -53,7 +53,14 @@ CONFIG = {
     "SERVICES": {
         "soma": {
             "required": True,
-            "health_url": "http://localhost:3001/health",
+            # 127.0.0.1, NOT localhost: on Windows dual-stack, "localhost" tries
+            # IPv6 ::1 first and eats ~200ms/ping falling back to IPv4 (measured
+            # 2026-08-12: localhost 205ms vs 127.0.0.1 7ms). That 200ms baseline
+            # + a GC pause under heap pressure intermittently blew past the 4s
+            # HEALTH_TIMEOUT, producing false "unresponsive (2/12)" reads that
+            # threatened restarts and made SOMA feel offline on Discord. MAX
+            # already uses 127.0.0.1 — this matches it. 40x latency margin.
+            "health_url": "http://127.0.0.1:3001/health",
             "port": 3001,
             "boot_grace_s": 130,
             "start_dir": r"C:\Users\barry\Desktop\The Stack\SOMA",

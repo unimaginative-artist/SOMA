@@ -12,6 +12,7 @@ import { EventEmitter } from 'events';
 import { spawn } from 'child_process';
 import { promises as fs, existsSync } from 'fs';
 import path from 'path';
+import os from 'os';
 import { SOMA_VALUES_PROMPT } from './SomaValues.js';
 import { trainingExampleFingerprint, validateTrainingExample } from './TrainingDataPolicy.js';
 
@@ -29,6 +30,7 @@ export class OllamaAutoTrainer extends EventEmitter {
     // Config
     this.enabled = config.enabled !== false;
     this.conversationThreshold = config.conversationThreshold || 20; // Lowered from 100 — easier to hit
+    this.candidateThreshold = Math.max(5, Number(config.candidateThreshold || 25));
     this.checkInterval = config.checkInterval || 3600000; // 1 hour
     this.minTimeBetweenTraining = config.minTimeBetweenTraining || 86400000; // 24 hours
     
@@ -36,7 +38,9 @@ export class OllamaAutoTrainer extends EventEmitter {
     this.conversationHistory = null;
     this.personalityForge = null;
     this.trainingDataExporter = null;
+    this.trainingCandidatePromoter = null;
     this.quadBrain = null;
+    this.artifactRegistry = config.artifactRegistry || null;
 
     // Synthetic data config
     this.syntheticSamplesPerRun = config.syntheticSamplesPerRun || 20;
@@ -44,6 +48,7 @@ export class OllamaAutoTrainer extends EventEmitter {
     // State
     this.lastTrainingTime = 0;
     this.lastConversationCount = 0;
+    this.lastApprovedCandidateCount = null;
     this.currentVersion = 1;
     this.monitoringInterval = null;
     this.currentJob = null;
@@ -77,7 +82,9 @@ export class OllamaAutoTrainer extends EventEmitter {
     this.conversationHistory = systems.conversationHistory || null;
     this.personalityForge = systems.personalityForge || null;
     this.trainingDataExporter = systems.trainingDataExporter || null;
+    this.trainingCandidatePromoter = systems.trainingCandidatePromoter || null;
     this.quadBrain = systems.quadBrain || null;
+    this.artifactRegistry = systems.versionedArtifactRegistry || this.artifactRegistry;
 
     if (!this.conversationHistory) {
       console.warn(`[${this.name}]    ⚠️  No conversation history - auto-training disabled`);
@@ -92,6 +99,10 @@ export class OllamaAutoTrainer extends EventEmitter {
     const stats = this.conversationHistory.getStats();
     if (!Number.isFinite(this.lastConversationCount) || this.lastConversationCount <= 0) {
       this.lastConversationCount = stats.totalMessages;
+      await this._saveState();
+    }
+    if (this.trainingCandidatePromoter?.getApprovedExamples && !Number.isFinite(this.lastApprovedCandidateCount)) {
+      this.lastApprovedCandidateCount = (await this.trainingCandidatePromoter.getApprovedExamples()).length;
       await this._saveState();
     }
 
@@ -128,8 +139,12 @@ export class OllamaAutoTrainer extends EventEmitter {
       const stats = this.conversationHistory.getStats();
       const currentConversations = stats.totalMessages;
       const newConversations = currentConversations - this.lastConversationCount;
+      const approvedCandidateCount = this.trainingCandidatePromoter?.getApprovedExamples
+        ? (await this.trainingCandidatePromoter.getApprovedExamples()).length
+        : 0;
+      const newApprovedCandidates = Math.max(0, approvedCandidateCount - this.lastApprovedCandidateCount);
 
-      console.log(`[${this.name}]    Current: ${currentConversations}, New: ${newConversations}`);
+      console.log(`[${this.name}]    Conversations: ${currentConversations} (${newConversations} new); approved candidates: ${approvedCandidateCount} (${newApprovedCandidates} new)`);
 
       // Check cooldown
       const timeSinceLastTraining = Date.now() - this.lastTrainingTime;
@@ -142,8 +157,10 @@ export class OllamaAutoTrainer extends EventEmitter {
       }
 
       // Check threshold
-      if (newConversations < this.conversationThreshold) {
-        console.log(`[${this.name}]    ⏸️  Need ${this.conversationThreshold - newConversations} more conversations`);
+      const conversationReady = newConversations >= this.conversationThreshold;
+      const candidateReady = newApprovedCandidates >= this.candidateThreshold;
+      if (!conversationReady && !candidateReady) {
+        console.log(`[${this.name}]    ⏸️  Need ${this.conversationThreshold - newConversations} more conversations or ${this.candidateThreshold - newApprovedCandidates} approved candidates`);
         return;
       }
 
@@ -215,6 +232,9 @@ export class OllamaAutoTrainer extends EventEmitter {
 
       const stats = this.conversationHistory.getStats();
       this.lastConversationCount = stats.totalMessages;
+      if (this.trainingCandidatePromoter?.getApprovedExamples) {
+        this.lastApprovedCandidateCount = (await this.trainingCandidatePromoter.getApprovedExamples()).length;
+      }
       await this._saveState();
 
       const duration = Date.now() - startTime;
@@ -602,6 +622,7 @@ Make the questions specific and the answers rich, drawing on your actual knowled
       if (state.currentVersion) this.currentVersion = state.currentVersion;
       if (state.lastTrainingTime) this.lastTrainingTime = state.lastTrainingTime;
       if (Number.isFinite(state.lastConversationCount)) this.lastConversationCount = state.lastConversationCount;
+      if (Number.isFinite(state.lastApprovedCandidateCount)) this.lastApprovedCandidateCount = state.lastApprovedCandidateCount;
       if (state.lastAttemptTime) this.lastAttemptTime = state.lastAttemptTime;
       if (state.localRollouts) this.localRollouts = { ...this.localRollouts, ...state.localRollouts };
       if (state.promotions) this.promotions = state.promotions;
@@ -619,6 +640,7 @@ Make the questions specific and the answers rich, drawing on your actual knowled
         currentVersion: this.currentVersion,
         lastTrainingTime: this.lastTrainingTime,
         lastConversationCount: this.lastConversationCount,
+        lastApprovedCandidateCount: this.lastApprovedCandidateCount,
         lastAttemptTime: this.lastAttemptTime,
         localRollouts: this.localRollouts,
         promotions: this.promotions,
@@ -673,6 +695,10 @@ Make the questions specific and the answers rich, drawing on your actual knowled
     if (parts.length === 0) throw new Error('No training data to merge');
 
     await fs.writeFile(mergedPath, parts.join('\n'), 'utf8');
+    await this.artifactRegistry?.promote?.({
+      kind: 'dataset', id: 'ollama-merged-training', sourcePath: path.relative(process.cwd(), mergedPath),
+      metadata: { producer: this.name, partCount: parts.length }
+    });
     return mergedPath;
   }
 
@@ -734,6 +760,8 @@ Make the questions specific and the answers rich, drawing on your actual knowled
       trainingRuns: this.currentVersion,
       conversationsCollected: newConversations,
       conversationsNeeded: Math.max(0, this.conversationThreshold - newConversations),
+      approvedCandidatesAtLastTraining: this.lastApprovedCandidateCount,
+      approvedCandidateThreshold: this.candidateThreshold,
       canTrainNow: newConversations >= this.conversationThreshold &&
                    (timeSinceTraining >= this.minTimeBetweenTraining || this.lastTrainingTime === 0),
       currentJob: this.currentJob,
@@ -949,29 +977,94 @@ Make the questions specific and the answers rich, drawing on your actual knowled
     const outputDir = path.join(process.cwd(), 'models', `soma-${lobe}-${version}`);
     const modelName = `soma-${lobe}:${version}`;
 
-    const scriptPath = path.join(process.cwd(), 'scripts', 'unsloth_train.py');
-    const python = this._resolveTrainingPython();
+    // Repointed from the version-broken unsloth path to the PROVEN trainer
+    // (finetune_gemma3.py), gated on REAL training loss. Ollama A/B promotion +
+    // hot-swap are deferred until GGUF export is wired (llama-cpp-python), so this
+    // does NOT mutate lobe env vars / routing — it trains + loss-gates only, then
+    // returns (the legacy Ollama-promotion code below is intentionally bypassed).
+    const pyTrainer = this._resolveTrainingPython();
+    const trainerScript = path.join(process.cwd(), 'scripts', 'finetune_gemma3.py');
+    const dpoMode = /[\\/]dpo[\\/]|revision-pairs/i.test(String(dataPath || ''));
+    const cliArgs = [trainerScript, '--lobe', lobe, '--yes'];
+    if (dpoMode) cliArgs.push('--dpo', '--dpo-data', path.dirname(dataPath));
+    else cliArgs.push('--data-path', path.dirname(dataPath));
+    const capSteps = Number(process.env.SOMA_AUTOTRAIN_MAX_STEPS || 0);
+    if (capSteps > 0) cliArgs.push('--max-steps', String(capSteps));
 
-    const success = await new Promise((resolve) => {
-      const proc = spawn(python, [
-        scriptPath
-      ], {
+    const trainOut = await new Promise((resolve) => {
+      let out = '';
+      const proc = spawn(pyTrainer, cliArgs, {
         cwd: process.cwd(),
-        env: { 
-            ...process.env, 
-            TORCHDYNAMO_DISABLE: '1', 
-            TORCHINDUCTOR_DISABLE: '1',
-            SOMA_DATASET_PATH: dataPath,
-            SOMA_LORA_OUTPUT: outputDir,
-            UNSLOTH_BASE_MODEL: lobeModels[lobe] || 'unsloth/llama-3-8b-Instruct-bnb-4bit'
-        },
-        stdio: 'inherit',
+        env: { ...process.env, TORCHDYNAMO_DISABLE: '1', TORCHINDUCTOR_DISABLE: '1' }
       });
-      proc.on('close', (code) => resolve(code === 0));
-      proc.on('error', (err) => { console.error(`[${this.name}] spawn error:`, err.message); resolve(false); });
+      proc.stdout?.on('data', d => { const s = d.toString(); out += s; process.stdout.write(s); });
+      proc.stderr?.on('data', d => { process.stderr.write(d); });
+      proc.on('error', (err) => { console.error(`[${this.name}] spawn error:`, err.message); resolve({ ok: false, error: err.message }); });
+      proc.on('close', (code) => {
+        const mm = out.match(/__SOMA_TRAIN_RESULT__(\{.*\})/);
+        if (code !== 0) return resolve({ ok: false, error: `trainer exited ${code}` });
+        if (!mm) return resolve({ ok: false, error: 'no result JSON from trainer' });
+        try { resolve(JSON.parse(mm[1])); } catch (e) { resolve({ ok: false, error: `result parse failed: ${e.message}` }); }
+      });
     });
 
-    if (!success) return { success: false, error: 'Python training script failed' };
+    if (!trainOut || trainOut.ok === false) {
+      return { success: false, error: trainOut?.error || 'training failed' };
+    }
+
+    // Loss gate — accept only a real, finite, non-exploding loss.
+    const lossCeiling = Number(process.env.SOMA_AUTOTRAIN_LOSS_CEILING || 10);
+    const finalLoss = Number(trainOut.train_loss);
+    const passedGate = Number.isFinite(finalLoss) && finalLoss > 0 && finalLoss <= lossCeiling;
+    const gate = {
+      approved: passedGate,
+      reason: passedGate ? `loss ${finalLoss.toFixed(3)} <= ${lossCeiling}` : `loss gate failed (train_loss=${trainOut.train_loss})`,
+      wins: passedGate ? 1 : 0, total: 1,
+      trainLoss: trainOut.train_loss, evalLoss: trainOut.eval_loss, perplexity: trainOut.perplexity
+    };
+    await this._logTrainingDecision(lobe, trainOut.weights_path || outputDir, passedGate, gate).catch(() => {});
+    if (!passedGate) {
+      console.warn(`[${this.name}] ❌ ${lobe.toUpperCase()} adapter REJECTED — ${gate.reason}`);
+      return { success: false, error: gate.reason };
+    }
+    console.log(`\n[${this.name}] 🎉 ${lobe.toUpperCase()} adapter trained + loss-gated (train_loss=${finalLoss.toFixed(3)}, eval_loss=${trainOut.eval_loss}).`);
+    const adapterDir = trainOut.output_dir || trainOut.weights_path
+      || path.join(process.cwd(), 'SOMA', 'models', dpoMode ? `lobe-${lobe}-dpo` : `lobe-${lobe}`);
+    console.log(`[${this.name}]    Adapter: ${adapterDir}`);
+
+    // --- LAST MILE: GGUF export → Ollama candidate → A/B → gated hot-swap -------
+    // Resource guard: the LoRA merge loads a ~4B base model into CPU RAM (~8GB).
+    // On a constrained box that OOMs/wedges SOMA and starves live Discord replies.
+    // When constrained we KEEP the loss-gated adapter and DEFER export/promote to a
+    // quieter cycle — zero production mutation. (Override via SOMA_AUTOTRAIN_MERGE_MAX_RAM.)
+    const ramUsedRatio = 1 - (os.freemem() / os.totalmem());
+    const mergeRamCeiling = Number(process.env.SOMA_AUTOTRAIN_MERGE_MAX_RAM || 0.85);
+    if (ramUsedRatio > mergeRamCeiling) {
+      console.warn(`[${this.name}]    RAM ${(ramUsedRatio * 100).toFixed(0)}% > ceiling ${(mergeRamCeiling * 100).toFixed(0)}% — deferring GGUF export/hot-swap (adapter kept, not promoted).`);
+      this.emit('lora_training_complete', { lobe, adapterDir, evalResult: gate, hotSwapped: false, deferred: 'ram_constrained' });
+      return { success: true, modelName: adapterDir, adapter: true, evalResult: gate, hotSwapped: false, deferred: 'ram_constrained' };
+    }
+
+    // Merge adapter → GGUF → `ollama create` a VERSIONED candidate. modelName
+    // (= soma-{lobe}:v{ts}, declared above) is unique so it never clobbers the
+    // production :v2 tag; the A/B eval + promote below decide whether it wins.
+    const exportRes = await this._exportAndRegisterLobe(lobe, adapterDir, modelName, version)
+      .catch(e => ({ ok: false, error: e.message }));
+    if (!exportRes || !exportRes.ok) {
+      console.warn(`[${this.name}]    GGUF export/register failed — ${exportRes?.error || 'unknown'}. Adapter kept, not promoted.`);
+      this.emit('lora_training_complete', { lobe, adapterDir, evalResult: gate, hotSwapped: false, deferred: 'export_failed' });
+      return { success: true, modelName: adapterDir, adapter: true, evalResult: gate, hotSwapped: false, deferred: 'export_failed' };
+    }
+    console.log(`[${this.name}]    ✅ Candidate registered in Ollama: ${modelName}`);
+
+    // Kill-switch: land the candidate but skip the autonomous production flip.
+    if (process.env.SOMA_AUTOTRAIN_AUTOPROMOTE === '0') {
+      console.log(`[${this.name}]    SOMA_AUTOTRAIN_AUTOPROMOTE=0 — candidate registered, A/B promote skipped.`);
+      this.emit('lora_training_complete', { lobe, modelName, evalResult: gate, hotSwapped: false, candidate: true });
+      return { success: true, modelName, candidate: true, evalResult: gate, hotSwapped: false };
+    }
+    // Fall through to the NEMESIS A/B eval + gated promote below.
+
     // 3. NEMESIS quality gate — A/B eval against baseline, must win 4/5
     const nemesis = this._nemesis;
     let evalResult = null;
@@ -1037,6 +1130,12 @@ Make the questions specific and the answers rich, drawing on your actual knowled
       promotedAt: new Date().toISOString(),
       evaluation: { wins: evalResult?.wins, total: evalResult?.total, reason: evalResult?.reason }
     };
+    const modelVersion = this.artifactRegistry?.promoteReference
+      ? await this.artifactRegistry.promoteReference({
+          kind: 'model', id: `ollama-${lobe.toLowerCase()}`, reference: modelName,
+          metadata: { previousModel, evaluation: this.promotions[lobe.toUpperCase()].evaluation, producer: this.name }
+        })
+      : null;
     this.localRollouts[lobe.toUpperCase()] = 10;
     process.env[`SOMA_LOCAL_ROLLOUT_${lobe.toUpperCase()}`] = '10';
     if (typeof this._quadBrain?.setLocalRollout === 'function') {
@@ -1051,7 +1150,7 @@ Make the questions specific and the answers rich, drawing on your actual knowled
     }
 
     this.emit('lora_training_complete', { lobe, modelName, outputDir, evalResult });
-    return { success: true, modelName, outputDir, evalResult };
+    return { success: true, modelName, outputDir, evalResult, modelVersion };
   }
 
   _resolveTrainingPython() {
@@ -1060,6 +1159,63 @@ Make the questions specific and the answers rich, drawing on your actual knowled
       path.join(process.cwd(), '.soma_venv', 'Scripts', 'python.exe')
     ];
     return candidates.find(candidate => existsSync(candidate)) || 'python';
+  }
+
+  /**
+   * Close the last mile: merge a freshly-trained lobe adapter → GGUF → register a
+   * VERSIONED candidate model in Ollama (`ollama create <ollamaTag>`). It never
+   * touches the production tag — the caller's A/B eval decides promotion. Heavy
+   * (CPU merge of a ~4B base ≈ 8GB RAM), so callers MUST resource-guard first.
+   *
+   * @param {string} lobe        logos|aurora|prometheus|thalamus
+   * @param {string} adapterDir  where finetune_gemma3.py wrote the adapter
+   * @param {string} ollamaTag   candidate tag to register (e.g. soma-logos:v1786...)
+   * @param {string} tag         filesystem-safe artifact suffix (usually the version)
+   * @returns {Promise<{ok:boolean, ollamaTag?:string, gguf?:string, modelfile?:string, error?:string}>}
+   */
+  async _exportAndRegisterLobe(lobe, adapterDir, ollamaTag, tag) {
+    const python = this._resolveTrainingPython();
+    const script = path.join(process.cwd(), 'scripts', 'export_lobe_gguf.py');
+    if (!existsSync(script)) return { ok: false, error: 'export_lobe_gguf.py not found' };
+    if (!existsSync(adapterDir)) return { ok: false, error: `adapter dir missing: ${adapterDir}` };
+
+    const base = process.env.SOMA_LORA_BASE_MODEL || 'nvidia/nemotron-mini-4b-instruct';
+    const safeTag = String(tag || `v${Date.now()}`).replace(/[^A-Za-z0-9._-]/g, '');
+    const args = [script, '--lobe', lobe, '--adapter-dir', adapterDir, '--tag', safeTag, '--base', base];
+    const timeoutMs = Number(process.env.SOMA_GGUF_EXPORT_TIMEOUT_MS || 1800000); // 30 min
+
+    console.log(`[${this.name}]    Exporting GGUF: ${python} ${args.join(' ')}`);
+    const exp = await new Promise((resolve) => {
+      let out = '';
+      const proc = spawn(python, args, { cwd: process.cwd(), env: { ...process.env } });
+      const killer = setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} resolve({ ok: false, error: 'gguf export timeout' }); }, timeoutMs);
+      proc.stdout?.on('data', d => { const s = d.toString(); out += s; process.stdout.write(s); });
+      proc.stderr?.on('data', d => process.stderr.write(d));
+      proc.on('error', err => { clearTimeout(killer); resolve({ ok: false, error: err.message }); });
+      proc.on('close', code => {
+        clearTimeout(killer);
+        if (code !== 0) return resolve({ ok: false, error: `export exited ${code}` });
+        const m = out.match(/__SOMA_GGUF_EXPORT__(\{.*\})/);
+        if (!m) return resolve({ ok: false, error: 'no export result marker' });
+        try { resolve({ ok: true, ...JSON.parse(m[1]) }); } catch (e) { resolve({ ok: false, error: `export parse: ${e.message}` }); }
+      });
+    });
+    if (!exp.ok) return exp;
+
+    const modelfile = exp.modelfile;
+    if (!modelfile || !existsSync(modelfile)) return { ok: false, error: `modelfile missing: ${modelfile}` };
+    const ollamaBin = process.env.OLLAMA_BIN || 'ollama';
+    console.log(`[${this.name}]    ollama create ${ollamaTag} -f ${modelfile}`);
+    const created = await new Promise((resolve) => {
+      let err = '';
+      const proc = spawn(ollamaBin, ['create', ollamaTag, '-f', modelfile], { cwd: process.cwd(), env: { ...process.env } });
+      proc.stdout?.on('data', d => process.stdout.write(d));
+      proc.stderr?.on('data', d => { err += d.toString(); process.stderr.write(d); });
+      proc.on('error', e => resolve({ ok: false, error: `ollama spawn: ${e.message}` }));
+      proc.on('close', code => resolve(code === 0 ? { ok: true } : { ok: false, error: `ollama create exited ${code}: ${err.slice(-300)}` }));
+    });
+    if (!created.ok) return created;
+    return { ok: true, ollamaTag, gguf: exp.gguf, modelfile };
   }
 
   async _rebuildLobeDatasets() {

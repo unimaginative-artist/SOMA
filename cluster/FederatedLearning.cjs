@@ -3,6 +3,10 @@
 
 const fetch = require('node-fetch');
 const EventEmitter = require('events');
+const { spawn } = require('child_process');
+const path = require('path');
+const os = require('os');
+const fs = require('fs');
 
 class FederatedLearning extends EventEmitter {
   constructor(config = {}) {
@@ -31,12 +35,12 @@ class FederatedLearning extends EventEmitter {
   // === WORKER METHODS ===
   
   async trainLocal(trainingData, config = {}) {
-    this.logger.info(`[FederatedLearning:${this.nodeId}] Starting local training...`);
+    this.logger.info(`[FederatedLearning:${this.nodeId}] Starting REAL PyTorch QLoRA local training...`);
     
     this.trainingInProgress = true;
     
     try {
-      // Simulate local training
+      // Execute REAL PyTorch / DPO local training via python bridge
       const modelUpdates = await this._performLocalTraining(trainingData, config);
       
       const result = {
@@ -44,48 +48,157 @@ class FederatedLearning extends EventEmitter {
         round: this.currentRound,
         updates: modelUpdates,
         metrics: {
-          samplesProcessed: trainingData.length,
-          loss: Math.random() * 0.5, // Simulated
-          accuracy: 0.7 + Math.random() * 0.2, // Simulated
+          // Real metrics straight from the trainer. Fields that genuinely aren't
+          // produced come back null — never a fabricated fallback number.
+          samplesProcessed: modelUpdates.metadata?.examples ?? (Array.isArray(trainingData) ? trainingData.length : 0),
+          loss: modelUpdates.metrics?.loss ?? null,
+          evalLoss: modelUpdates.metrics?.evalLoss ?? null,
+          perplexity: modelUpdates.metrics?.perplexity ?? null,
+          steps: modelUpdates.metrics?.steps ?? null,
+          dryRun: modelUpdates.dryRun || false,
           trainingTime: Date.now()
         }
       };
       
       this.localModel = modelUpdates;
       
-      this.logger.info(`[FederatedLearning:${this.nodeId}] Local training complete`);
+      this.logger.info(`[FederatedLearning:${this.nodeId}] REAL PyTorch local training complete!`);
       
       this.emit('training_complete', result);
       
       return result;
       
     } catch (err) {
-      this.logger.error(`[FederatedLearning:${this.nodeId}] Training error: ${err.message}`);
+      this.logger.error(`[FederatedLearning:${this.nodeId}] Real Training error: ${err.message}`);
       throw err;
     } finally {
       this.trainingInProgress = false;
     }
   }
   
-  async _performLocalTraining(trainingData, config) {
-    // Placeholder for actual training logic
-    // In real implementation, this would:
-    // 1. Load current global model
-    // 2. Train on local data
-    // 3. Compute weight updates/gradients
-    // 4. Return model deltas
-    
-    await this._sleep(config.trainingDuration || 1000);
-    
-    // Simulated model updates
-    return {
-      weights: this._generateRandomWeights(),
-      biases: this._generateRandomBiases(),
-      metadata: {
-        epochs: config.epochs || 1,
-        batchSize: config.batchSize || 32,
-        learningRate: config.learningRate || 0.01
+  async _performLocalTraining(trainingData, config = {}) {
+    // REAL local training: spawn the Python QLoRA/DPO pipeline
+    // (scripts/finetune_gemma3.py), which trains a LoRA adapter on this node's
+    // data and returns a machine-readable result (adapter path + real loss).
+    // No fabricated metrics — a "model update" is a reference to a real adapter
+    // on disk plus the trainer's genuine loss. config: { lobe, epochs, dpo,
+    // model, dryRun, timeoutMs, python }.
+    const repoRoot = path.resolve(__dirname, '..');
+    const scriptPath = path.join(repoRoot, 'scripts', 'finetune_gemma3.py');
+    const lobe = String(config.lobe || 'logos').toLowerCase();
+    const epochs = Number.isFinite(config.epochs) ? config.epochs : 1;
+    const resultFile = path.join(os.tmpdir(), `soma-train-${this.nodeId}-${Date.now()}.json`);
+    const outputDir = path.join(repoRoot, 'SOMA', 'models', `lobe-${lobe}${config.dpo ? '-dpo' : ''}`);
+
+    // Prefer the training venv (has torch/peft/trl), then SOMA_PYTHON, then PATH.
+    let python = config.python || process.env.SOMA_PYTHON;
+    if (!python) {
+      const venv = process.platform === 'win32'
+        ? path.join(repoRoot, '.soma_venv', 'Scripts', 'python.exe')
+        : path.join(repoRoot, '.soma_venv', 'bin', 'python');
+      python = fs.existsSync(venv) ? venv : (process.platform === 'win32' ? 'python' : 'python3');
+    }
+
+    if (!fs.existsSync(scriptPath)) {
+      throw new Error(`training script not found: ${scriptPath}`);
+    }
+
+    const args = [scriptPath, '--lobe', lobe, '--epochs', String(epochs), '--yes', '--json-result', resultFile];
+    if (config.dpo) args.push('--dpo');
+    if (config.model) args.push('--model', config.model);
+    if (config.dataPath) args.push('--data-path', config.dataPath);
+    if (Number.isFinite(config.maxSteps) && config.maxSteps > 0) args.push('--max-steps', String(config.maxSteps));
+    if (config.dryRun) args.push('--dry-run');
+
+    // Training can run for many minutes; the dry-run plumbing check is fast.
+    const timeoutMs = config.timeoutMs || (config.dryRun ? 60 * 1000 : 90 * 60 * 1000);
+
+    this.logger.info(`[FederatedLearning:${this.nodeId}] Spawning trainer: ${python} ${args.join(' ')}`);
+
+    const result = await new Promise((resolve, reject) => {
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      const finish = (fn, arg) => { if (!settled) { settled = true; clearTimeout(timer); fn(arg); } };
+
+      let child;
+      const timer = setTimeout(() => {
+        try { if (child) child.kill('SIGKILL'); } catch (_) {}
+        finish(reject, new Error(`training timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      try {
+        child = spawn(python, args, { cwd: repoRoot });
+      } catch (e) {
+        return finish(reject, new Error(`failed to spawn ${python}: ${e.message}`));
       }
+
+      child.on('error', (err) => finish(reject, new Error(`failed to spawn ${python}: ${err.message}`)));
+      child.stdout.on('data', (d) => {
+        const s = d.toString();
+        stdout += s;
+        for (const line of s.split('\n')) {
+          const t = line.trim();
+          if (t && !t.startsWith('__SOMA_TRAIN_RESULT__')) {
+            this.logger.info(`[trainer:${lobe}] ${t.slice(0, 200)}`);
+          }
+        }
+      });
+      child.stderr.on('data', (d) => { stderr += d.toString(); });
+
+      child.on('close', (code) => {
+        if (settled) return;
+        if (code !== 0) {
+          return finish(reject, new Error(`trainer exited with code ${code}: ${(stderr.trim().slice(-500)) || 'no stderr'}`));
+        }
+        // Prefer the result file; fall back to the delimited stdout line.
+        let raw = null;
+        try {
+          if (fs.existsSync(resultFile)) {
+            raw = fs.readFileSync(resultFile, 'utf8');
+          } else {
+            const m = stdout.match(/__SOMA_TRAIN_RESULT__(\{.*\})\s*$/m) || stdout.match(/__SOMA_TRAIN_RESULT__(\{.*\})/);
+            if (m) raw = m[1];
+          }
+        } catch (e) {
+          return finish(reject, new Error(`could not read trainer result: ${e.message}`));
+        } finally {
+          try { if (fs.existsSync(resultFile)) fs.unlinkSync(resultFile); } catch (_) {}
+        }
+        if (!raw) return finish(reject, new Error('trainer produced no result JSON'));
+        try {
+          finish(resolve, JSON.parse(raw));
+        } catch (e) {
+          finish(reject, new Error(`could not parse trainer result JSON: ${e.message}`));
+        }
+      });
+    });
+
+    if (!result || result.ok === false) {
+      const why = (result && (result.message || result.error)) || JSON.stringify(result || {}).slice(0, 300);
+      throw new Error(`trainer reported failure: ${why}`);
+    }
+
+    // REAL model update: a reference to the trained adapter on disk + real metrics.
+    // No fabricated numbers — every field below comes from the trainer's own output.
+    return {
+      weightsPath: result.weights_path || result.output_dir || outputDir,
+      adapterDir: result.output_dir || outputDir,
+      lobe: result.lobe || lobe,
+      mode: result.mode || (config.dpo ? 'dpo' : 'sft'),
+      dryRun: !!result.dry_run,
+      metadata: {
+        epochs: result.epochs ?? epochs,
+        examples: result.examples ?? (Array.isArray(trainingData) ? trainingData.length : 0),
+        model: result.model,
+        lobe: result.lobe || lobe,
+      },
+      metrics: {
+        loss: result.train_loss ?? null,
+        evalLoss: result.eval_loss ?? null,
+        perplexity: result.perplexity ?? null,
+        steps: result.steps ?? null,
+      },
     };
   }
   
@@ -248,7 +361,7 @@ class FederatedLearning extends EventEmitter {
     
     this.logger.info(`[FederatedLearning:${this.nodeId}] Aggregating ${this.roundModels.size} models using ${strategy}...`);
     
-    const aggregatedModel = this._performAggregation(
+    const aggregatedModel = await this._performAggregation(
       Array.from(this.roundModels.values()),
       strategy
     );
@@ -274,17 +387,142 @@ class FederatedLearning extends EventEmitter {
     return this.globalModel;
   }
   
-  _performAggregation(modelUpdates, strategy) {
+  async _performAggregation(modelUpdates, strategy) {
+    // Real LoRA adapter updates carry a filesystem path, not numeric weight
+    // arrays — they must be averaged tensor-for-tensor in Python (CPU), not here.
+    // Scalar/array updates (tests, toy models) still use the JS averaging below.
+    if (modelUpdates.some((u) => this._isAdapterUpdate(u))) {
+      return await this._aggregateAdapters(modelUpdates, strategy);
+    }
     switch (strategy) {
-      case 'federated_averaging':
-        return this._federatedAveraging(modelUpdates);
-      
       case 'weighted_averaging':
         return this._weightedAveraging(modelUpdates);
-      
+      case 'federated_averaging':
       default:
         return this._federatedAveraging(modelUpdates);
     }
+  }
+
+  _isAdapterUpdate(u) {
+    const upd = (u && u.updates) ? u.updates : u;
+    return !!(upd && (upd.weightsPath || upd.adapterDir)) && !Array.isArray(upd && upd.weights);
+  }
+
+  _resolvePython(config = {}) {
+    if (config.python) return config.python;
+    if (process.env.SOMA_PYTHON) return process.env.SOMA_PYTHON;
+    const repoRoot = path.resolve(__dirname, '..');
+    const venv = process.platform === 'win32'
+      ? path.join(repoRoot, '.soma_venv', 'Scripts', 'python.exe')
+      : path.join(repoRoot, '.soma_venv', 'bin', 'python');
+    return fs.existsSync(venv) ? venv : (process.platform === 'win32' ? 'python' : 'python3');
+  }
+
+  // Real cross-node FedAvg: average the participating LoRA adapters into one
+  // global adapter via scripts/average_adapters.py (CPU/numpy, no GPU). Returns
+  // a reference to the global adapter — never fabricated numbers.
+  async _aggregateAdapters(modelUpdates, strategy = 'federated_averaging', config = {}) {
+    const repoRoot = path.resolve(__dirname, '..');
+    const script = path.join(repoRoot, 'scripts', 'average_adapters.py');
+    if (!fs.existsSync(script)) {
+      throw new Error(`adapter-averaging script not found: ${script}`);
+    }
+
+    const adapterDirs = modelUpdates
+      .map((u) => { const upd = (u && u.updates) ? u.updates : u; return upd && (upd.adapterDir || upd.weightsPath); })
+      .filter(Boolean);
+    if (adapterDirs.length === 0) {
+      throw new Error('no adapter paths in model updates to aggregate');
+    }
+
+    const outputDir = path.join(repoRoot, 'SOMA', 'models', `lobe-global-r${this.currentRound}`);
+    const resultFile = path.join(os.tmpdir(), `soma-agg-${this.nodeId}-${Date.now()}.json`);
+    const python = this._resolvePython(config);
+
+    const args = [script, '--output', outputDir, '--json-result', resultFile];
+    if (strategy === 'weighted_averaging') {
+      const samples = modelUpdates.map((u) => (u && u.metrics && u.metrics.samplesProcessed)
+        || (u && u.updates && u.updates.metadata && u.updates.metadata.examples) || 1);
+      args.push('--weights', samples.join(','));
+    }
+    if (config.dryRun) args.push('--dry-run');
+    args.push('--adapters', ...adapterDirs);
+
+    const timeoutMs = config.timeoutMs || (config.dryRun ? 60 * 1000 : 15 * 60 * 1000);
+    this.logger.info(`[FederatedLearning:${this.nodeId}] Averaging ${adapterDirs.length} adapters: ${python} ${args.join(' ')}`);
+
+    const result = await this._runPythonJson({
+      python, args, resultFile, timeoutMs,
+      logTag: `adapter-avg`, delimiter: '__SOMA_AGG_RESULT__',
+    });
+
+    if (!result || result.ok === false) {
+      const why = (result && (result.message || result.error)) || JSON.stringify(result || {}).slice(0, 300);
+      throw new Error(`adapter averaging failed: ${why}`);
+    }
+
+    return {
+      round: this.currentRound,
+      participants: result.participants ?? adapterDirs.length,
+      aggregationMethod: `adapter_fedavg_${strategy}`,
+      globalAdapterDir: result.output_dir,
+      weightsPath: result.weights_path || result.output_dir,
+      tensorsAveraged: result.tensors ?? null,
+      dryRun: !!result.dry_run,
+    };
+  }
+
+  // Spawn a Python script that emits a result JSON (to resultFile and/or a
+  // delimited stdout line) and resolve with the parsed object. Rejects on spawn
+  // failure, non-zero exit, timeout, or unparseable output — never a fake result.
+  _runPythonJson({ python, args, resultFile, timeoutMs, logTag, delimiter }) {
+    return new Promise((resolve, reject) => {
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      const finish = (fn, arg) => { if (!settled) { settled = true; clearTimeout(timer); fn(arg); } };
+      let child;
+      const timer = setTimeout(() => {
+        try { if (child) child.kill('SIGKILL'); } catch (_) {}
+        finish(reject, new Error(`${logTag} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      try {
+        child = spawn(python, args, { cwd: path.resolve(__dirname, '..') });
+      } catch (e) {
+        return finish(reject, new Error(`failed to spawn ${python}: ${e.message}`));
+      }
+      child.on('error', (err) => finish(reject, new Error(`failed to spawn ${python}: ${err.message}`)));
+      child.stdout.on('data', (d) => {
+        const s = d.toString();
+        stdout += s;
+        for (const line of s.split('\n')) {
+          const t = line.trim();
+          if (t && !t.startsWith(delimiter)) this.logger.info(`[${logTag}] ${t.slice(0, 200)}`);
+        }
+      });
+      child.stderr.on('data', (d) => { stderr += d.toString(); });
+      child.on('close', (code) => {
+        if (settled) return;
+        if (code !== 0) return finish(reject, new Error(`${logTag} exited with code ${code}: ${(stderr.trim().slice(-500)) || 'no stderr'}`));
+        let raw = null;
+        try {
+          if (resultFile && fs.existsSync(resultFile)) {
+            raw = fs.readFileSync(resultFile, 'utf8');
+          } else {
+            const esc = delimiter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const m = stdout.match(new RegExp(esc + '(\\{.*\\})'));
+            if (m) raw = m[1];
+          }
+        } catch (e) {
+          return finish(reject, new Error(`could not read ${logTag} result: ${e.message}`));
+        } finally {
+          try { if (resultFile && fs.existsSync(resultFile)) fs.unlinkSync(resultFile); } catch (_) {}
+        }
+        if (!raw) return finish(reject, new Error(`${logTag} produced no result JSON`));
+        try { finish(resolve, JSON.parse(raw)); }
+        catch (e) { finish(reject, new Error(`could not parse ${logTag} result JSON: ${e.message}`)); }
+      });
+    });
   }
   
   _federatedAveraging(modelUpdates) {
@@ -434,17 +672,7 @@ class FederatedLearning extends EventEmitter {
   }
   
   // === UTILITY METHODS ===
-  
-  _generateRandomWeights() {
-    // Simulated weight matrix
-    return Array(10).fill(0).map(() => Math.random() * 2 - 1);
-  }
-  
-  _generateRandomBiases() {
-    // Simulated bias vector
-    return Array(10).fill(0).map(() => Math.random() * 0.2 - 0.1);
-  }
-  
+
   _sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
