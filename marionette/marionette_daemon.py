@@ -143,6 +143,7 @@ class ServiceMonitor:
         self.last_probe = {"http": None, "listener": None, "failed_at": None}
         self.deploying = False           # managed deploy in progress (skip auto-recovery)
         self.deploy_state = "idle"       # idle|deploying|verifying|succeeded|rolled_back|failed
+        self.last_reap = 0.0             # last orphan-reap sweep (throttled)
 
     # ── state helpers ──
     def _set(self, s):
@@ -164,12 +165,72 @@ class ServiceMonitor:
             return True
         return False
 
+    # ── orphan / zombie reaper ──
+    def reap_orphans(self, supervisor):
+        """Kill orphaned DUPLICATE instances of this service.
+
+        Matches processes by the service's command SIGNATURE (never a blanket
+        node kill), keeps the live port owner, and reaps the rest once they are
+        old enough to not be a still-booting instance. SAFETY: it only acts when
+        the live port owner ITSELF matches the signature — so the keeper is
+        positively identified inside the same class. If nothing matching owns the
+        port (e.g. a launcher/child split like SOMA's), it bails and kills nothing.
+        Returns the number reaped.
+        """
+        if not CONFIG.get("REAP_ENABLED", True):
+            return 0
+        sig = self.spec.get("process_match")
+        if not sig:
+            return 0
+        live = pid_on_port(self.spec["port"])
+        if not live:
+            return 0  # no live keeper on the port → cannot safely identify one
+        # Enumerate node processes whose command line carries this signature.
+        esc = sig.replace("'", "''")
+        listing = _ps(
+            "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | "
+            f"Where-Object {{ $_.CommandLine -like '*{esc}*' }} | "
+            "Select-Object -ExpandProperty ProcessId", timeout=10)
+        pids = []
+        for tok in listing.split():
+            try:
+                pids.append(int(tok))
+            except ValueError:
+                pass
+        # The keeper must be in the matched set, or we don't understand the
+        # topology well enough to reap safely — bail.
+        if live not in pids:
+            return 0
+        min_age = CONFIG.get("REAP_MIN_AGE_S", 180)
+        reaped = 0
+        for pid in pids:
+            if pid == live or pid == SELF_PID:
+                continue
+            age = process_age_seconds(pid)
+            if age is None or age < min_age:
+                continue  # unknown age or still booting — leave it
+            if kill_pid(pid):  # kill_pid already refuses protected processes
+                reaped += 1
+        if reaped:
+            supervisor.alert(self.name, "reaped_orphans",
+                             f"reaped {reaped} orphaned {self.name} instance(s); "
+                             f"kept live pid {live} on :{self.spec['port']}")
+        return reaped
+
     # ── the per-tick evaluation ──
     def evaluate(self, supervisor):
         # Optional, not-installed services are invisible to the supervisor.
         if not self.installed:
             self._set("not_installed")
             return
+        # Sweep orphaned duplicates regardless of health state (they pile up even
+        # while the live instance is healthy). Throttled; never touches the keeper.
+        if now() - self.last_reap >= CONFIG.get("REAP_INTERVAL_SECONDS", 60):
+            self.last_reap = now()
+            try:
+                self.reap_orphans(supervisor)
+            except Exception as e:
+                supervisor.log_action(self.name, "reap_error", {"error": str(e)})
         # A managed deploy owns the lifecycle while it runs — don't double-restart.
         if self.deploying:
             self._set("deploying")

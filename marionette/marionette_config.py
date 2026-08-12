@@ -32,6 +32,21 @@ CONFIG = {
     "RESTART_WINDOW_SECONDS": 600,     # ...before the circuit opens (10 min)
     "CIRCUIT_COOLDOWN_SECONDS": 900,   # how long the circuit stays open (15 min)
 
+    # ── Orphan / zombie reaper ─────────────────────────────────────────────
+    # The restart path only kills the process ON THE PORT. Instances that
+    # spawned but never bound the port (crash-loop leftovers, duplicate chat
+    # servers) are invisible to it and PILE UP — 34 MAX `launcher.mjs --mode
+    # chat` instances once ate 19GB and wedged SOMA (2026-08-12). The reaper
+    # sweeps duplicates by COMMAND SIGNATURE (never a blanket node kill — that
+    # footgun stays gone). SAFETY RULE: it reaps only when the live port owner
+    # ITSELF matches the signature, so the keeper is positively identified in
+    # the same class; otherwise it bails. That is why SOMA — whose :3001 owner
+    # is a CHILD of the launcher_ULTRA process, not launcher_ULTRA itself — has
+    # no process_match yet: enabling it naively would kill SOMA's launcher.
+    "REAP_ENABLED": True,
+    "REAP_INTERVAL_SECONDS": 60,       # sweep cadence per service
+    "REAP_MIN_AGE_S": 180,             # never reap an instance younger than this (may be booting)
+
     # ── Discord alerting (independent of SOMA being up) ────────────────────
     # Set MARIONETTE_DISCORD_WEBHOOK to get posts when Marionette takes action.
     # Falls back to file-only logging if unset.
@@ -77,6 +92,9 @@ CONFIG = {
             "start_dir": r"C:\Users\barry\Desktop\The Stack\MAX",
             "detect_file": "start-local.bat",
             "start_cmd": ["cmd", "/c", "start-local.bat"],
+            # Reaper signature: every MAX chat server launches with this exact
+            # command; only ONE should own :3100. Duplicates are orphans → reaped.
+            "process_match": "launcher.mjs --mode chat",
         },
     },
 
