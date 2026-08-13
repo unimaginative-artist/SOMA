@@ -65,6 +65,15 @@ CONFIG = {
     "RAM_WARN_PCT": 90,                # warn when RAM usage exceeds this
     "RAM_CRIT_PCT": 96,                # critical: box about to thrash/wedge
 
+    # Auto-heal on CRITICAL: Marionette (not SOMA — she's the one drowning) takes
+    # the safe, reversible remediation itself, then DMs what it did.
+    #   disk → delete ~/.cache/huggingface/datasets (regenerable training cache,
+    #          the exact thing that filled the disk on 2026-08-13)
+    #   ram  → `ollama stop` loaded models (they reload on demand)
+    "RESOURCE_AUTOHEAL": True,
+    "AUTOHEAL_COOLDOWN_S": 600,        # don't repeat an auto-heal within 10 min
+    "HF_DATASETS_CACHE": "~/.cache/huggingface/datasets",
+
     # ── Discord alerting (independent of SOMA being up) ────────────────────
     # Set MARIONETTE_DISCORD_WEBHOOK to get posts when Marionette takes action.
     # Falls back to file-only logging if unset.

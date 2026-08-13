@@ -359,6 +359,7 @@ class Supervisor:
         self._lock = threading.Lock()
         self._last_resource_check = 0.0        # disk/RAM watchdog throttle
         self._resource_alert_state = {}        # {name: {"level","ts"}} for de-dup + cooldown
+        self._last_autoheal = {}               # {name: ts} auto-heal cooldown
 
     def pause(self, seconds=240):
         self.paused = True
@@ -436,6 +437,63 @@ class Supervisor:
             # persistently-bad but within cooldown: keep the level, don't re-nag
             self._resource_alert_state[name] = {"level": level, "ts": st["ts"]}
 
+    def _autoheal_disk(self):
+        """Delete the regenerable HF training-dataset cache (the exact thing that
+        filled the disk on 2026-08-13). Returns GB freed, or None if nothing to do."""
+        target = os.path.expanduser(CONFIG.get("HF_DATASETS_CACHE", "~/.cache/huggingface/datasets"))
+        if not os.path.isdir(target):
+            return None
+        disk = CONFIG.get("DISK_PATH", "C:\\")
+        before = shutil.disk_usage(disk).free
+        try:
+            shutil.rmtree(target, ignore_errors=True)
+        except Exception as e:
+            self.log_action("system", "autoheal_disk_error", {"error": str(e)})
+            return None
+        freed = (shutil.disk_usage(disk).free - before) / (1024 ** 3)
+        return max(0.0, freed)
+
+    def _autoheal_ram(self):
+        """Unload loaded Ollama models (reversible — they reload on demand)."""
+        stopped = []
+        try:
+            out = subprocess.run(["ollama", "ps"], capture_output=True, text=True, timeout=10).stdout
+            for line in out.splitlines()[1:]:          # skip header
+                name = line.split()[0] if line.split() else ""
+                if ":" in name:                        # model tags look like name:tag
+                    try:
+                        subprocess.run(["ollama", "stop", name], capture_output=True, timeout=15)
+                        stopped.append(name)
+                    except Exception:
+                        pass
+        except Exception as e:
+            self.log_action("system", "autoheal_ram_error", {"error": str(e)})
+        return stopped
+
+    def _maybe_autoheal(self, name):
+        """On CRITICAL, take the safe remediation for `name` (throttled) and DM the result."""
+        if not CONFIG.get("RESOURCE_AUTOHEAL", True):
+            return
+        if now() - self._last_autoheal.get(name, 0.0) < CONFIG.get("AUTOHEAL_COOLDOWN_S", 600):
+            return
+        self._last_autoheal[name] = now()
+        if name == "disk":
+            freed = self._autoheal_disk()
+            if freed and freed > 0.5:
+                msg = f"auto-healed disk — cleared regenerable HF dataset cache, freed {freed:.0f} GB"
+            elif freed is not None:
+                msg = "auto-heal disk: HF cache already clear — need manual cleanup (models/logs)"
+            else:
+                msg = "auto-heal disk: nothing safe to auto-clear — manual cleanup needed NOW"
+            self.alert("system", "autoheal_disk", msg)
+            self.dm_master(f"🛠️ Marionette: {msg}")
+        elif name == "ram":
+            stopped = self._autoheal_ram()
+            msg = (f"auto-healed RAM — unloaded {len(stopped)} Ollama model(s): {', '.join(stopped)}"
+                   if stopped else "auto-heal RAM: no Ollama models to unload — pressure is elsewhere")
+            self.alert("system", "autoheal_ram", msg)
+            self.dm_master(f"🛠️ Marionette: {msg}")
+
     def _resource_watchdog(self):
         """Sample disk + RAM (throttled) and warn the master BEFORE either hits 100%."""
         if now() - self._last_resource_check < CONFIG.get("RESOURCE_CHECK_SECONDS", 60):
@@ -451,6 +509,7 @@ class Supervisor:
                     f"CRITICAL: only {free_gb:.0f} GB disk free — clear space NOW "
                     f"(e.g. ~/.cache/huggingface/datasets, regenerable). A full disk "
                     f"silently breaks SOMA's state/goal writes.")
+                self._maybe_autoheal("disk")
             elif free_gb < CONFIG.get("DISK_WARN_GB", 60):
                 self._resource_alert("disk", "warning", f"disk getting low: {free_gb:.0f} GB free")
             else:
@@ -469,6 +528,7 @@ class Supervisor:
             if ram_pct >= CONFIG.get("RAM_CRIT_PCT", 96):
                 self._resource_alert("ram", "critical",
                     f"CRITICAL: RAM {ram_pct}% — the box is about to thrash and wedge SOMA.")
+                self._maybe_autoheal("ram")
             elif ram_pct >= CONFIG.get("RAM_WARN_PCT", 90):
                 self._resource_alert("ram", "warning", f"RAM high: {ram_pct}%")
             else:
