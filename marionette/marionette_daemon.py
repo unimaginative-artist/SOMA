@@ -16,6 +16,7 @@ Keeps both services alive, monitors the bridge, and self-heals — safely:
 Pure stdlib. Run:  python marionette_daemon.py
 """
 import os
+import shutil
 import sys
 import json
 import time
@@ -356,6 +357,8 @@ class Supervisor:
         self.started_at = now()
         self.bridge_ok = False
         self._lock = threading.Lock()
+        self._last_resource_check = 0.0        # disk/RAM watchdog throttle
+        self._resource_alert_state = {}        # {name: {"level","ts"}} for de-dup + cooldown
 
     def pause(self, seconds=240):
         self.paused = True
@@ -383,6 +386,93 @@ class Supervisor:
                 urllib.request.urlopen(req, timeout=5)
             except Exception:
                 pass
+
+    # ── disk / RAM watchdog ──
+    def dm_master(self, text):
+        """DM the master directly via Discord REST (bot token from SOMA's creds).
+        Works even when SOMA's process is down — no gateway/bot login needed."""
+        try:
+            creds_path = os.path.join(os.path.dirname(__file__), "..", ".soma", "discord_creds.json")
+            with open(creds_path, encoding="utf-8") as f:
+                creds = json.load(f)
+            token = creds.get("token")
+            master = creds.get("masterId")
+            if not token or not master:
+                return
+            hdr = {"Authorization": f"Bot {token}", "Content-Type": "application/json"}
+            req = urllib.request.Request(
+                "https://discord.com/api/v10/users/@me/channels",
+                data=json.dumps({"recipient_id": str(master)}).encode(),
+                headers=hdr, method="POST")
+            chan = json.load(urllib.request.urlopen(req, timeout=8)).get("id")
+            if not chan:
+                return
+            req2 = urllib.request.Request(
+                f"https://discord.com/api/v10/channels/{chan}/messages",
+                data=json.dumps({"content": text[:1900]}).encode(),
+                headers=hdr, method="POST")
+            urllib.request.urlopen(req2, timeout=8)
+        except Exception:
+            pass  # alerting must never crash the supervisor
+
+    def _resource_alert(self, name, level, message):
+        """Alert on a worsening level or after a cooldown; announce recovery once."""
+        rank = {"ok": 0, "warning": 1, "critical": 2}
+        st = self._resource_alert_state.get(name, {"level": "ok", "ts": 0.0})
+        cooldown = CONFIG.get("RESOURCE_ALERT_COOLDOWN_S", 1800)
+        worsened = rank[level] > rank[st["level"]]
+        stale = level != "ok" and (now() - st["ts"] > cooldown)
+        recovered = level == "ok" and st["level"] != "ok"
+        if worsened or stale or recovered:
+            self._resource_alert_state[name] = {"level": level, "ts": now()}
+            if recovered:
+                self.alert("system", f"{name}_recovered", message)
+                self.dm_master(f"✅ Marionette: {message}")
+            else:
+                self.alert("system", f"{name}_{level}", message)
+                icon = "🔴" if level == "critical" else "🟠"
+                self.dm_master(f"{icon} Marionette watchdog: {message}")
+        else:
+            # persistently-bad but within cooldown: keep the level, don't re-nag
+            self._resource_alert_state[name] = {"level": level, "ts": st["ts"]}
+
+    def _resource_watchdog(self):
+        """Sample disk + RAM (throttled) and warn the master BEFORE either hits 100%."""
+        if now() - self._last_resource_check < CONFIG.get("RESOURCE_CHECK_SECONDS", 60):
+            return
+        self._last_resource_check = now()
+
+        # Disk — Python stdlib, no deps.
+        try:
+            du = shutil.disk_usage(CONFIG.get("DISK_PATH", "C:\\"))
+            free_gb = du.free / (1024 ** 3)
+            if free_gb < CONFIG.get("DISK_CRIT_GB", 20):
+                self._resource_alert("disk", "critical",
+                    f"CRITICAL: only {free_gb:.0f} GB disk free — clear space NOW "
+                    f"(e.g. ~/.cache/huggingface/datasets, regenerable). A full disk "
+                    f"silently breaks SOMA's state/goal writes.")
+            elif free_gb < CONFIG.get("DISK_WARN_GB", 60):
+                self._resource_alert("disk", "warning", f"disk getting low: {free_gb:.0f} GB free")
+            else:
+                self._resource_alert("disk", "ok", f"disk recovered: {free_gb:.0f} GB free")
+        except Exception as e:
+            self.log_action("system", "disk_check_error", {"error": str(e)})
+
+        # RAM — via PowerShell (Marionette already shells out; avoids a psutil dep).
+        out = _ps("$o=Get-CimInstance Win32_OperatingSystem; "
+                  "[int](100-($o.FreePhysicalMemory/$o.TotalVisibleMemorySize*100))")
+        try:
+            ram_pct = int((out or "").strip())
+        except (ValueError, AttributeError):
+            ram_pct = None
+        if ram_pct is not None:
+            if ram_pct >= CONFIG.get("RAM_CRIT_PCT", 96):
+                self._resource_alert("ram", "critical",
+                    f"CRITICAL: RAM {ram_pct}% — the box is about to thrash and wedge SOMA.")
+            elif ram_pct >= CONFIG.get("RAM_WARN_PCT", 90):
+                self._resource_alert("ram", "warning", f"RAM high: {ram_pct}%")
+            else:
+                self._resource_alert("ram", "ok", f"RAM recovered: {ram_pct}%")
 
     # ── cold start: bring the installed stack up at supervisor launch ──
     def cold_start(self):
@@ -412,6 +502,7 @@ class Supervisor:
         self.cold_start()
         while True:
             try:
+                self._resource_watchdog()   # disk/RAM alerts — run even while paused
                 # Auto-resume a timed pause so supervision never stays off.
                 if self.paused and self._pause_until and now() >= self._pause_until:
                     self.paused = False

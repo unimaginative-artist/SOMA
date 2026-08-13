@@ -50,6 +50,21 @@ CONFIG = {
     "REAP_INTERVAL_SECONDS": 60,       # sweep cadence per service
     "REAP_MIN_AGE_S": 180,             # never reap an instance younger than this (may be booting)
 
+    # ── Disk / RAM watchdog ────────────────────────────────────────────────
+    # 2026-08-13: a 344GB HuggingFace training-dataset cache silently filled the
+    # disk to 100%, which broke SOMA's state/goal writes (she "made goals but
+    # never executed") with NO warning. RAM likewise thrashed to 98% and wedged
+    # her. This watchdog warns BEFORE either hits the wall — independent of SOMA
+    # (Marionette stays up when SOMA is down). Alerts via the webhook AND a direct
+    # bot DM to the master (REST, no gateway needed).
+    "RESOURCE_CHECK_SECONDS": 60,      # how often to sample disk + RAM
+    "RESOURCE_ALERT_COOLDOWN_S": 1800, # re-nag interval while still bad (30 min)
+    "DISK_PATH": "C:\\",
+    "DISK_WARN_GB": 60,                # warn when free disk drops below this
+    "DISK_CRIT_GB": 20,                # critical: clear space now
+    "RAM_WARN_PCT": 90,                # warn when RAM usage exceeds this
+    "RAM_CRIT_PCT": 96,                # critical: box about to thrash/wedge
+
     # ── Discord alerting (independent of SOMA being up) ────────────────────
     # Set MARIONETTE_DISCORD_WEBHOOK to get posts when Marionette takes action.
     # Falls back to file-only logging if unset.
