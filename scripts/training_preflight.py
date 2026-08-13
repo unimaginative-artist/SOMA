@@ -2,6 +2,7 @@
 import argparse
 import importlib.metadata
 import json
+import os
 import sys
 
 
@@ -15,6 +16,12 @@ def package_version(name):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--require-free-gb', type=float, default=6.0)
+    # Disk guard: the HF `datasets` library caches processed datasets as .arrow
+    # files under ~/.cache/huggingface/datasets and NEVER cleans them — autonomous
+    # training runs piled these to 344GB and filled the disk to 100% (2026-08-13),
+    # which silently broke SOMA's state/goal writes. Refuse to train when disk is
+    # low so a runaway cache can never wedge the whole machine again.
+    parser.add_argument('--require-free-disk-gb', type=float, default=40.0)
     args = parser.parse_args()
     result = {
         'ok': False,
@@ -23,8 +30,21 @@ def main():
         'cuda': False,
         'gpu': None,
         'freeGpuGb': 0,
+        'freeDiskGb': 0,
         'errors': [],
     }
+
+    try:
+        import shutil
+        free_disk = shutil.disk_usage(os.path.expanduser('~')).free
+        result['freeDiskGb'] = round(free_disk / (1024 ** 3), 1)
+        if result['freeDiskGb'] < args.require_free_disk_gb:
+            result['errors'].append(
+                f'only {result["freeDiskGb"]} GiB disk free; require {args.require_free_disk_gb} GiB '
+                f'(clear ~/.cache/huggingface/datasets — regenerable cache)'
+            )
+    except Exception as exc:
+        result['errors'].append(f'disk check failed: {exc}')
 
     # Python 3.13 is now approved: verified working end-to-end with
     # torch 2.13.0+cu130 + bitsandbytes 4-bit on RTX 5070 (2026-08-11). The real
