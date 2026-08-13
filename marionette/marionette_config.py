@@ -13,13 +13,16 @@ CONFIG = {
 
     # ── Loop timing (seconds) ──────────────────────────────────────────────
     "PING_INTERVAL_SECONDS": 5,        # how often we health-check each service
-    "HEALTH_TIMEOUT_SECONDS": 4,       # per-ping HTTP timeout
+    "HEALTH_TIMEOUT_SECONDS": 6,       # per-ping HTTP timeout (was 4 — SOMA's ML/
+                                       # embedding work briefly pegs the event loop)
     "FAILS_TO_STUCK": 2,               # consecutive fails -> "stuck" (warn)
     "FAILS_TO_DEAD": 4,                # consecutive fails -> "dead" (recover)
     # A listening socket means the process still exists and may only be under
-    # temporary event-loop or CPU pressure. Give it roughly two minutes before
-    # replacing it; a process with no listener still uses FAILS_TO_DEAD.
-    "FAILS_TO_DEAD_WITH_LISTENER": 12,
+    # temporary event-loop or CPU pressure. Raised 12 -> 24 (~2 min at 5s ping)
+    # because restart-looping SOMA during a CPU-heavy stretch is WORSE than a
+    # slow-but-up SOMA — each restart re-triggers her heavy boot. A crashed
+    # process (no listener) still uses the fast FAILS_TO_DEAD path.
+    "FAILS_TO_DEAD_WITH_LISTENER": 24,
     "COLD_START_LISTENER_GRACE_SECONDS": 90,
 
     # Managed-deploy health window: a service gets boot_grace_s + this many
@@ -77,7 +80,8 @@ CONFIG = {
             # already uses 127.0.0.1 — this matches it. 40x latency margin.
             "health_url": "http://127.0.0.1:3001/health",
             "port": 3001,
-            "boot_grace_s": 130,
+            "boot_grace_s": 240,  # was 130 — SOMA's heavy-system boot + first ML
+                                  # warmup can peg CPU well past 2 min; don't kill mid-boot
             "start_dir": r"C:\Users\barry\Desktop\The Stack\SOMA",
             "detect_file": "start_production.bat",
             # Recovery uses the LEAN launcher (no WSL/Redis/Siren preamble that
