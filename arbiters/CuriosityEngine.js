@@ -963,6 +963,30 @@ Respond as SOMA thinking to herself: first person, genuine, not a textbook. Keep
       console.log(`[${this.name}] 🔍 Hunt already running for ${lobe} — skipping`);
       return;
     }
+
+    // Global concurrency cap — do NOT hunt all 4 lobes at once. Each hunt
+    // downloads + processes multi-GB datasets; 4 concurrent piled ~253GB of
+    // cache and crept the disk to 95% overnight (2026-08-14). Serialize them so
+    // peak disk/RAM use is one lobe's worth, not four.
+    const maxConcurrent = Number(process.env.SOMA_HUNT_MAX_CONCURRENT || 1);
+    if (this._runningHunts.size >= maxConcurrent) {
+      console.log(`[${this.name}] 🔍 ${lobe} hunt deferred — ${this._runningHunts.size} hunt(s) already running (max ${maxConcurrent})`);
+      return;
+    }
+
+    // Disk precondition — never download datasets when the disk is tight. This
+    // is the guard that was missing when the disk filled overnight. Generous
+    // headroom (default 120GB) because a single hunt can pull tens of GB.
+    const minFreeGb = Number(process.env.SOMA_HUNT_MIN_FREE_GB || 120);
+    try {
+      const st = fs.statfsSync(path.join(__dirname, '..'));
+      const freeGb = (st.bavail * st.bsize) / (1024 ** 3);
+      if (freeGb < minFreeGb) {
+        console.log(`[${this.name}] 🔍 ${lobe} hunt skipped — only ${freeGb.toFixed(0)}GB disk free (need ${minFreeGb}GB). Curiosity paused until space frees up.`);
+        return;
+      }
+    } catch { /* can't measure disk — proceed; watchdog + train-guard are backstops */ }
+
     const lastHunt = this._lastHuntTime[lobe] || 0;
     if (Date.now() - lastHunt < HUNT_COOLDOWN_MS) {
       const hoursAgo = ((Date.now() - lastHunt) / 3600000).toFixed(1);
