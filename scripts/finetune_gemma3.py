@@ -49,6 +49,12 @@ try:
         prepare_model_for_kbit_training,
     )
     from datasets import load_dataset
+    import datasets as _datasets
+    # Do NOT persist the multi-GB .arrow cache of every dataset load. Left on, 4
+    # concurrent per-lobe runs piled ~253GB into ~/.cache/huggingface/datasets
+    # overnight (2026-08-14) and crept the disk to 95%. Disabling caching makes
+    # `datasets` use temp files that are cleaned up on exit, so it never accumulates.
+    _datasets.disable_caching()
 except Exception as _ml_import_err:  # noqa: BLE001
     torch = None
     _ML_IMPORT_ERROR = _ml_import_err
