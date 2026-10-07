@@ -1,0 +1,133 @@
+{
+  "id": "example_conditional_flow",
+  "name": "Conditional Decision Workflow",
+  "description": "Demonstrates branching logic based on conditions",
+  "tags": ["example", "decision", "conditional", "intermediate"],
+  "initialState": "analyze_input",
+  "states": {
+    "analyze_input": {
+      "type": "action",
+      "action": "quadbrain:classify",
+      "parameters": {
+        "query": "Classify the urgency of this request"
+      },
+      "timeout": 20000,
+      "onSuccess": "check_urgency",
+      "onError": "error"
+    },
+    "check_urgency": {
+      "type": "decision",
+      "branches": [
+        {
+          "condition": "result.urgency === 'critical'",
+          "target": "immediate_action"
+        },
+        {
+          "condition": "result.urgency === 'high'",
+          "target": "priority_action"
+        },
+        {
+          "condition": "result.urgency === 'medium'",
+          "target": "standard_action"
+        },
+        {
+          "condition": "result.urgency === 'low'",
+          "target": "queue_action"
+        }
+      ],
+      "defaultBranch": 2
+    },
+    "immediate_action": {
+      "type": "action",
+      "action": "quadbrain:handle_critical",
+      "parameters": {
+        "priority": "immediate",
+        "notify": true
+      },
+      "timeout": 10000,
+      "onSuccess": "log_outcome",
+      "onError": "escalate"
+    },
+    "priority_action": {
+      "type": "action",
+      "action": "quadbrain:handle_priority",
+      "parameters": {
+        "priority": "high"
+      },
+      "timeout": 20000,
+      "onSuccess": "log_outcome",
+      "onError": "retry_priority"
+    },
+    "standard_action": {
+      "type": "action",
+      "action": "quadbrain:handle_standard",
+      "parameters": {
+        "priority": "normal"
+      },
+      "timeout": 30000,
+      "onSuccess": "log_outcome",
+      "onError": "error"
+    },
+    "queue_action": {
+      "type": "action",
+      "action": "quadbrain:queue",
+      "parameters": {
+        "priority": "low",
+        "defer": true
+      },
+      "timeout": 5000,
+      "onSuccess": "queued",
+      "onError": "error"
+    },
+    "retry_priority": {
+      "type": "wait",
+      "duration": 3000,
+      "target": "priority_action"
+    },
+    "escalate": {
+      "type": "action",
+      "action": "quadbrain:escalate",
+      "parameters": {
+        "level": "emergency"
+      },
+      "timeout": 15000,
+      "onSuccess": "log_outcome",
+      "onError": "critical_failure"
+    },
+    "log_outcome": {
+      "type": "action",
+      "action": "system:log",
+      "parameters": {
+        "level": "info"
+      },
+      "timeout": 5000,
+      "onSuccess": "complete",
+      "onError": "complete"
+    },
+    "queued": {
+      "type": "terminal",
+      "status": "completed",
+      "message": "Request queued for later processing"
+    },
+    "complete": {
+      "type": "terminal",
+      "status": "completed",
+      "message": "Request processed successfully"
+    },
+    "critical_failure": {
+      "type": "terminal",
+      "status": "failed",
+      "message": "Critical failure - manual intervention required"
+    },
+    "error": {
+      "type": "terminal",
+      "status": "failed",
+      "message": "Workflow failed"
+    }
+  },
+  "metadata": {
+    "type": "conditional",
+    "difficulty": "intermediate",
+    "estimatedDuration": 60000
+  }
+}

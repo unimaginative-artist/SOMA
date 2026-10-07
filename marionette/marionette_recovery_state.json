@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "boot_id": "a190bae2-664c-4693-8346-dfe9331b0181",
+  "updated_at": "2026-10-07T08:58:25.656660+00:00",
+  "supervisor_pid": 22432,
+  "large_model_lease_active": false,
+  "services": {
+    "ollama": {
+      "state": "healthy",
+      "installed": true,
+      "required": true,
+      "deploy_state": "idle",
+      "consecutive_fails": 0,
+      "last_healthy_age_s": 0.0,
+      "total_restarts": 0,
+      "restarts_in_window": 0,
+      "circuit_open": false,
+      "circuit_reopen_in_s": 0,
+      "booting": false,
+      "probe": {
+        "http": true,
+        "listener": true,
+        "failed_at": null
+      },
+      "recovery_threshold": 24
+    },
+    "soma": {
+      "state": "healthy",
+      "installed": true,
+      "required": true,
+      "deploy_state": "idle",
+      "consecutive_fails": 0,
+      "last_healthy_age_s": 0.0,
+      "total_restarts": 18,
+      "restarts_in_window": 1,
+      "circuit_open": false,
+      "circuit_reopen_in_s": 0,
+      "booting": false,
+      "probe": {
+        "http": true,
+        "listener": true,
+        "failed_at": null
+      },
+      "recovery_threshold": 24
+    },
+    "max": {
+      "state": "healthy",
+      "installed": true,
+      "required": false,
+      "deploy_state": "idle",
+      "consecutive_fails": 0,
+      "last_healthy_age_s": 0.0,
+      "total_restarts": 1,
+      "restarts_in_window": 1,
+      "circuit_open": false,
+      "circuit_reopen_in_s": 0,
+      "booting": false,
+      "probe": {
+        "http": true,
+        "listener": true,
+        "failed_at": null
+      },
+      "recovery_threshold": 24
+    },
+    "siren": {
+      "state": "not_installed",
+      "installed": false,
+      "required": false,
+      "deploy_state": "idle",
+      "consecutive_fails": 0,
+      "last_healthy_age_s": null,
+      "total_restarts": 0,
+      "restarts_in_window": 0,
+      "circuit_open": false,
+      "circuit_reopen_in_s": 0,
+      "booting": false,
+      "probe": {
+        "http": null,
+        "listener": null,
+        "failed_at": null
+      },
+      "recovery_threshold": 4
+    }
+  }
+}

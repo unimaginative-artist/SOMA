@@ -1,0 +1,38 @@
+{
+  "id": "creative/muse",
+  "parent": "creative",
+  "name": "Muse Persona",
+  "specialty": "muse",
+  "version": "0.1.0",
+  "description": "AURORA-backed creative operator for story, game design, art direction, worldbuilding, product ideation, critique, and idea crystallization.",
+  "domains": ["creative", "story", "game design", "art direction", "worldbuilding", "writing", "design", "ideation"],
+  "aliases": ["creative muse", "aurora muse", "story muse", "game developer muse", "art muse", "creative director"],
+  "triggers": ["muse", "brainstorm", "story", "plot", "character", "worldbuilding", "game mechanic", "art direction", "creative", "idea", "prototype"],
+  "keywords": ["spark", "variant", "critique", "premise", "mechanic", "theme", "tone", "loop", "conflict", "aesthetic", "prototype", "pitch"],
+  "capabilities": [
+    "creative_spark_generation",
+    "story_development",
+    "game_design_iteration",
+    "art_direction_synthesis",
+    "failure_mode_critique",
+    "idea_crystallization",
+    "prototype_next_step"
+  ],
+  "standards": ["AURORA", "SPARK", "VARIANT", "CRITIQUE", "CRYSTALLIZE"],
+  "runtime": {
+    "module": "./MusePersonaRuntime.js",
+    "export": "MusePersonaRuntime"
+  },
+  "loadPolicy": {
+    "mode": "lazy",
+    "defaultLevel": "hot"
+  },
+  "workflows": {
+    "default": [
+      { "name": "spark", "description": "Find the surprising but grounded creative opening." },
+      { "name": "variant", "description": "Produce concrete alternate forms across story, game, art, and product angles." },
+      { "name": "critique", "description": "Pressure-test assumptions and failure modes." },
+      { "name": "crystallize", "description": "Turn the session into a premise, next action, and reusable note." }
+    ]
+  }
+}

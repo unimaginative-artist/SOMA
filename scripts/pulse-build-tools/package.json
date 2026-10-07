@@ -1,0 +1,1 @@
+{"name":"pulse-build-tools","private":true,"description":"Isolated build-time deps for scripts/build-pulse.mjs (keeps the frontend dependency tree untouched)","dependencies":{"@babel/core":"^7.29.0","@babel/plugin-transform-block-scoping":"^7.29.7"}}

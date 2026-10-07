@@ -1,0 +1,42 @@
+{
+  "id": "example_greeting",
+  "name": "Simple Greeting Workflow",
+  "description": "A basic workflow that greets the user and performs a simple task",
+  "tags": ["example", "beginner", "sequential"],
+  "initialState": "greet",
+  "states": {
+    "greet": {
+      "type": "action",
+      "action": "quadbrain:greet",
+      "parameters": {
+        "message": "Hello from SOMA!"
+      },
+      "timeout": 10000,
+      "onSuccess": "process",
+      "onError": "error_state"
+    },
+    "process": {
+      "type": "action",
+      "action": "quadbrain:analyze",
+      "parameters": {
+        "query": "What is the meaning of intelligence?"
+      },
+      "timeout": 30000,
+      "onSuccess": "complete",
+      "onError": "error_state"
+    },
+    "complete": {
+      "type": "terminal",
+      "status": "completed"
+    },
+    "error_state": {
+      "type": "terminal",
+      "status": "failed"
+    }
+  },
+  "metadata": {
+    "type": "sequential",
+    "difficulty": "beginner",
+    "estimatedDuration": 40000
+  }
+}

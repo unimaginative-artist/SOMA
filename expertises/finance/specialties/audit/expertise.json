@@ -1,0 +1,30 @@
+{
+  "id": "finance/audit",
+  "parent": "finance",
+  "name": "Audit Expertise",
+  "specialty": "audit",
+  "version": "0.1.0",
+  "description": "Audit and assurance package for document ingestion, extraction, validation, anomaly review, risk scoring, and report/workpaper generation.",
+  "domains": ["audit", "assurance", "accounting", "tax", "workpapers", "financial controls"],
+  "aliases": ["audit specialist", "datasnipper style audit", "trullion style audit", "workpaper review"],
+  "triggers": ["audit", "invoice", "workpaper", "trial balance", "ledger", "reconciliation", "footing", "crossfooting", "variance", "duplicate invoice", "signoff"],
+  "keywords": ["GAAP", "IFRS", "SOX", "SOC 1", "PCAOB", "ASC 842", "ASC 606", "materiality", "evidence chain", "review approval"],
+  "capabilities": [
+    "document_ingestion",
+    "financial_validation",
+    "variance_analysis",
+    "anomaly_detection",
+    "risk_audit",
+    "workpaper_export",
+    "audit_report_generation"
+  ],
+  "standards": ["GAAP", "IFRS", "SOX", "SOC 1", "PCAOB", "ASC 842", "ASC 606"],
+  "runtime": {
+    "module": "../../../../arbiters/ConcieveExpertiseArbiter.js",
+    "export": "ConcieveExpertiseArbiter"
+  },
+  "loadPolicy": {
+    "mode": "lazy",
+    "defaultLevel": "hot"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "soma-unified-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "SOMA Unified Backend - Connects Cognitive Terminal, ASI Systems, and Tri-Brain",
+  "main": "soma_unified_backend.cjs",
+  "scripts": {
+    "start": "node soma_unified_backend.cjs",
+    "dev": "node soma_unified_backend.cjs"
+  },
+  "dependencies": {
+    "socket.io": "^4.7.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

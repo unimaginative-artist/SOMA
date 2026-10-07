@@ -1,0 +1,41 @@
+/* SOMA Custom Emotes */
+
+.inline-emote {
+  display: inline-block;
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  vertical-align: middle;
+  margin: 0 2px;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+}
+
+/* Larger emotes in chat */
+.chat-message .inline-emote {
+  width: 40px;
+  height: 40px;
+}
+
+/* Hover effect */
+.inline-emote:hover {
+  transform: scale(1.2);
+  transition: transform 0.2s ease;
+}
+
+/* Animate entrance */
+@keyframes emote-pop {
+  0% {
+    transform: scale(0);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.inline-emote {
+  animation: emote-pop 0.3s ease;
+}

@@ -1,0 +1,6 @@
+export const MarketTrend = {
+    EXPANSION: 'EXPANSION',
+    CONTRACTION: 'CONTRACTION',
+    STAGNATION: 'STAGNATION',
+    TURBULENCE: 'TURBULENCE'
+};

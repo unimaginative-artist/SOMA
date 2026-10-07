@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SOMA Twitch OBS Overlay</title>
+  <style>
+    * { box-sizing: border-box; }
+    html,body { margin:0; background:transparent; font:22px system-ui,sans-serif; color:#fff; }
+    #panel { position:fixed; right:32px; bottom:32px; width:min(600px,90vw); }
+    #state { font-size:14px; color:#ddd; text-align:right; margin-bottom:10px; text-shadow:0 1px 4px #000; }
+    .bubble { padding:18px 22px; margin-top:12px; border:1px solid #a78bfa; border-radius:18px;
+      background:rgba(20,12,40,.88); box-shadow:0 3px 20px #0005; overflow-wrap:anywhere; }
+    .label { font-size:13px; color:#c4b5fd; margin-bottom:6px; }
+  </style>
+  <script src="/api/social/twitch/overlay.js" defer></script>
+</head>
+<body><div id="panel"><div id="state" role="status">SOMA: connecting overlay…</div><div id="replies" aria-live="polite"></div></div></body>
+</html>

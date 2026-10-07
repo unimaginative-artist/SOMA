@@ -1,0 +1,22 @@
+{
+  "id": "finance",
+  "name": "Finance Expertise",
+  "version": "0.1.0",
+  "description": "Finance package for market analysis, audit routing, risk review, validation workflows, and financial document reasoning.",
+  "domains": ["finance", "markets", "accounting", "audit", "tax", "trading"],
+  "aliases": ["financial", "accounting", "capital markets"],
+  "triggers": ["portfolio", "market", "invoice", "ledger", "trial balance", "audit", "tax", "reconciliation", "variance"],
+  "keywords": ["risk", "valuation", "controls", "cash flow", "financial statement", "workpaper"],
+  "capabilities": [
+    "finance_context_routing",
+    "document_triage",
+    "risk_review",
+    "specialty_selection",
+    "evidence_backed_answering"
+  ],
+  "standards": ["GAAP", "IFRS", "SOX", "PCAOB"],
+  "loadPolicy": {
+    "mode": "lazy",
+    "defaultLevel": "warm"
+  }
+}

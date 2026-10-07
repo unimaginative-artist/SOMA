@@ -1,0 +1,153 @@
+/* Light Mode Overrides - User Custom Palette (Soft Grey/Blue/White) */
+html.light-mode {
+    /* User Palette: Clean, Ethereal, Paper-like */
+    --bg-primary: #FAFAFA;
+    /* White/Snow - Main Background */
+    --bg-secondary: #DFE8E9;
+    /* Light Blue-Grey - Sidebar/Panels */
+    --bg-tertiary: #C7D4D5;
+    /* Deeper Blue-Grey - Active/Hover */
+
+    --text-primary: #151922;
+    /* Deep Charcoal - Main Text (High Contrast) */
+    --text-secondary: #4A5568;
+    /* Blue-Grey Dark - Secondary Text */
+    --text-tertiary: #718096;
+    /* Blue-Grey Light - Muted Text */
+
+    --border-color: #C7D4D5;
+    /* Matching the tertiary tone for subtle borders */
+    --border-highlight: #A0AEC0;
+    /* Darker border for focus */
+
+    --accent-primary: #5A67D8;
+    /* Indigo/Blue - Primary Action */
+
+    --orb-blend-mode: multiply;
+    /* Fix Orb visibility on light bg */
+}
+
+/* Force override Tailwind classes when inside .light-mode */
+html.light-mode body {
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
+    background-image: none !important;
+}
+
+/* --- Global Backgrounds (The "Dark Areas" Fix) --- */
+/* Target every possible dark container root */
+html.light-mode .container,
+/* From user's snippet */
+html.light-mode .min-h-screen {
+    background-color: var(--bg-primary) !important;
+    background: var(--bg-primary) !important;
+    /* Force override gradients */
+}
+
+/* --- Cards & Panels (Sidebar, Modules, Analytics) --- */
+html.light-mode .bg-zinc-800,
+html.light-mode .bg-white\/5,
+html.light-mode .bg-white\/10 {
+    background-color: var(--bg-secondary) !important;
+    border-color: var(--border-color) !important;
+    box-shadow: 0 4px 6px -1px rgba(160, 174, 192, 0.1) !important;
+    backdrop-filter: none !important;
+    /* Remove blur if it causes muddiness */
+}
+
+/* --- Specific: Command Center Terminal --- */
+html.light-mode .ct-background {
+    background: linear-gradient(to bottom, #F7FAFC, #E2E8F0) !important;
+    /* Light gradient */
+}
+
+html.light-mode .terminal-window,
+html.light-mode .xterm-viewport,
+html.light-mode .xterm-screen {
+    background-color: #F7FAFC !important;
+    /* Very light grey */
+    background: #F7FAFC !important;
+}
+
+html.light-mode .xterm-rows {
+    color: #2D3748 !important;
+    /* Dark Grey Text */
+}
+
+/* --- Specific: Soma Orb (The "Black Background" Fix) --- */
+/* 
+   We target the wrapper classes commonly used.
+   The specific 'h-96 w-96' container of Orb might not have a specific bg class,
+   but its parent 'bg-black/80' modal or similar might.
+   We also change the Orb's own blend modes. 
+*/
+
+/* Override the blend modes inside the Orb for visibility */
+html.light-mode .mix-blend-screen {
+    mix-blend-mode: multiply !important;
+    opacity: 0.8 !important;
+}
+
+/* Invert the glowing layers because multiply needs colors to darken white */
+/* This is tricky. A white glowing orb on white background = invisible with multiply.
+   We need to turn the layers into DARK colors.
+*/
+html.light-mode .bg-white {
+    background-color: #4A5568 !important;
+}
+
+/* Core becomes dark grey */
+html.light-mode .bg-purple-500 {
+    background-color: #9F7AEA !important;
+}
+
+/* Stay purple but solid? */
+html.light-mode .bg-fuchsia-600 {
+    background-color: #D6BCFA !important;
+}
+
+html.light-mode .bg-violet-900 {
+    background-color: #E9D8FD !important;
+    opacity: 0.5 !important;
+}
+
+/* Atmosphere */
+
+/* --- Button Padding & Interactions --- */
+html.light-mode button,
+html.light-mode [role="button"] {
+    /* Ensure buttons don't have invisible white-on-white text */
+}
+
+html.light-mode .hover\:bg-white\/5:hover {
+    background-color: #CBD5E0 !important;
+    /* Stronger hover state */
+}
+
+/* --- Text Contrast (The "Lost Text" Fix) --- */
+html.light-mode .text-zinc-400,
+html.light-mode .text-zinc-500,
+html.light-mode .text-zinc-600,
+html.light-mode .text-gray-400,
+html.light-mode .text-gray-500,
+html.light-mode .text-white\/40,
+html.light-mode .text-white\/60 {
+    color: var(--text-secondary) !important;
+    font-weight: 500 !important;
+    /* Bold up slightly for legibility */
+}
+
+html.light-mode .text-white,
+html.light-mode .text-zinc-100,
+html.light-mode .text-zinc-200 {
+    color: var(--text-primary) !important;
+}
+
+/* Input Fields */
+html.light-mode input,
+html.light-mode textarea {
+    background-color: #FFFFFF !important;
+    border: 1px solid #CBD5E0 !important;
+    color: #1A202C !important;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+}

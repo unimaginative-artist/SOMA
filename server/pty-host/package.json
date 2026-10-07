@@ -1,0 +1,1 @@
+{"name":"soma-pty-host","private":true,"description":"Isolated native PTY dependency for the Pulse IDE terminal","dependencies":{"@lydell/node-pty":"^1.2.0-beta.15"}}

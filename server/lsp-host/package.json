@@ -1,0 +1,1 @@
+{"name":"soma-lsp-host","private":true,"description":"Isolated language servers for Pulse code intelligence (server/routes/pulseLspRoutes.js)","dependencies":{"pyright":"^1.1.414","typescript":"^6.0.3","typescript-language-server":"^6.0.0"}}

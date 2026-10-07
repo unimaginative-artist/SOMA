@@ -1,0 +1,302 @@
+# ── Dependencies ─────────────────────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+
+# ── Environment & Secrets (NEVER COMMIT THESE) ───────────────────────────────
+.env
+.env.*
+!.env.example
+*.env
+config/api-keys.env
+config/exchange-credentials.json
+backend/prophet-engine/.env
+credentials.json
+*.pem
+*.key
+*.secret
+*secret*
+*_secret*
+# SecretSanctum is the vault *implementation* (no secrets in it) — the
+# encrypted vault itself lives at .soma/secrets.vault which stays ignored
+!core/SecretSanctum.js
+
+# ── Build Output ──────────────────────────────────────────────────────────────
+dist/
+dist-electron/
+build/
+release/
+out/
+.next/
+.nuxt/
+.output/
+*.tsbuildinfo
+
+# ── Private / secondary frontend apps ────────────────────────────────────────
+# NOTE: command-ct (Cognitive Terminal) is a primary interface imported by the
+# main bridge — it must ship or the public frontend build breaks.
+frontend/apps/conceive-bridge/
+frontend/command-bridge/
+frontend/src/
+frontend/SomaMinimal.jsx
+frontend/KnowledgeGraph3D.jsx
+frontend/TestApp.jsx
+server/routes/conceiveRoutes.js
+
+# ── External / Cloned Repos (not part of SOMA source) ────────────────────────
+agenticSeek_repo/
+agentic_repo/
+changeling_repo/
+Soma - Dementia OS/
+temp_old_twitter/
+temp_youtube/
+temp_gmail_ref/
+temp_tiktok/
+tiktok-import/
+twitter-import/
+youtube-import/
+clawdbot_repo/
+copyparty_repo/
+librechat_repo/
+nofx_repo/
+workflowagent_repo/
+kaymen99_ai_assistant/
+# root research collection only — bare "research/" also swallowed server/research/ source
+/research/
+Deep-RL-Stock-Trading/
+SportsBetting/
+binance-futures-bot/
+trading-automation/
+trading-bot/
+crypto-fanduel-sports/
+Finance_AgenticAI/
+
+# ── Vendor / Third-Party Tools ────────────────────────────────────────────────
+vendor/
+arbiterium_source/
+
+# ── ML Models & Training Artifacts ───────────────────────────────────────────
+models/
+unsloth_compiled_cache/
+checkpoints/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.pkl
+
+# ── Databases & State ─────────────────────────────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+*.db-bak
+*.db-new
+*.sqlite
+*.sqlite3
+soma-memory.db*
+soma-vectors.json
+# root runtime data only — bare "data/" also swallowed frontend/.../data/ source modules
+/data/
+# nested runtime-data dirs (previously covered by the bare patterns above)
+server/data/
+Concieve/datasnipper-app/server/data/
+SOMA/stories/research/
+SOMA/training/
+backup/
+config_backup/
+
+# ── Personal & Private Documents ─────────────────────────────────────────────
+Articles_Of_Incorporation.pdf
+IMG_2855.PNG
+"a Steve.gif"
+"a kevin_icon.png"
+kevin_icon.ico
+kevin_icon.png
+pink-dollar-money-png.png
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*_out.txt
+*_err.txt
+*_debug.txt
+server_error*.log
+soma_*.txt
+unified_*.txt
+server_log*.txt
+server_err*.txt
+server_direct*.txt
+startup_error*.txt
+backend_log.txt
+boot_log.txt
+
+# ── Runtime / Generated Data ──────────────────────────────────────────────────
+.soma/
+.arbiter-state/
+.gemini/
+.claude/
+kevin_watcher_data/
+temp_agent_platform/
+_archive/
+
+# ── Generated Images / Media Output ──────────────────────────────────────────
+SOMA/photos/generated/
+SOMA/social-media/images/
+Maxwell_extracted/uploads/
+
+tmpclaude-*
+
+# ── Temporary Files ───────────────────────────────────────────────────────────
+tmp/
+temp/
+nul
+*.tmp
+
+# ── Sensitive Config Files ───────────────────────────────────────────────────
+kevin_watcher_config.json
+
+# ── Runtime Memory & Provenance Data ─────────────────────────────────────────
+hippocampus/
+merovingian_provenance/
+asi/provenance/
+asi/asi/
+backend/finance-database-repo/
+backend/prophet-engine/data/
+knowledge-feed/
+
+dashboard/
+src/
+!frontend/apps/studio/src/
+!frontend/apps/studio/src/**
+SOMA/deployment-audit/
+SOMA/causality/
+SOMA/training-data/
+
+# ── Runtime Artifacts ─────────────────────────────────────────────────────────
+PROBE_SUCCESS.txt
+*.persistance.bak
+
+# ── Runtime State / Session Data ─────────────────────────────────────────────
+limbic-state.json
+SOMA/kuze_memory.json
+SOMA/training-history.json
+SOMA/user-profiles/
+
+# ── Auth Sessions (contain JWTs — NEVER commit) ───────────────────────────────
+SOMA/.bluesky-session.json
+SOMA/.linkedin-session.json
+SOMA/.x-session.json
+server/.soma/
+
+# ── Studio Runtime Security State (local evidence/secrets — NEVER commit) ─────
+SOMA/studio-auth-secret.txt
+SOMA/studio-sessions.json
+SOMA/studio-risk-events.json
+SOMA/studio-pairing.json
+SOMA/studio-security.json
+SOMA/studio-settings.json
+SOMA/studio-users.json
+SOMA/studio-feed.json
+SOMA/studio-comments.json
+SOMA/studio-follows.json
+SOMA/studio-notifications.json
+SOMA/studio-signals.json
+SOMA/axis/axis-state.json
+SOMA/.tmp/studio-uploads/
+
+# ── Oversized Files (exceeds GitHub 100MB limit) ──────────────────────────────
+soul_fragments.json
+graphify-out/
+
+# ── Test Data & Scratch Files ─────────────────────────────────────────────────
+test_memory.json
+test_memory_specific.json
+test_cross_session.json
+test_vectors.json
+test_personality.json
+espn_sample.json
+.soma_train_venv/
+.soma_trade_venv/
+scratch/lora-smoke-output/
+scratch/lora-smoke-export/
+
+# ── Archives ──────────────────────────────────────────────────────────────────
+*.zip
+*.7z
+*.rar
+*.tar.gz
+*.tar
+
+# ── Binaries ──────────────────────────────────────────────────────────────────
+*.exe
+*.dll
+*.so
+*.dylib
+
+# ── Vite ─────────────────────────────────────────────────────────────────────
+vite.config.js.timestamp-*
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# ── Markdown (keep only README.md) ───────────────────────────────────────────
+*.md
+!README.md
+!TRADING.md
+!CLAUDE.md
+!KNOWN_ISSUES.md
+!core/personas/*.md
+!server/pulse-workers/directives/*.md
+!server/pulse-workers/WORKER_PROTOCOL.md
+!config/README.md
+!docs/studio-infrastructure.md
+!docs/trading-research-cluster.md
+
+# Distributed trading research runtime receipts and idempotency cache
+data/trading/worker-cache/
+data/trading/distributed-research-receipts.jsonl
+
+# ── Editor ────────────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# GMN node private identity — must never be committed (per-machine secret)
+config/gmn-identity.json
+config/gmn-peerbook.json
+SOMA/gmn-messages.json
+
+# Memory Substrate V2 local index and transient SQLite sidecars
+SOMA/memory-semantic.sqlite
+SOMA/memory-semantic.sqlite-shm
+SOMA/memory-semantic.sqlite-wal
+SOMA/outcome-truth.sqlite
+SOMA/outcome-truth.sqlite-shm
+SOMA/outcome-truth.sqlite-wal
+!docs/MEMORY_SUBSTRATE_V2.md
+
+# Private conversation continuity and selected personal archive references
+SOMA/conversation-continuity.json*
+SOMA/conversation-voice-references.json
+
+# Clean publication snapshot: keep local runtime and private records out
+/SOMA/*
+!/SOMA/skills/
+!/SOMA/workflows/
+/data/
+/Concieve/
+/tmp/
+/frontend/dist*/
+/TRADING.md
+!docs/*.md
+!frontend/apps/command-bridge/components/dashboard/
+!frontend/apps/command-bridge/components/dashboard/**

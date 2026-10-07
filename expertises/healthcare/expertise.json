@@ -1,0 +1,51 @@
+{
+  "id": "healthcare",
+  "name": "Healthcare Expertise",
+  "version": "0.2.0",
+  "description": "Clinical and healthcare evidence package for medical context, research manuscript standards, safety checks, claims boundaries, evidence tables, and specialist routing.",
+  "domains": ["healthcare", "medicine", "clinical", "medical", "biomedical research", "medical manuscript", "evidence review"],
+  "aliases": ["medical", "clinician", "health", "medical writer", "medical evidence expert", "researchpaper expert"],
+  "triggers": ["diagnosis", "symptoms", "patient", "clinical", "treatment", "medical record", "healthcare", "medical paper", "manuscript", "dossier", "PRISMA", "STROBE", "CONSORT", "ICMJE", "EQUATOR"],
+  "keywords": ["differential", "contraindication", "guideline", "standard of care", "evidence", "claims boundary", "risk of bias", "structured abstract", "methods", "limitations"],
+  "capabilities": [
+    "clinical_context_routing",
+    "evidence_review",
+    "safety_screening",
+    "specialty_selection",
+    "citation_required_response",
+    "medical_manuscript_standardization",
+    "reporting_guideline_selection",
+    "evidence_table_generation",
+    "claims_boundary_audit",
+    "citation_integrity_audit",
+    "risk_of_bias_summary",
+    "study_type_detection",
+    "reference_manager",
+    "figure_table_generation",
+    "journal_targeting",
+    "human_review_gate",
+    "medical_discovery_scoreboard",
+    "lora_training_distillation",
+    "ai_assistance_disclosure",
+    "paper_readiness_scoring"
+  ],
+  "standards": ["ICMJE", "EQUATOR", "PRISMA", "STROBE", "CONSORT", "CARE", "ARRIVE", "HIPAA", "ICD-10", "CPT", "HL7", "FHIR"],
+  "runtime": {
+    "module": "./HealthcareExpertiseRuntime.js",
+    "export": "HealthcareExpertiseRuntime"
+  },
+  "workflows": {
+    "default": [
+      { "name": "safety_scope", "description": "Confirm research-only boundary and block clinical overclaiming." },
+      { "name": "study_type", "description": "Classify the artifact and choose the matching reporting standard." },
+      { "name": "evidence_table", "description": "Convert sources into structured evidence rows." },
+      { "name": "claims_boundary", "description": "Label each claim as established, supported, speculative, hypothesis-only, unsupported, or do-not-publish." },
+      { "name": "checklist", "description": "Score readiness against the selected manuscript checklist." },
+      { "name": "output", "description": "Produce a manuscript-ready draft with limitations, data availability, and AI disclosure." }
+    ]
+  },
+  "loadPolicy": {
+    "mode": "lazy",
+    "defaultLevel": "hot"
+  }
+}

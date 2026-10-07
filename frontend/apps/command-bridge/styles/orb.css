@@ -1,0 +1,264 @@
+/* Orb.css - Beautiful styling for the SOMA Orb */
+
+/* Custom radial gradient utility */
+.bg-gradient-radial {
+  background: radial-gradient(circle, var(--tw-gradient-stops));
+}
+
+/* Glassmorphism effects */
+.glass-orb {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Smooth pulse animation */
+@keyframes orb-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.8;
+  }
+}
+
+.animate-orb-pulse {
+  animation: orb-pulse 2s ease-in-out infinite;
+}
+
+/* Glow animation */
+@keyframes orb-glow {
+  0%, 100% {
+    filter: brightness(1) saturate(1);
+  }
+  50% {
+    filter: brightness(1.2) saturate(1.3);
+  }
+}
+
+.animate-orb-glow {
+  animation: orb-glow 3s ease-in-out infinite;
+}
+
+/* Shimmer effect */
+@keyframes shimmer {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.3) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 3s infinite;
+}
+
+/* Floating animation for the orb widget */
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+/* Sparkle animation */
+@keyframes sparkle {
+  0%, 100% {
+    opacity: 0;
+    transform: scale(0);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-sparkle {
+  animation: sparkle 2s ease-in-out infinite;
+}
+
+/* Rotate animation for rings */
+@keyframes rotate-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-rotate-slow {
+  animation: rotate-slow 20s linear infinite;
+}
+
+/* Color cycle animation */
+@keyframes color-cycle {
+  0% {
+    filter: hue-rotate(0deg);
+  }
+  100% {
+    filter: hue-rotate(360deg);
+  }
+}
+
+.animate-color-cycle {
+  animation: color-cycle 10s linear infinite;
+}
+
+/* Breathing animation */
+@keyframes breathe {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.9;
+  }
+}
+
+.animate-breathe {
+  animation: breathe 4s ease-in-out infinite;
+}
+
+/* Orb widget container */
+.orb-widget {
+  position: fixed;
+  user-select: none;
+  cursor: grab;
+  z-index: 100;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.orb-widget:active {
+  cursor: grabbing;
+}
+
+.orb-widget.expanded {
+  cursor: default;
+}
+
+/* Orb controls overlay */
+.orb-controls {
+  background: rgba(17, 24, 39, 0.95);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid rgba(75, 85, 99, 0.3);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5),
+              inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* Smooth color transitions */
+.orb-layer {
+  transition: background-color 0.5s ease-in-out,
+              opacity 0.5s ease-in-out,
+              transform 0.05s cubic-bezier(0, 0, 0.2, 1);
+}
+
+/* Enhanced blur utilities */
+.blur-orb-sm {
+  filter: blur(8px);
+}
+
+.blur-orb-md {
+  filter: blur(16px);
+}
+
+.blur-orb-lg {
+  filter: blur(32px);
+}
+
+.blur-orb-xl {
+  filter: blur(64px);
+}
+
+.blur-orb-2xl {
+  filter: blur(96px);
+}
+
+.blur-orb-3xl {
+  filter: blur(128px);
+}
+
+/* Mix blend modes for layering */
+.mix-blend-add {
+  mix-blend-mode: lighten;
+}
+
+/* Orb state indicators */
+.orb-indicator {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(10px);
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  z-index: 1000;
+  transition: all 0.3s ease;
+}
+
+.orb-indicator.listening {
+  color: #60A5FA;
+  border: 1px solid rgba(96, 165, 250, 0.5);
+  box-shadow: 0 0 20px rgba(96, 165, 250, 0.4);
+}
+
+.orb-indicator.thinking {
+  color: #FBBF24;
+  border: 1px solid rgba(251, 191, 36, 0.5);
+  box-shadow: 0 0 20px rgba(251, 191, 36, 0.4);
+}
+
+.orb-indicator.talking {
+  color: #D946EF;
+  border: 1px solid rgba(217, 70, 239, 0.5);
+  box-shadow: 0 0 20px rgba(217, 70, 239, 0.4);
+}
+
+/* Responsive orb sizing */
+@media (max-width: 768px) {
+  .orb-widget {
+    transform: scale(0.7);
+  }
+}
+
+/* Accessibility - Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .animate-orb-pulse,
+  .animate-orb-glow,
+  .animate-float,
+  .animate-sparkle,
+  .animate-rotate-slow,
+  .animate-color-cycle,
+  .animate-breathe {
+    animation: none;
+  }
+
+  .orb-layer {
+    transition: background-color 0.3s ease-in-out,
+                opacity 0.3s ease-in-out;
+  }
+}

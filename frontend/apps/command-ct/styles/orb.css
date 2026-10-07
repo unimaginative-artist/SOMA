@@ -1,0 +1,140 @@
+/**
+ * SOMA Orb Styles
+ * Beautiful voice visualization orb for Command CT
+ */
+
+.voice-visualizer {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+.voice-visualizer.fullscreen {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  right: auto;
+}
+
+.voice-visualizer.sidebar {
+  position: relative;
+  top: auto;
+  right: auto;
+  margin: 20px auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.voice-mode-indicator {
+  margin-top: 10px;
+  padding: 6px 12px;
+  background: rgba(139, 92, 246, 0.2);
+  border: 1px solid rgba(139, 92, 246, 0.5);
+  border-radius: 20px;
+  color: #D8B4FE;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Orb animations */
+.orb-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Voice control button */
+.voice-control-btn {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #8B5CF6 0%, #D946EF 100%);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 24px;
+  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.5);
+  transition: all 0.3s ease;
+  z-index: 9998;
+}
+
+.voice-control-btn:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 30px rgba(139, 92, 246, 0.7);
+}
+
+.voice-control-btn:active {
+  transform: scale(0.95);
+}
+
+.voice-control-btn.active {
+  background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+  box-shadow: 0 4px 20px rgba(16, 185, 129, 0.5);
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 4px 20px rgba(16, 185, 129, 0.5);
+  }
+  50% {
+    box-shadow: 0 6px 40px rgba(16, 185, 129, 0.8);
+  }
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .voice-visualizer {
+    top: 10px;
+    right: 10px;
+    transform: scale(0.7);
+  }
+
+  .voice-control-btn {
+    bottom: 10px;
+    right: 10px;
+    width: 50px;
+    height: 50px;
+    font-size: 20px;
+  }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .voice-mode-indicator {
+    background: rgba(139, 92, 246, 0.3);
+    border-color: rgba(139, 92, 246, 0.6);
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "id": "example_data_pipeline",
+  "name": "Data Processing Pipeline",
+  "description": "Extract, Transform, Load pattern for data processing",
+  "tags": ["example", "etl", "data", "pipeline"],
+  "initialState": "extract",
+  "states": {
+    "extract": {
+      "type": "action",
+      "action": "data:extract",
+      "parameters": {
+        "source": "api",
+        "endpoint": "https://api.example.com/data"
+      },
+      "timeout": 30000,
+      "retries": 3,
+      "onSuccess": "validate_extract",
+      "onError": "retry_extract"
+    },
+    "validate_extract": {
+      "type": "decision",
+      "branches": [
+        {
+          "condition": "result.data && result.data.length > 0",
+          "target": "transform"
+        },
+        {
+          "condition": "result.data && result.data.length === 0",
+          "target": "no_data"
+        }
+      ],
+      "defaultBranch": 0
+    },
+    "transform": {
+      "type": "action",
+      "action": "data:transform",
+      "parameters": {
+        "operations": [
+          "normalize",
+          "filter_invalid",
+          "enrich"
+        ]
+      },
+      "timeout": 60000,
+      "onSuccess": "load",
+      "onError": "transform_error"
+    },
+    "load": {
+      "type": "action",
+      "action": "data:load",
+      "parameters": {
+        "destination": "database",
+        "table": "processed_data"
+      },
+      "timeout": 30000,
+      "onSuccess": "verify",
+      "onError": "load_error"
+    },
+    "verify": {
+      "type": "action",
+      "action": "data:verify",
+      "parameters": {
+        "checksum": true,
+        "count": true
+      },
+      "timeout": 15000,
+      "onSuccess": "success",
+      "onError": "verification_failed"
+    },
+    "retry_extract": {
+      "type": "wait",
+      "duration": 5000,
+      "target": "extract"
+    },
+    "no_data": {
+      "type": "terminal",
+      "status": "completed",
+      "message": "No data to process"
+    },
+    "transform_error": {
+      "type": "terminal",
+      "status": "failed",
+      "message": "Data transformation failed"
+    },
+    "load_error": {
+      "type": "terminal",
+      "status": "failed",
+      "message": "Data loading failed"
+    },
+    "verification_failed": {
+      "type": "terminal",
+      "status": "failed",
+      "message": "Data verification failed"
+    },
+    "success": {
+      "type": "terminal",
+      "status": "completed",
+      "message": "Data pipeline completed successfully"
+    }
+  },
+  "metadata": {
+    "type": "pipeline",
+    "difficulty": "intermediate",
+    "estimatedDuration": 150000
+  }
+}

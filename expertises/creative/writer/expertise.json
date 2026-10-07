@@ -1,0 +1,54 @@
+{
+  "id": "creative/writer",
+  "parent": "creative",
+  "name": "Writer Expertise",
+  "specialty": "narrative architecture",
+  "version": "0.1.0",
+  "description": "AURORA-backed writing specialist for bestseller-pattern distillation, genre fusion, storyboards, outlines, chapters, continuity editing, and Muse-compatible creative learning.",
+  "domains": ["creative writing", "fiction", "story", "novel", "chapter", "outline", "screenwriting", "storyboard", "genre fusion", "publishing"],
+  "aliases": ["writer", "narrative architect", "story architect", "fiction writer", "chapter writer", "book coach", "writing expertise"],
+  "triggers": ["write this story", "storyboard", "outline", "novel", "chapter", "plot", "genre", "book", "bestseller", "wattpad", "soma saga", "muse story"],
+  "keywords": ["logline", "premise", "character arc", "chapter outline", "act structure", "genre fusion", "continuity", "revision", "reader promise", "originality"],
+  "capabilities": [
+    "trend_signal_scouting",
+    "bestseller_pattern_distillation",
+    "genre_fusion_design",
+    "narrative_structure_selection",
+    "storyboard_generation",
+    "continuity_bible_maintenance",
+    "scene_card_planning",
+    "chapter_generation",
+    "chapter_quality_gating",
+    "revision_mode_editing",
+    "continuity_editing",
+    "human_feedback_learning",
+    "publishing_excerpt_generation",
+    "creative_learning_reflection",
+    "muse_compatible_story_help"
+  ],
+  "standards": [
+    "learn principles not protected expression",
+    "originality before trend chasing",
+    "emotional stakes before lore",
+    "chapter momentum before exposition",
+    "reflection after generation"
+  ],
+  "runtime": {
+    "module": "./WriterExpertiseRuntime.js",
+    "export": "WriterExpertiseRuntime"
+  },
+  "loadPolicy": {
+    "mode": "lazy",
+    "defaultLevel": "hot"
+  },
+  "workflows": {
+    "default": [
+      { "name": "scout", "description": "Collect current and curated story-market signals." },
+      { "name": "distill", "description": "Extract reusable craft principles without copying protected expression." },
+      { "name": "structure", "description": "Choose or blend Hero's Journey, Save the Cat, Story Circle, Kishotenketsu, Revelation Ladder, Romance Arc, MICE, Scene-Sequel, Snowflake, and act structures." },
+      { "name": "storyboard", "description": "Build logline, genre fusion, cast, world rules, structure map, and chapter outline." },
+      { "name": "draft", "description": "Generate or improve chapter prose from the board." },
+      { "name": "reflect", "description": "Save creative learning notes into Reflections and the story ledger." }
+    ]
+  }
+}

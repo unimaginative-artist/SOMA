@@ -1,0 +1,46 @@
+{
+  "phishing_heuristics": {
+    "keywords": [
+      "urgent action required",
+      "immediate verification",
+      "unauthorized wire transfer",
+      "password reset confirmation",
+      "suspicious activity login",
+      "update payment credentials",
+      "cryptocurrency invoice",
+      "security token compromise",
+      "shared a document with you"
+    ],
+    "suspicious_tlds": [
+      ".xyz",
+      ".top",
+      ".click",
+      ".link",
+      ".zip",
+      ".gq",
+      ".cf",
+      ".tk",
+      ".fit"
+    ]
+  },
+  "hardening_checklist": {
+    "monitored_env_vars": [
+      "EMAIL_ADDRESS",
+      "APP_PASSWORD",
+      "DEEPSEEK_API_KEY",
+      "TWILIO_ACCOUNT_SID",
+      "TWILIO_AUTH_TOKEN",
+      "TELEGRAM_BOT_TOKEN"
+    ],
+    "restricted_ports": [
+      { "port": 22, "service": "SSH", "description": "Remote administrative console, must be closed or VPN-gated" },
+      { "port": 3389, "service": "RDP", "description": "Remote Desktop Protocol, high target for credential stuffing" },
+      { "port": 8080, "service": "HTTP-Alt", "description": "Alternate web service, verify bound interface is not global 0.0.0.0" }
+    ]
+  },
+  "verdict_thresholds": {
+    "suspicion_low": 30,
+    "suspicion_medium": 55,
+    "suspicion_high": 85
+  }
+}

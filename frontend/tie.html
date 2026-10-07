@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tie</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body, #root { height: 100%; width: 100%; overflow: hidden; }
+      body {
+        background: #09090b;
+        color: #f5f0e8;
+        font-family: 'JetBrains Mono', 'Fira Code', monospace;
+        -webkit-font-smoothing: antialiased;
+      }
+      ::-webkit-scrollbar { width: 4px; height: 4px; }
+      ::-webkit-scrollbar-track { background: #0a0a0c; }
+      ::-webkit-scrollbar-thumb { background: #252530; border-radius: 2px; }
+      ::-webkit-scrollbar-thumb:hover { background: #404055; }
+      * { scrollbar-width: thin; scrollbar-color: #252530 #0a0a0c; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/tie.jsx"></script>
+  </body>
+</html>

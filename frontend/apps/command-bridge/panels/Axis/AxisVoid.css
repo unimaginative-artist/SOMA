@@ -1,0 +1,62 @@
+/* ═══════════════════════════════════════════════════════════
+   AXIS — VOID DESIGN SYSTEM
+   Direction A: #08090b · electric violet #6366f1 · Geist Mono
+   ═══════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+
+/* ── Animations ───────────────────────────────────────────────────────── */
+@keyframes ax-pulse       { 0%,100%{opacity:1}                  50%{opacity:0.35} }
+@keyframes ax-ping        { 0%{transform:scale(1);opacity:0.7}  100%{transform:scale(2.4);opacity:0} }
+@keyframes ax-breathe     { 0%,100%{opacity:0.5}                50%{opacity:1} }
+@keyframes ax-fadeUp      { from{opacity:0;transform:translateY(5px)}  to{opacity:1;transform:translateY(0)} }
+@keyframes ax-appear      { from{opacity:0;transform:scale(0.96)}      to{opacity:1;transform:scale(1)} }
+@keyframes ax-slideRight  { from{opacity:0;transform:translateX(14px)} to{opacity:1;transform:translateX(0)} }
+@keyframes ax-whisperReveal { from{filter:blur(4px);opacity:0.6}       to{filter:blur(0);opacity:1} }
+@keyframes ax-slide-up      { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+
+/* ── Root ─────────────────────────────────────────────────────────────── */
+.axis-void {
+  font-family: 'Space Grotesk', 'Inter', ui-sans-serif, sans-serif;
+  background: #08090b;
+}
+
+/* Geist Mono for identifiers, channels, timestamps */
+.axis-void .font-mono,
+.axis-void code {
+  font-family: 'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* ── Accent: violet/indigo replaces white buttons ─────────────────────── */
+.axis-void .bg-white                 { background-color: #6366f1 !important; }
+.axis-void .hover\:bg-white:hover    { background-color: #818cf8 !important; }
+.axis-void .bg-zinc-100              { background-color: #6366f1 !important; }
+.axis-void .hover\:bg-zinc-100:hover { background-color: #818cf8 !important; }
+.axis-void .text-black               { color: #fff !important; }
+.axis-void .text-zinc-900            { color: #fff !important; }
+.axis-void .active\:scale-95:active  { transform: scale(0.95); }
+
+/* Disabled state */
+.axis-void .disabled\:opacity-25:disabled { opacity: 0.25; }
+.axis-void button:disabled { opacity: 0.25; cursor: not-allowed; }
+
+/* ── Scrollbar ────────────────────────────────────────────────────────── */
+.axis-void ::-webkit-scrollbar       { width: 3px; height: 3px; }
+.axis-void ::-webkit-scrollbar-track { background: transparent; }
+.axis-void ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 99px; }
+.axis-void ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+
+/* ── Soma avatar ──────────────────────────────────────────────────────── */
+.ax-soma-avatar {
+  animation: ax-pulse 3s ease-in-out infinite !important;
+  box-shadow: 0 0 14px rgba(167,139,250,0.35) !important;
+}
+
+/* ── Message entrance ─────────────────────────────────────────────────── */
+.ax-msg-enter   { animation: ax-fadeUp 0.18s ease; }
+.ax-ctx-slide   { animation: ax-slideRight 0.2s cubic-bezier(0.4,0,0.2,1); }
+.ax-modal-enter { animation: ax-appear 0.22s cubic-bezier(0.4,0,0.2,1); }
+
+/* ── Whisper ──────────────────────────────────────────────────────────── */
+.ax-whisper-blur    { filter: blur(3.5px); user-select: none; }
+.ax-whisper-reveal  { animation: ax-whisperReveal 0.3s ease; }

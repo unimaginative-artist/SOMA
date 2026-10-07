@@ -1,0 +1,25 @@
+{
+  "id": "finance/hedgefunds",
+  "parent": "finance",
+  "name": "Hedge Fund Expertise",
+  "specialty": "hedgefunds",
+  "version": "0.1.0",
+  "description": "Hedge fund package for strategy diligence, portfolio risk review, fund operations context, exposure analysis, and investor-reporting workflows.",
+  "domains": ["hedge funds", "asset management", "portfolio management", "alternative investments", "fund operations"],
+  "aliases": ["hedge fund", "fund manager", "alternative investment specialist"],
+  "triggers": ["hedge fund", "fund", "aum", "lp", "nav", "prime broker", "exposure", "drawdown", "redemption", "performance fee"],
+  "keywords": ["long short", "market neutral", "global macro", "event driven", "relative value", "VaR", "gross exposure", "net exposure", "liquidity"],
+  "capabilities": [
+    "fund_context_routing",
+    "strategy_diligence",
+    "portfolio_exposure_review",
+    "risk_limit_screening",
+    "investor_reporting_context",
+    "operations_workflow_selection"
+  ],
+  "standards": ["SEC", "Form ADV", "13F", "AIFMD", "risk limits"],
+  "loadPolicy": {
+    "mode": "lazy",
+    "defaultLevel": "warm"
+  }
+}

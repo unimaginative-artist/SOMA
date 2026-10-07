@@ -1,0 +1,18 @@
+# Flask Web Framework
+flask==3.0.0
+flask-cors==4.0.0
+
+# ML & Data Processing
+scikit-learn==1.4.0
+pandas==2.2.0
+numpy==1.26.0
+
+# HTTP Requests
+requests==2.31.0
+
+# Environment Variables
+python-dotenv==1.0.0
+
+# Optional: Database (if needed later)
+# sqlalchemy==2.0.25
+# psycopg2-binary==2.9.9

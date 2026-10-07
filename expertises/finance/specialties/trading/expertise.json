@@ -1,0 +1,24 @@
+{
+  "id": "finance/trading",
+  "parent": "finance",
+  "name": "Trading Expertise",
+  "specialty": "trading",
+  "version": "0.1.0",
+  "description": "Trading and market analysis package for strategy routing, risk checks, backtesting context, and market-data workflows.",
+  "domains": ["trading", "markets", "portfolio", "risk management", "quantitative finance"],
+  "aliases": ["market specialist", "trading specialist", "quant"],
+  "triggers": ["trade", "trading", "portfolio", "backtest", "options", "crypto", "market data", "risk", "position", "strategy"],
+  "keywords": ["alpha", "beta", "volatility", "drawdown", "execution", "slippage", "Sharpe", "VaR", "hedge fund"],
+  "capabilities": [
+    "market_context_routing",
+    "strategy_review",
+    "risk_screening",
+    "backtest_context",
+    "trading_tool_selection"
+  ],
+  "standards": ["risk limits", "position sizing", "best execution"],
+  "loadPolicy": {
+    "mode": "lazy",
+    "defaultLevel": "warm"
+  }
+}

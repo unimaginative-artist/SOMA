@@ -1,0 +1,16 @@
+{
+  "simulation_id": "TLT_baseline_v1",
+  "asset": "TLT",
+  "timeframe": "1m",
+  "win_rate": 0.707,
+  "profit_factor": 2.8,
+  "total_trades": 1420,
+  "parameters": {
+    "momentum_window": 14,
+    "mean_reversion_threshold": 2.5,
+    "ict_killzone_active": true,
+    "volatility_filter": 0.8
+  },
+  "market_data_feed": "historical_1m_tlt_2024",
+  "notes": "Baseline config requested by SOMA for sim-to-live diffing."
+}

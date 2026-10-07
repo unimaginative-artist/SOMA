@@ -1,0 +1,340 @@
+/* SOMA Cognitive Terminal Specific Styles */
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.ct-background {
+  background: linear-gradient(to bottom, #18181b, #09090b); /* zinc-900 to zinc-950 */
+}
+
+/* Override highlight.js background to match theme */
+.hljs {
+  background: transparent !important;
+  padding: 1rem !important;
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+}
+
+/* Heartbeat animation for Pulse button */
+@keyframes heartbeat {
+  0%, 100% { 
+    transform: scale(1); 
+    opacity: 1; 
+  }
+  14% { 
+    transform: scale(1.15); 
+    opacity: 0.9; 
+  }
+  28% { 
+    transform: scale(1); 
+    opacity: 1; 
+  }
+  42% { 
+    transform: scale(1.1); 
+    opacity: 0.95; 
+  }
+  56% { 
+    transform: scale(1); 
+    opacity: 1; 
+  }
+}
+
+/* --- New Chat Button Style (Uiverse.io by kleenpulse) --- */
+.btn {
+  --border-color: linear-gradient(-45deg, #ffae00, #7e03aa, #00fffb);
+  --border-width: 0.125em;
+  --curve-size: 0.5em;
+  --blur: 30px;
+  --bg: #080312;
+  --color: #afffff;
+  color: var(--color);
+  cursor: pointer;
+  /* use position: relative; so that BG is only for .btn */
+  position: relative;
+  isolation: isolate;
+  display: inline-grid;
+  place-content: center;
+  padding: 0.5em 1.5em;
+  font-size: 17px;
+  border: 0;
+  text-transform: uppercase;
+  box-shadow: 10px 10px 20px rgba(0, 0, 0, 0.6);
+  clip-path: polygon(
+    /* Top-left */ 0% var(--curve-size),
+    var(--curve-size) 0,
+    /* top-right */ 100% 0,
+    100% calc(100% - var(--curve-size)),
+    /* bottom-right 1 */ calc(100% - var(--curve-size)) 100%,
+    /* bottom-right 2 */ 0 100%
+  );
+  transition: color 250ms;
+}
+
+.btn::after,
+.btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.btn::before {
+  background: var(--border-color);
+  background-size: 300% 300%;
+  animation: move-bg7234 5s ease infinite;
+  z-index: -2;
+}
+
+ @keyframes move-bg7234 {
+  0% {
+    background-position: 31% 0%;
+  }
+
+  50% {
+    background-position: 70% 100%;
+  }
+
+  100% {
+    background-position: 31% 0%;
+  }
+}
+
+.btn::after {
+  background: var(--bg);
+  z-index: -1;
+  clip-path: polygon(
+    /* Top-left */ var(--border-width)
+      calc(var(--curve-size) + var(--border-width) * 0.5),
+    calc(var(--curve-size) + var(--border-width) * 0.5) var(--border-width),
+    /* top-right */ calc(100% - var(--border-width)) var(--border-width),
+    calc(100% - var(--border-width))
+      calc(100% - calc(var(--curve-size) + var(--border-width) * 0.5)),
+    /* bottom-right 1 */
+      calc(100% - calc(var(--curve-size) + var(--border-width) * 0.5))
+      calc(100% - var(--border-width)),
+    /* bottom-right 2 */ var(--border-width) calc(100% - var(--border-width))
+  );
+  transition: clip-path 500ms;
+}
+
+.btn:where(:hover, :focus)::after {
+  clip-path: polygon(
+    /* Top-left */ calc(100% - var(--border-width))
+      calc(100% - calc(var(--curve-size) + var(--border-width) * 0.5)),
+    calc(100% - var(--border-width)) var(--border-width),
+    /* top-right */ calc(100% - var(--border-width)) var(--border-width),
+    calc(100% - var(--border-width))
+      calc(100% - calc(var(--curve-size) + var(--border-width) * 0.5)),
+    /* bottom-right 1 */
+      calc(100% - calc(var(--curve-size) + var(--border-width) * 0.5))
+      calc(100% - var(--border-width)),
+    /* bottom-right 2 */
+      calc(100% - calc(var(--curve-size) + var(--border-width) * 0.5))
+      calc(100% - var(--border-width))
+  );
+  transition: 200ms;
+}
+
+.btn:where(:hover, :focus) {
+  color: #fff;
+}
+
+/* --- Delete Chat Button Style (Uiverse.io by Tsiangana - SOMA Hybrid) --- */
+.Btn {
+  --bg: #080312;
+  --color: #afffff;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition-duration: 0.3s;
+  box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.199);
+  background: transparent;
+  isolation: isolate;
+}
+
+.Btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(-45deg, #ffae00, #7e03aa, #00fffb);
+  background-size: 300% 300%;
+  animation: move-bg7234 5s ease infinite;
+  z-index: -2;
+}
+
+.Btn::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  background: var(--bg);
+  border-radius: inherit;
+  z-index: -1;
+  transition: opacity 0.3s;
+}
+
+.Btn:hover::after {
+  opacity: 0;
+}
+
+/* icon sign */
+.sign {
+  width: 100%;
+  transition-duration: 0.3s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+}
+
+.sign svg {
+  width: 14px;
+  color: var(--color);
+  transition: color 0.3s;
+}
+
+.Btn:hover .sign svg {
+  color: white;
+  width: 16px;
+}
+
+/* text */
+.text {
+  position: absolute;
+  right: 0%;
+  width: 0%;
+  opacity: 0;
+  color: var(--color);
+  font-size: 0.7em;
+  font-weight: 600;
+  transition-duration: 0.3s;
+  text-transform: uppercase;
+  z-index: 1;
+}
+
+/* hover effect on button width */
+.Btn:hover {
+  width: 90px;
+  border-radius: 40px;
+  transition-duration: 0.3s;
+}
+
+.Btn:hover .sign {
+  width: 30%;
+  transition-duration: 0.3s;
+  padding-left: 10px;
+}
+
+.Btn:hover .text {
+  opacity: 1;
+  width: 70%;
+  transition-duration: 0.3s;
+  padding-right: 5px;
+  color: white;
+}
+
+/* --- Crystal Loader Animation --- */
+.crystal-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.crystal-loader {
+  position: relative;
+  width: 100px;
+  height: 100px;
+  perspective: 800px;
+}
+
+.crystal {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 30px;
+  height: 30px;
+  opacity: 0;
+  transform-origin: bottom center;
+  transform: translate(-50%, -50%) rotateX(45deg) rotateZ(0deg);
+  animation: crystal-spin 4s linear infinite, crystal-emerge 2s ease-in-out infinite alternate,
+    crystal-fadeIn 0.3s ease-out forwards;
+  border-radius: 6px;
+  visibility: hidden;
+}
+
+@keyframes crystal-spin {
+  from {
+    transform: translate(-50%, -50%) rotateX(45deg) rotateZ(0deg);
+  }
+  to {
+    transform: translate(-50%, -50%) rotateX(45deg) rotateZ(360deg);
+  }
+}
+
+@keyframes crystal-emerge {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(0.5);
+    opacity: 0;
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes crystal-fadeIn {
+  to {
+    visibility: visible;
+    opacity: 0.8;
+  }
+}
+
+.crystal:nth-child(1) {
+  background: linear-gradient(45deg, #003366, #336699);
+  animation-delay: 0s;
+}
+
+.crystal:nth-child(2) {
+  background: linear-gradient(45deg, #003399, #3366cc);
+  animation-delay: 0.3s;
+}
+
+.crystal:nth-child(3) {
+  background: linear-gradient(45deg, #0066cc, #3399ff);
+  animation-delay: 0.6s;
+}
+
+.crystal:nth-child(4) {
+  background: linear-gradient(45deg, #0099ff, #66ccff);
+  animation-delay: 0.9s;
+}
+
+.crystal:nth-child(5) {
+  background: linear-gradient(45deg, #33ccff, #99ccff);
+  animation-delay: 1.2s;
+}
+
+.crystal:nth-child(6) {
+  background: linear-gradient(45deg, #66ffff, #ccffff);
+  animation-delay: 1.5s;
+}

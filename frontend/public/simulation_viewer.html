@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SOMA Interactive Simulation</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a0a;
+            color: #fff;
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        #header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 15px 20px;
+            border-bottom: 2px solid #ff6b35;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        #status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #f00;
+            box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        .status-dot.connected {
+            background: #0f0;
+            box-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        #controls {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .mode-selector {
+            display: flex;
+            gap: 5px;
+            background: rgba(0,0,0,0.4);
+            padding: 5px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .mode-btn {
+            padding: 8px 16px;
+            background: rgba(255,255,255,0.05);
+            color: #aaa;
+            border: 1px solid rgba(255,255,255,0.1);
+            cursor: pointer;
+            border-radius: 5px;
+            font-size: 11px;
+            font-weight: bold;
+            text-transform: uppercase;
+            transition: all 0.3s ease;
+            letter-spacing: 1px;
+        }
+
+        .mode-btn:hover {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+        }
+
+        .mode-btn.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            border-color: #667eea;
+            box-shadow: 0 0 15px rgba(102, 126, 234, 0.5);
+        }
+
+        .mode-btn.active.user-mode {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            border-color: #f5576c;
+            box-shadow: 0 0 15px rgba(245, 87, 108, 0.5);
+        }
+
+        .mode-btn.active.soma-mode {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            border-color: #00f2fe;
+            box-shadow: 0 0 15px rgba(0, 242, 254, 0.5);
+        }
+
+        .mode-btn.active.watch-mode {
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+            border-color: #38f9d7;
+            box-shadow: 0 0 15px rgba(56, 249, 215, 0.5);
+        }
+
+        .recording-indicator {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: rgba(255, 59, 48, 0.15);
+            border: 1px solid rgba(255, 59, 48, 0.3);
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .recording-indicator.active {
+            display: flex;
+        }
+
+        .recording-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ff3b30;
+            animation: pulse 1s ease-in-out infinite;
+        }
+
+        #canvasContainer {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            background: radial-gradient(circle at center, #1a1a2e 0%, #0a0a0a 100%);
+        }
+
+        canvas {
+            border: 2px solid rgba(255,255,255,0.1);
+            border-radius: 10px;
+            box-shadow: 0 0 30px rgba(0,0,0,0.8);
+        }
+
+        #statsPanel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.85);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+            min-width: 200px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-size: 13px;
+        }
+
+        .stat-label {
+            color: #aaa;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 1px;
+        }
+
+        .stat-value {
+            color: #fff;
+            font-weight: bold;
+            font-size: 16px;
+        }
+
+        .stat-value.score {
+            color: #ffd60a;
+        }
+
+        #controls-help {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.85);
+            backdrop-filter: blur(10px);
+            padding: 15px 20px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+            font-size: 11px;
+            color: #aaa;
+            line-height: 1.8;
+            display: none;
+        }
+
+        #controls-help.visible {
+            display: block;
+        }
+
+        .key {
+            display: inline-block;
+            padding: 2px 8px;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 3px;
+            color: #fff;
+            font-weight: bold;
+            margin: 0 3px;
+        }
+
+        #mode-description {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.85);
+            backdrop-filter: blur(10px);
+            padding: 15px 20px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+            max-width: 300px;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+
+        .mode-title {
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        #purposeOverlay {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.9);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            border-radius: 10px;
+            border: 2px solid #ff6b35;
+            max-width: 350px;
+            font-size: 12px;
+            line-height: 1.7;
+            box-shadow: 0 8px 32px rgba(255, 107, 53, 0.3);
+        }
+
+        #purposeOverlay h3 {
+            color: #ff6b35;
+            font-size: 14px;
+            margin-bottom: 10px;
+            letter-spacing: 1px;
+        }
+
+        #purposeOverlay .close-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: none;
+            border: none;
+            color: #aaa;
+            cursor: pointer;
+            font-size: 18px;
+            padding: 0;
+            width: 20px;
+            height: 20px;
+            line-height: 1;
+        }
+
+        #purposeOverlay .close-btn:hover {
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <div id="status">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusText">Connecting to SOMA Physics Engine...</span>
+        </div>
+
+        <div id="controls">
+            <div class="recording-indicator" id="recordingIndicator">
+                <div class="recording-dot"></div>
+                <span>Recording Demonstrations</span>
+            </div>
+
+            <div class="mode-selector">
+                <button class="mode-btn user-mode" data-mode="user" onclick="setMode('user')">🎮 User Control</button>
+                <button class="mode-btn soma-mode" data-mode="soma" onclick="setMode('soma')">🤖 SOMA Control</button>
+                <button class="mode-btn watch-mode" data-mode="watch" onclick="setMode('watch')">👁️ Watch</button>
+            </div>
+
+            <button class="mode-btn" onclick="toggleHelp()">❓ Help</button>
+        </div>
+    </div>
+
+    <div id="canvasContainer">
+        <canvas id="simCanvas" width="840" height="640"></canvas>
+
+        <div id="statsPanel">
+            <div class="stat-row">
+                <span class="stat-label">Score</span>
+                <span class="stat-value score" id="scoreValue">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Episode</span>
+                <span class="stat-value" id="episodeValue">1</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Task</span>
+                <span class="stat-value" id="taskValue">navigate</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Demos</span>
+                <span class="stat-value" id="demosValue">0</span>
+            </div>
+        </div>
+
+        <div id="mode-description">
+            <div class="mode-title" id="modeTitle">Watch Mode</div>
+            <div id="modeDesc">Observing SOMA's autonomous learning. Switch to User Control to teach SOMA by demonstration!</div>
+        </div>
+
+        <div id="purposeOverlay">
+            <button class="close-btn" onclick="closePurpose()">✕</button>
+            <h3>🎮 GOAL-REACHING SIMULATION</h3>
+            <p><strong>Purpose:</strong> Train SOMA to navigate physical space and reach targets efficiently.</p>
+            <p style="margin-top: 10px;"><strong>How it works:</strong></p>
+            <ul style="margin-left: 15px; margin-top: 5px;">
+                <li>Red/Cyan circle = SOMA's body</li>
+                <li>Green zone = Target to reach</li>
+                <li>Gray objects = Obstacles</li>
+                <li>Score decreases over time (only in AI modes)</li>
+                <li>+100 points for reaching target</li>
+            </ul>
+            <p style="margin-top: 10px; color: #ff6b35;"><strong>Teach SOMA:</strong> Switch to User Control and show her how to navigate!</p>
+        </div>
+
+        <div id="controls-help">
+            <div style="font-size: 13px; font-weight: bold; color: #fff; margin-bottom: 10px;">CONTROLS</div>
+            <div><span class="key">←</span><span class="key">→</span> or <span class="key">A</span><span class="key">D</span> - Move Left/Right</div>
+            <div><span class="key">↑</span> or <span class="key">W</span> - Jump</div>
+            <div><span class="key">Space</span> - Boost</div>
+            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+                <div style="font-size: 11px; font-weight: bold; color: #fff; margin-bottom: 8px;">MODES</div>
+                <div style="margin-bottom: 5px;"><strong style="color: #f5576c;">User Control:</strong> You play, SOMA learns from you</div>
+                <div style="margin-bottom: 5px;"><strong style="color: #00f2fe;">SOMA Control:</strong> AI takes over using learned policy</div>
+                <div><strong style="color: #38f9d7;">Watch:</strong> Observe autonomous learning</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Rendering offsets to center the world properly
+        const OFFSET_X = 20;  // Compensate for wall thickness
+        const OFFSET_Y = 20;
+
+        // UI Elements
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const scoreValue = document.getElementById('scoreValue');
+        const episodeValue = document.getElementById('episodeValue');
+        const taskValue = document.getElementById('taskValue');
+        const demosValue = document.getElementById('demosValue');
+        const recordingIndicator = document.getElementById('recordingIndicator');
+        const controlsHelp = document.getElementById('controls-help');
+        const modeTitle = document.getElementById('modeTitle');
+        const modeDesc = document.getElementById('modeDesc');
+
+        // State
+        let ws = null;
+        let bodies = [];
+        let score = 0;
+        let episode = 0;
+        let currentTask = '';
+        let currentMode = 'watch';
+        let keysPressed = new Set();
+        let demonstrationCount = 0;
+        let isUserControlActive = false;
+
+        // Particle effects
+        let particles = [];
+
+        function closePurpose() {
+            document.getElementById('purposeOverlay').style.display = 'none';
+        }
+
+        // Connect to WebSocket
+        function connect() {
+            const host = window.location.hostname || 'localhost';
+            ws = new WebSocket(`ws://${host}:8081`);
+
+            ws.onopen = () => {
+                statusText.innerText = 'Connected to SOMA Simulation';
+                statusDot.classList.add('connected');
+
+                // Register as viewer
+                ws.send(JSON.stringify({
+                    type: 'register',
+                    viewerId: 'interactive-viewer-' + Date.now()
+                }));
+            };
+
+            ws.onclose = () => {
+                statusText.innerText = 'Disconnected - Retrying...';
+                statusDot.classList.remove('connected');
+                setTimeout(connect, 2000);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+
+                if (msg.type === 'world_update') {
+                    bodies = msg.bodies;
+                    score = msg.score || 0;
+                    episode = msg.episode || 0;
+                    currentTask = msg.task || 'navigate';
+
+                    scoreValue.innerText = Math.floor(score);
+                    episodeValue.innerText = episode;
+                    taskValue.innerText = currentTask;
+
+                    render();
+                }
+
+                if (msg.type === 'event') {
+                    if (msg.eventType === 'win') {
+                        flashScreen('#43e97b');
+                        createParticleBurst(canvas.width/2, canvas.height/2, '#43e97b');
+                        if (currentMode === 'user' && isUserControlActive) {
+                            demonstrationCount++;
+                            demosValue.innerText = demonstrationCount;
+                        }
+                    }
+                    if (msg.eventType === 'collision') {
+                        // Create small particle effect on collision
+                        const agent = bodies.find(b => b.label === 'soma_agent');
+                        if (agent) {
+                            createParticles(agent.position.x + OFFSET_X, agent.position.y + OFFSET_Y, 5, '#ff6b35');
+                        }
+                    }
+                }
+
+                if (msg.type === 'demonstration_recorded') {
+                    demonstrationCount = msg.count || demonstrationCount;
+                    demosValue.innerText = demonstrationCount;
+                }
+            };
+        }
+
+        connect();
+
+        // Mode management
+        function setMode(mode) {
+            currentMode = mode;
+            isUserControlActive = false;
+
+            // Update UI
+            document.querySelectorAll('.mode-btn[data-mode]').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.querySelector(`.mode-btn[data-mode="${mode}"]`).classList.add('active');
+
+            // Update mode description
+            if (mode === 'user') {
+                modeTitle.innerText = '🎮 User Control Mode';
+                modeDesc.innerText = 'You are in control! Use arrow keys or WASD to navigate. SOMA is watching and learning from your actions. Every successful goal teaches SOMA your strategy!';
+                recordingIndicator.classList.add('active');
+            } else if (mode === 'soma') {
+                modeTitle.innerText = '🤖 SOMA Control Mode';
+                modeDesc.innerText = 'SOMA is now using her learned policy to navigate autonomously. She combines reinforcement learning with demonstrations you provided to make decisions.';
+                recordingIndicator.classList.remove('active');
+            } else {
+                modeTitle.innerText = '👁️ Watch Mode';
+                modeDesc.innerText = 'Observing SOMA\'s autonomous exploration and learning. Switch to User Control to teach SOMA by demonstration!';
+                recordingIndicator.classList.remove('active');
+            }
+
+            // Send mode change to server
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'mode_change',
+                    mode: mode
+                }));
+            }
+        }
+
+        function toggleHelp() {
+            controlsHelp.classList.toggle('visible');
+        }
+
+        // Keyboard controls
+        document.addEventListener('keydown', (e) => {
+            if (currentMode !== 'user') return;
+
+            keysPressed.add(e.key.toLowerCase());
+            isUserControlActive = true;
+            applyUserControl();
+        });
+
+        document.addEventListener('keyup', (e) => {
+            keysPressed.delete(e.key.toLowerCase());
+        });
+
+        // Apply forces based on keyboard input
+        function applyUserControl() {
+            if (currentMode !== 'user') return;
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+            let forceX = 0;
+            let forceY = 0;
+
+            // Horizontal movement
+            if (keysPressed.has('arrowleft') || keysPressed.has('a')) {
+                forceX = -0.03;
+            }
+            if (keysPressed.has('arrowright') || keysPressed.has('d')) {
+                forceX = 0.03;
+            }
+
+            // Jump
+            if (keysPressed.has('arrowup') || keysPressed.has('w')) {
+                forceY = -0.08;
+            }
+
+            // Boost (space)
+            if (keysPressed.has(' ')) {
+                if (forceX !== 0) forceX *= 1.5;
+                if (forceY !== 0) forceY *= 1.5;
+            }
+
+            // Send user action to server
+            if (forceX !== 0 || forceY !== 0) {
+                ws.send(JSON.stringify({
+                    type: 'user_action',
+                    forceX: forceX,
+                    forceY: forceY,
+                    timestamp: Date.now(),
+                    keys: Array.from(keysPressed)
+                }));
+            }
+        }
+
+        // Continuous input handling (for held keys)
+        setInterval(() => {
+            if (currentMode === 'user' && keysPressed.size > 0) {
+                applyUserControl();
+            }
+        }, 50);
+
+        // Particle system
+        function createParticles(x, y, count, color) {
+            for (let i = 0; i < count; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 3,
+                    vy: (Math.random() - 0.5) * 3,
+                    life: 1.0,
+                    color: color
+                });
+            }
+        }
+
+        function createParticleBurst(x, y, color) {
+            for (let i = 0; i < 30; i++) {
+                const angle = (Math.PI * 2 * i) / 30;
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: Math.cos(angle) * 5,
+                    vy: Math.sin(angle) * 5,
+                    life: 1.0,
+                    color: color
+                });
+            }
+        }
+
+        function updateParticles() {
+            particles.forEach(p => {
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.2; // gravity
+                p.life -= 0.02;
+            });
+            particles = particles.filter(p => p.life > 0);
+        }
+
+        function renderParticles() {
+            particles.forEach(p => {
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.globalAlpha = 1.0;
+        }
+
+        // Rendering
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw grid background
+            ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+            ctx.lineWidth = 1;
+            for (let x = 0; x < canvas.width; x += 40) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+            for (let y = 0; y < canvas.height; y += 40) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+
+            // Draw bodies
+            bodies.forEach(body => {
+                ctx.save();
+                ctx.translate(OFFSET_X, OFFSET_Y);
+
+                ctx.beginPath();
+
+                if (body.vertices && body.vertices.length > 0) {
+                    ctx.moveTo(body.vertices[0].x, body.vertices[0].y);
+                    for (let i = 1; i < body.vertices.length; i++) {
+                        ctx.lineTo(body.vertices[i].x, body.vertices[i].y);
+                    }
+                    ctx.closePath();
+                } else {
+                    ctx.arc(body.position.x, body.position.y, 10, 0, Math.PI * 2);
+                }
+
+                // Styling
+                ctx.fillStyle = getColor(body.label);
+                ctx.fill();
+                ctx.strokeStyle = getStrokeColor(body.label);
+                ctx.lineWidth = body.label === 'soma_agent' ? 3 : 1;
+                ctx.stroke();
+
+                // Glow effect for agent
+                if (body.label === 'soma_agent') {
+                    ctx.shadowBlur = 20;
+                    ctx.shadowColor = currentMode === 'user' ? '#f5576c' : '#00f2fe';
+                    ctx.fillStyle = getColor(body.label);
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+
+                    // Draw velocity vector
+                    if (body.velocity && (Math.abs(body.velocity.x) > 0.5 || Math.abs(body.velocity.y) > 0.5)) {
+                        ctx.strokeStyle = currentMode === 'user' ? '#ff6b9d' : '#4facfe';
+                        ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        ctx.moveTo(body.position.x, body.position.y);
+                        ctx.lineTo(body.position.x + body.velocity.x * 10, body.position.y + body.velocity.y * 10);
+                        ctx.stroke();
+                    }
+                }
+
+                // Pulsing glow for target
+                if (body.label === 'target_zone') {
+                    const pulseIntensity = (Math.sin(Date.now() / 200) + 1) / 2;
+                    ctx.shadowBlur = 15 + pulseIntensity * 15;
+                    ctx.shadowColor = '#43e97b';
+                    ctx.fillStyle = getColor(body.label);
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                }
+
+                ctx.restore();
+            });
+
+            // Update and render particles
+            updateParticles();
+            renderParticles();
+        }
+
+        function getColor(label) {
+            if (label === 'soma_agent') {
+                return currentMode === 'user' ? '#f5576c' : '#00f2fe';
+            }
+            if (label === 'cargo') return '#667eea';
+            if (label === 'target_zone') return 'rgba(67, 233, 123, 0.4)';
+            if (label.includes('wall') || label === 'ground' || label === 'ceiling') return '#1e3a5f';
+            if (label === 'platform' || label === 'step') return '#2a4a6f';
+            if (label === 'barrier') return '#884444';
+            return '#555';
+        }
+
+        function getStrokeColor(label) {
+            if (label === 'soma_agent') {
+                return currentMode === 'user' ? '#ff6b9d' : '#4facfe';
+            }
+            if (label === 'target_zone') return '#43e97b';
+            if (label.includes('wall') || label === 'ground' || label === 'ceiling') return 'rgba(100,150,200,0.5)';
+            return 'rgba(255,255,255,0.3)';
+        }
+
+        function flashScreen(color) {
+            canvas.style.boxShadow = `0 0 60px ${color}`;
+            setTimeout(() => {
+                canvas.style.boxShadow = '0 0 30px rgba(0,0,0,0.8)';
+            }, 300);
+        }
+
+        // Initialize in watch mode
+        setMode('watch');
+
+        // Start animation loop
+        function animate() {
+            updateParticles();
+            requestAnimationFrame(animate);
+        }
+        animate();
+    </script>
+</body>
+</html>

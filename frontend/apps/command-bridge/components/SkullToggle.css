@@ -1,0 +1,388 @@
+:root {
+  --sz: 10vmin;
+  --ttf: ease-in-out;
+  --bone: #888;
+}
+
+/* Scoped to component to strictly match user provided CSS logic but contained */
+.skull-toggle-wrapper {
+  /* Body simulation */
+  position: relative;
+  /* width: 100vw; height: 100vh; overflow: hidden; */
+  /* Disabled to fit container */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* background: radial-gradient(circle at 50% 50%, #444, #000); */
+  /* Disabled for transparency */
+}
+
+.skull-toggle-wrapper *,
+.skull-toggle-wrapper *:before,
+.skull-toggle-wrapper *:after {
+  box-sizing: border-box;
+}
+
+.toggle {
+  position: relative;
+  width: calc(var(--sz) * 5);
+  height: calc(var(--sz) * 3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.skull-toggle-wrapper input {
+  display: none;
+}
+
+.skull-toggle-wrapper label[for=btn] {
+  position: absolute;
+  width: calc(var(--sz) * 4);
+  height: calc(var(--sz) * 2);
+  background: #141414;
+  border-radius: var(--sz);
+  overflow: hidden;
+  box-shadow: 0 0 calc(var(--sz) / 50) calc(var(--sz) / 50) #000000, 0 0 calc(var(--sz) / 10) calc(var(--sz) / 50) #0b0b10 inset;
+  cursor: pointer;
+}
+
+.thumb {
+  position: absolute;
+  width: calc(calc(var(--sz) * 2) - calc(var(--sz) / 4));
+  height: calc(calc(var(--sz) * 2) - calc(var(--sz) / 4));
+  top: calc(calc(var(--sz) / 10) + calc(var(--sz) / 50));
+  left: calc(calc(100% - calc(calc(var(--sz) * 2) - calc(var(--sz) / 3))) - calc(calc(var(--sz) / 10) + calc(var(--sz) / 10)));
+  border-radius: var(--sz);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+  animation: move-skull-left 0.5s var(--ttf) 0.5s;
+  animation-fill-mode: forwards;
+}
+
+#btn:checked+label .thumb {
+  left: calc(calc(var(--sz) / 10) + calc(var(--sz) / 50));
+  animation: move-skull-right 0.5s var(--ttf) 0.5s;
+  animation-fill-mode: forwards;
+}
+
+@keyframes move-skull-right {
+  0% {
+    left: calc(calc(var(--sz) / 10) + calc(var(--sz) / 50));
+  }
+
+  100% {
+    left: calc(calc(100% - calc(calc(var(--sz) * 2) - calc(var(--sz) / 3))) - calc(calc(var(--sz) / 10) + calc(var(--sz) / 10)));
+  }
+}
+
+@keyframes move-skull-left {
+  0% {
+    left: calc(calc(100% - calc(calc(var(--sz) * 2) - calc(var(--sz) / 3))) - calc(calc(var(--sz) / 10) + calc(var(--sz) / 10)));
+  }
+
+  100% {
+    left: calc(calc(var(--sz) / 10) + calc(var(--sz) / 50));
+  }
+}
+
+/*** Skull ***/
+
+.thumb>* {
+  position: absolute;
+  animation: unselected 1.5s var(--ttf) 0s reverse;
+  animation-fill-mode: forwards;
+  filter: drop-shadow(0px 2px 2px #000);
+}
+
+#btn:checked+label .thumb * {
+  animation: selected 1.5s var(--ttf) 0s;
+  animation-fill-mode: forwards;
+}
+
+@keyframes selected {
+
+  0%,
+  50% {
+    --bone: #888;
+  }
+
+  50%,
+  100% {
+    --bone: #fff;
+  }
+}
+
+@keyframes unselected {
+
+  0%,
+  50% {
+    --bone: #888;
+  }
+
+  50%,
+  100% {
+    --bone: #fff;
+  }
+}
+
+@supports (-moz-appearance:none) {
+  .thumb>* {
+    --bone: #888;
+  }
+
+  #btn:checked+label .thumb * {
+    --bone: #fff;
+  }
+}
+
+.cranium {
+  background: linear-gradient(180deg, var(--bone) 0 54%, #fff0 0 94%, var(--bone) 0 100%), radial-gradient(circle at 75% 69%, #fff0 0 1.75vmin, var(--bone) calc(1.75vmin + 1px) 4.85vmin, #fff0 calc(4.85vmin + 1px) 100%), radial-gradient(circle at 25% 69%, #fff0 0 1.75vmin, var(--bone) calc(1.75vmin + 1px) 4.85vmin, #fff0 calc(4.85vmin + 1px) 100%);
+  width: 100%;
+  height: 14vmin;
+  left: 0;
+  top: 0;
+  border-radius: 10vmin 10vmin 5.5vmin 5.5vmin;
+}
+
+.cranium:before {
+  content: "";
+  position: absolute;
+  width: 1.25vmin;
+  height: 1.25vmin;
+  bottom: -0.75vmin;
+  left: 7.5vmin;
+  background: var(--bone);
+  border-radius: 100%;
+  box-shadow: 1.25vmin 0 0 0 var(--bone);
+}
+
+.cranium:after {
+  content: "";
+  position: absolute;
+  width: 5.25vmin;
+  height: 1.5vmin;
+  bottom: -0.95vmin;
+  left: 6vmin;
+  background: radial-gradient(circle at 90% 10%, var(--bone) 0 1vmin, #fff0 calc(1vmin + 1px) 100%), radial-gradient(circle at 10% 10%, var(--bone) 0 1vmin, #fff0 calc(1vmin + 1px) 100%);
+  border-radius: 1vmin;
+}
+
+.mouth {
+  border: 0.85vmin solid #fff0;
+  border-bottom-color: var(--bone);
+  width: 11.75vmin;
+  left: 2.85vmin;
+  height: 6vmin;
+  top: 11.25vmin;
+  background: radial-gradient(circle at 35% 98%, var(--bone) 0 0.65vmin, #fff0 calc(0.65vmin + 1px) 100%), radial-gradient(circle at 45% 100%, var(--bone) 0 0.65vmin, #fff0 calc(0.65vmin + 1px) 100%), radial-gradient(circle at 55% 100%, var(--bone) 0 0.65vmin, #fff0 calc(0.65vmin + 1px) 100%), radial-gradient(circle at 65% 98%, var(--bone) 0 0.65vmin, #fff0 calc(0.65vmin + 1px) 100%);
+  background-repeat: no-repeat;
+  border-radius: 100%;
+}
+
+.mouth:before,
+.mouth:after {
+  content: "";
+  position: absolute;
+  border-radius: 100%;
+  background: var(--bone);
+  width: 0.7vmin;
+  height: 0.7vmin;
+  left: 0.4vmin;
+  bottom: 0.25vmin;
+}
+
+.mouth:after {
+  left: 9.05vmin;
+}
+
+
+/*** Arm ***/
+
+@keyframes check-on {
+  0% {
+    right: -65%;
+  }
+
+  25%,
+  33% {
+    right: 0%;
+  }
+
+  66%,
+  80% {
+    right: -50%;
+  }
+
+  100% {
+    right: -65%;
+  }
+}
+
+@keyframes check-off {
+  0% {
+    right: -65%;
+  }
+
+  25%,
+  33% {
+    right: 0%;
+  }
+
+  66%,
+  80% {
+    right: -50%;
+  }
+
+  100% {
+    right: -65%;
+  }
+}
+
+.arm-wrapper {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 10vmin;
+  overflow: hidden;
+  right: -65%;
+  animation: check-off 1.5s var(--ttf) 0s reverse;
+  --bone: #fff;
+}
+
+#btn:checked+label .arm-wrapper {
+  animation: check-on 1.5s var(--ttf) 0s;
+}
+
+.arm {
+  position: absolute;
+  width: 16vmin;
+  height: 5vmin;
+  right: 25%;
+  right: 2%;
+  top: calc(50% - 2.5vmin);
+  border-radius: 0.25vmin;
+}
+
+.bone {
+  background: var(--bone);
+  width: 8vmin;
+  height: 2vmin;
+  position: absolute;
+  transform: rotate(0deg);
+  top: 1.5vmin;
+  right: -4vmin;
+}
+
+.bone:before,
+.bone:after,
+.big:before,
+.big:after {
+  content: "";
+  background: var(--bone);
+  width: 1.5vmin;
+  height: 1.5vmin;
+  position: absolute;
+  left: -0.5vmin;
+  top: -0.5vmin;
+  border-radius: 100%;
+  box-shadow: 8vmin 0 0 0 var(--bone);
+}
+
+.bone:after {
+  top: calc(100% - 1vmin);
+}
+
+.arm>.bone+.bone {
+  top: 1.5vmin;
+  left: 0.5vmin;
+  height: 0.85vmin;
+  width: 10.5vmin;
+  box-shadow: 0 1.15vmin 0 0 var(--bone);
+}
+
+.arm>.bone+.bone:before,
+.arm>.bone+.bone:after {
+  box-shadow: 10.15vmin 0 0 0 var(--bone);
+}
+
+.arm>.bone+.bone:after {
+  top: 100%;
+}
+
+
+/*** Hand ***/
+
+.hand {
+  position: absolute;
+  --balls: var(--bone) 0.5vmin, #fff0 calc(0.5vmin + 1px) 100%;
+  background:
+    radial-gradient(circle at 91% 29%, var(--balls)),
+    radial-gradient(circle at 92% 49%, var(--balls)),
+    radial-gradient(circle at 91% 69%, var(--balls)),
+    radial-gradient(circle at 76% 21%, var(--balls)),
+    radial-gradient(circle at 78% 39%, var(--balls)),
+    radial-gradient(circle at 79% 58%, var(--balls)),
+    radial-gradient(circle at 78% 78%, var(--balls));
+  width: 7vmin;
+  height: 5vmin;
+  left: -7vmin;
+  z-index: 0;
+}
+
+.hand .bone,
+.big {
+  width: 3vmin;
+  left: 1.35vmin;
+  height: 0.75vmin;
+  border-radius: 0.5vmin 0 0 0.5vmin;
+}
+
+.hand .bone:before,
+.hand .bone:after,
+.big:before,
+.big:after {
+  width: 0.8vmin;
+  height: 0.8vmin;
+  top: -0.25vmin;
+  left: 2.25vmin;
+  box-shadow: none;
+}
+
+.hand .bone:after,
+.big:after {
+  top: 0.125vmin;
+}
+
+.hand .bone:nth-child(1) {
+  transform: rotate(5deg) translateY(-1vmin) translateX(0.15vmin);
+  filter: drop-shadow(-3vmin 0vmin 0px var(--bone));
+}
+
+.hand .bone:nth-child(2) {
+  transform: rotate(0deg) translateX(0.5vmin);
+  filter: drop-shadow(-3vmin 0vmin 0px var(--bone));
+}
+
+.hand .bone:nth-child(3) {
+  transform: rotate(-2deg) translateY(1.15vmin) translateX(0.5vmin);
+  filter: drop-shadow(-3vmin 0vmin 0px var(--bone));
+}
+
+.hand .bone:nth-child(4) {
+  transform: rotate(-5deg) translateY(2.3vmin) translateX(0.5vmin);
+  filter: drop-shadow(-3vmin 0vmin 0px var(--bone));
+}
+
+.big {
+  background: var(--bone);
+  height: 1vmin !important;
+  position: absolute;
+  left: -4.25vmin !important;
+  top: 1.15vmin;
+  z-index: 1;
+  filter: drop-shadow(-2.5vmin 0vmin 0px var(--bone)) drop-shadow(0 0 1px #000);
+}

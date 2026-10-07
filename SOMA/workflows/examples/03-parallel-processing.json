@@ -1,0 +1,125 @@
+{
+  "id": "example_parallel_processing",
+  "name": "Parallel Multi-Brain Analysis",
+  "description": "Run multiple analysis tasks in parallel and aggregate results",
+  "tags": ["example", "parallel", "analysis", "advanced"],
+  "initialState": "prepare",
+  "states": {
+    "prepare": {
+      "type": "action",
+      "action": "quadbrain:prepare",
+      "parameters": {
+        "input": "Analyze the concept of consciousness"
+      },
+      "timeout": 10000,
+      "onSuccess": "parallel_analysis",
+      "onError": "error"
+    },
+    "parallel_analysis": {
+      "type": "parallel",
+      "branches": [
+        {
+          "target": "logical_analysis",
+          "action": "quadbrain:logos",
+          "parameters": {
+            "query": "Provide a logical analysis of consciousness",
+            "temperature": 0.2
+          }
+        },
+        {
+          "target": "creative_analysis",
+          "action": "quadbrain:aurora",
+          "parameters": {
+            "query": "Provide a creative exploration of consciousness",
+            "temperature": 0.9
+          }
+        },
+        {
+          "target": "strategic_analysis",
+          "action": "quadbrain:prometheus",
+          "parameters": {
+            "query": "Provide strategic insights on consciousness",
+            "temperature": 0.3
+          }
+        }
+      ],
+      "joinState": "aggregate",
+      "timeout": 90000
+    },
+    "logical_analysis": {
+      "type": "action",
+      "action": "fragment:analyze",
+      "parameters": {
+        "type": "logical"
+      },
+      "timeout": 30000,
+      "onSuccess": "parallel_analysis_join",
+      "onError": "partial_failure"
+    },
+    "creative_analysis": {
+      "type": "action",
+      "action": "fragment:analyze",
+      "parameters": {
+        "type": "creative"
+      },
+      "timeout": 30000,
+      "onSuccess": "parallel_analysis_join",
+      "onError": "partial_failure"
+    },
+    "strategic_analysis": {
+      "type": "action",
+      "action": "fragment:analyze",
+      "parameters": {
+        "type": "strategic"
+      },
+      "timeout": 30000,
+      "onSuccess": "parallel_analysis_join",
+      "onError": "partial_failure"
+    },
+    "aggregate": {
+      "type": "action",
+      "action": "quadbrain:synthesize",
+      "parameters": {
+        "mode": "aggregate",
+        "sources": ["logical", "creative", "strategic"]
+      },
+      "timeout": 30000,
+      "onSuccess": "complete",
+      "onError": "synthesis_error"
+    },
+    "partial_failure": {
+      "type": "decision",
+      "branches": [
+        {
+          "condition": "results.success_count >= 2",
+          "target": "aggregate"
+        },
+        {
+          "condition": "results.success_count < 2",
+          "target": "error"
+        }
+      ],
+      "defaultBranch": 1
+    },
+    "synthesis_error": {
+      "type": "terminal",
+      "status": "failed",
+      "message": "Failed to synthesize results"
+    },
+    "complete": {
+      "type": "terminal",
+      "status": "completed",
+      "message": "Parallel analysis completed successfully"
+    },
+    "error": {
+      "type": "terminal",
+      "status": "failed",
+      "message": "Workflow failed"
+    }
+  },
+  "metadata": {
+    "type": "parallel",
+    "difficulty": "advanced",
+    "estimatedDuration": 120000
+  }
+}

@@ -1,0 +1,147 @@
+/**
+ * SOMA UI Control Styles
+ * Styles for when SOMA controls and highlights UI elements
+ */
+
+/* Highlight animation when SOMA points at something */
+@keyframes soma-highlight {
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+    border-color: rgba(59, 130, 246, 0);
+  }
+
+  50% {
+    box-shadow: 0 0 30px 5px rgba(59, 130, 246, 0.6);
+    border-color: rgba(59, 130, 246, 0.8);
+  }
+}
+
+.soma-highlight {
+  animation: soma-highlight 1s ease-in-out 3;
+  position: relative;
+  z-index: 50;
+}
+
+/* Pulse effect for attention */
+@keyframes soma-pulse {
+
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+
+  50% {
+    transform: scale(1.02);
+    opacity: 0.95;
+  }
+}
+
+.soma-pulse {
+  animation: soma-pulse 2s ease-in-out infinite;
+}
+
+/* Glow effect */
+.soma-glow {
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.5),
+    0 0 40px rgba(59, 130, 246, 0.3) !important;
+  border-color: rgba(59, 130, 246, 0.6) !important;
+}
+
+/* Marketplace: slow vertical scroll of descriptions on hover */
+@keyframes soma-scroll-vert {
+  0% {
+    transform: translateY(0);
+  }
+
+  100% {
+    transform: translateY(-50%);
+  }
+}
+
+/* Generic utilities for auto-scrolling text blocks */
+.truncate-scroll {
+  position: relative;
+  height: var(--ts-height, 3rem);
+  overflow: hidden;
+}
+
+.truncate-scroll__inner {
+  will-change: transform;
+}
+
+/* Only animate when a parent .group is hovered (cards already use .group) */
+.group:hover .truncate-scroll__inner {
+  animation: soma-scroll-vert var(--ts-duration, 12s) linear infinite;
+}
+
+/* Optional soft mask for top/bottom fade */
+.truncate-scroll--mask::before,
+.truncate-scroll--mask::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 16px;
+  pointer-events: none;
+}
+
+.truncate-scroll--mask::before {
+  top: 0;
+  background: linear-gradient(#0d0d0e, transparent);
+}
+
+.truncate-scroll--mask::after {
+  bottom: 0;
+  background: linear-gradient(transparent, #0d0d0e);
+}
+
+/* Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .group:hover .truncate-scroll__inner {
+    animation: none !important;
+  }
+}
+
+/* Global Sleek Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  transition: background 0.2s;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* For Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+}
+
+/* SOMA Ghost speech bubble pop-in */
+@keyframes ghostBubbleIn {
+  from { opacity: 0; transform: scale(0.7) translateY(6px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Slow spin for puppeteer ring */
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.animate-spin-slow {
+  animation: spin-slow 2s linear infinite;
+}

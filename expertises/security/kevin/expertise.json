@@ -1,0 +1,35 @@
+{
+  "id": "security/kevin",
+  "parent": "security",
+  "name": "K.E.V.I.N. Operator Guard",
+  "specialty": "security",
+  "version": "1.0.0",
+  "description": "Operator Guard security pack housing phishing heuristics, link verdicts, system hardening checklists, and Thalamus-backed audits.",
+  "domains": ["security", "phishing", "threats", "sandbox", "audit", "hardening"],
+  "aliases": ["kevin guard", "security chief", "bunker bodyguard", "operator guard"],
+  "triggers": ["kevin", "security", "phishing", "threat", "harden", "audit", "sandbox", "governance"],
+  "keywords": ["dmarc", "spf", "dns", "reputation", "verdict", "risk", "leak", "compromise"],
+  "capabilities": [
+    "phishing_heuristics_analysis",
+    "system_hardening_audit",
+    "link_threat_verdict",
+    "evidence_assessment"
+  ],
+  "standards": ["THALAMUS", "ZERO_TRUST", "EVIDENCE_FIRST", "MUTUAL_AUTHENTICATION"],
+  "runtime": {
+    "module": "./KevinSecurityRuntime.js",
+    "export": "KevinSecurityRuntime"
+  },
+  "loadPolicy": {
+    "mode": "lazy",
+    "defaultLevel": "hot"
+  },
+  "workflows": {
+    "default": [
+      { "name": "audit", "description": "Verify environment variables, configuration security, and port integrity." },
+      { "name": "sandbox_analyze", "description": "Analyze insulated targets and emails via security gate heuristics and Thalamus." },
+      { "name": "harden", "description": "Generate dynamic system hardening checklist and security configurations." },
+      { "name": "threat_report", "description": "Consolidate scan histories and audit trails into a security briefing." }
+    ]
+  }
+}
