@@ -2,8 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import http from 'node:http';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { calculateRSISeries, findPivots, detectRSIDivergence } from '../server/finance/TechnicalIndicators.js';
-import signalRoutes from '../server/finance/signalRoutes.js';
+import { createSignalRouter } from '../server/finance/SignedSignalRouter.js';
+import { signSignal, signJournalRead } from '../server/finance/SignalIngressProtocol.js';
 
 test('TechnicalIndicators - Zero-lookahead findPivots', () => {
     // Array with clear peak at index 3 (value 15) and valley at index 7 (value 5)
@@ -58,45 +62,51 @@ test('TechnicalIndicators - Regular Bullish Divergence Detection', () => {
 });
 
 test('Signal Ingress Gateway - Fail-closed arbitration and schema enforcement', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-signal-test-'));
+    const secret = 'test-only-signal-secret-longer-than-32-bytes';
     const app = express();
     app.use(express.json());
-    app.use('/api/finance/signal', signalRoutes);
+    app.use('/api/finance/signal', createSignalRouter({
+        secret, journalPath: path.join(directory, 'journal.jsonl'),
+        getTradingIntent: () => ({ desiredState: 'stopped', actualState: 'stopped', autoResume: false })
+    }));
 
     const server = http.createServer(app);
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const port = server.address().port;
     const baseUrl = `http://127.0.0.1:${port}/api/finance/signal`;
+    let sequence = 0;
+    const send = (payload) => {
+        const key = `test_signal_${++sequence}`;
+        return fetch(baseUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-soma-idempotency-key': key,
+                'x-soma-signature': signSignal(secret, key, payload) },
+            body: JSON.stringify(payload)
+        });
+    };
 
     try {
         // 1. Rejects invalid source
-        const resNoSource = await fetch(baseUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ symbol: 'ETH-USDT', signal: 'BUY' })
-        });
+        const resNoSource = await send({ symbol: 'ETH-USDT', signal: 'BUY' });
         assert.equal(resNoSource.status, 400);
 
         // 2. Rejects stale timestamp (>120s old)
-        const resStale = await fetch(baseUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+        const resStale = await send({
                 source: 'test_machine_b',
-                symbol: 'ETH-USDT',
+                symbol: 'ETH-USDT-SWAP',
+                timeframe: '1h',
                 signal: 'BUY',
                 confidence: 0.85,
-                timestamp: Date.now() - 300_000 // 5 minutes old
-            })
+                timestamp: Date.now() - 300_000,
+                metrics: { price: 2650 }
         });
         assert.equal(resStale.status, 422);
         const staleJson = await resStale.json();
         assert.equal(staleJson.decision, 'REJECTED_STALE');
 
         // 3. Accepts fresh signal and arbitrates to OBSERVED_HOLD under stopped trading intent
-        const resValid = await fetch(baseUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+        const resValid = await send({
                 source: 'test_machine_b',
                 symbol: 'ETH-USDT-SWAP',
                 timeframe: '1h',
@@ -108,7 +118,6 @@ test('Signal Ingress Gateway - Fail-closed arbitration and schema enforcement', 
                     rsi: 28.5,
                     atr: 12.4
                 }
-            })
         });
         assert.equal(resValid.status, 200);
         const validJson = await resValid.json();
@@ -117,7 +126,11 @@ test('Signal Ingress Gateway - Fail-closed arbitration and schema enforcement', 
         assert.ok(validJson.signalId.startsWith('sig_'));
 
         // 4. Ingress journal inspection
-        const resJournal = await fetch(`${baseUrl}/journal`);
+        const journalTimestamp = Date.now();
+        const resJournal = await fetch(`${baseUrl}/journal`, { headers: {
+            'x-soma-journal-timestamp': String(journalTimestamp),
+            'x-soma-journal-signature': signJournalRead(secret, journalTimestamp)
+        } });
         assert.equal(resJournal.status, 200);
         const journalJson = await resJournal.json();
         assert.equal(journalJson.ok, true);
@@ -127,5 +140,6 @@ test('Signal Ingress Gateway - Fail-closed arbitration and schema enforcement', 
 
     } finally {
         await new Promise(resolve => server.close(resolve));
+        fs.rmSync(directory, { recursive: true, force: true });
     }
 });

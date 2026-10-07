@@ -13,7 +13,7 @@ import { ClusterTradingSentinel } from './trading/ClusterTradingSentinel.js';
 const isDryRun = process.argv.includes('--dry-run');
 
 const sentinel = new ClusterTradingSentinel({
-    primaryHost: process.env.SOMA_PRIMARY_HOST || '192.168.1.254:3001',
+    primaryHost: process.env.SOMA_PRIMARY_HOST || '127.0.0.1:3001',
     pollIntervalMs: 60_000
 });
 
@@ -21,7 +21,8 @@ console.log('══════════════════════�
 console.log(' SOMA QUANT CLUSTER: SENTINEL INGESTION & DISPATCH WORKER');
 console.log(' Primary Host Target: ' + sentinel.primaryHost);
 console.log(' Fallback Local Host: ' + sentinel.localFallbackHost);
-console.log(' Mode: ' + (isDryRun ? 'DRY RUN PROBE' : '24/7 LIVE POLLING'));
+console.log(' Signal Signing:      ' + (sentinel.signalSecret ? 'CONFIGURED' : 'DISABLED'));
+console.log(' Mode:                ' + (isDryRun ? 'DRY RUN PROBE' : '24/7 LIVE POLLING'));
 console.log('═══════════════════════════════════════════════════════════');
 
 if (isDryRun) {

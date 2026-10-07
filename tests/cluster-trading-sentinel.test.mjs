@@ -4,8 +4,11 @@ import express from 'express';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { ClusterTradingSentinel } from '../scripts/trading/ClusterTradingSentinel.js';
-import signalRoutes from '../server/finance/signalRoutes.js';
+import { createSignalRouter } from '../server/finance/SignedSignalRouter.js';
+
+const TEST_SECRET = 'test-only-signal-secret-longer-than-32-bytes';
 
 test('ClusterTradingSentinel - Indicator analysis on simulated bars', () => {
     const sentinel = new ClusterTradingSentinel();
@@ -33,9 +36,13 @@ test('ClusterTradingSentinel - Indicator analysis on simulated bars', () => {
 });
 
 test('ClusterTradingSentinel - End-to-end network dispatch to SOMA Signal Ingress', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-sentinel-test-'));
     const app = express();
     app.use(express.json());
-    app.use('/api/finance/signal', signalRoutes);
+    app.use('/api/finance/signal', createSignalRouter({
+        secret: TEST_SECRET, journalPath: path.join(directory, 'journal.jsonl'),
+        getTradingIntent: () => ({ desiredState: 'stopped', actualState: 'stopped', autoResume: false })
+    }));
 
     const server = http.createServer(app);
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -44,7 +51,8 @@ test('ClusterTradingSentinel - End-to-end network dispatch to SOMA Signal Ingres
     const sentinel = new ClusterTradingSentinel({
         primaryHost: `127.0.0.1:${port}`,
         localFallbackHost: `127.0.0.1:${port}`,
-        sourceId: 'unit_test_sentinel'
+        sourceId: 'unit_test_sentinel',
+        signalSecret: TEST_SECRET
     });
 
     try {
@@ -72,6 +80,7 @@ test('ClusterTradingSentinel - End-to-end network dispatch to SOMA Signal Ingres
 
     } finally {
         await new Promise(resolve => server.close(resolve));
+        fs.rmSync(directory, { recursive: true, force: true });
     }
 });
 
@@ -81,7 +90,8 @@ test('ClusterTradingSentinel - Fallback to local offline ledger when core is unr
     const sentinel = new ClusterTradingSentinel({
         primaryHost: deadHost,
         localFallbackHost: deadHost,
-        sourceId: 'offline_test_sentinel'
+        sourceId: 'offline_test_sentinel',
+        signalSecret: TEST_SECRET
     });
 
     const analysis = {

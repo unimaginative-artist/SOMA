@@ -17,7 +17,7 @@ import binanceService from './BinanceService.js';
 import marketEvidenceStore from './MarketEvidenceStore.js';
 import blueskeyClient from '../social/BlueskeyClient.js';
 import excelOperator from './excelOperator.js';
-import signalRoutes from './signalRoutes.js';
+import signalRoutes from './SignedSignalRouter.js';
 
 
 const router = express.Router();

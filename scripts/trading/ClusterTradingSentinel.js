@@ -1,27 +1,29 @@
 /**
  * scripts/trading/ClusterTradingSentinel.js
  *
- * Machine B (192.168.1.250) Quantitative Market Sentinel & Streamer.
+ * Machine B quantitative market sentinel and streamer.
  * Continuously polls public OKX candles, computes zero-lookahead technical indicators
  * and RSI divergences, and streams authenticated signals across the LAN to SOMA Core on Machine A.
  *
  * Architecture:
  * - Decouples continuous ingestion & mathematical compute from core SOMA state.
- * - Targets SOMA Signal Ingress: POST http://192.168.1.254:3001/api/finance/signal
+ * - Targets SOMA Signal Ingress at SOMA_PRIMARY_HOST.
  * - Fallback: Local file logging (data/quant/sentinel_ledger.json) when SOMA Core is offline.
  */
 
 import fs from 'fs';
 import path from 'path';
 import { calculateRSI, calculateRSISeries, calculateATR, findPivots, detectRSIDivergence } from '../../server/finance/TechnicalIndicators.js';
+import { configuredSignalSecret, signSignal, SIGNAL_IDEMPOTENCY_HEADER, SIGNAL_SIGNATURE_HEADER } from '../../server/finance/SignalIngressProtocol.js';
 
 export class ClusterTradingSentinel {
     constructor(options = {}) {
-        this.primaryHost = options.primaryHost || process.env.SOMA_PRIMARY_HOST || '192.168.1.254:3001';
+        this.primaryHost = options.primaryHost || process.env.SOMA_PRIMARY_HOST || '127.0.0.1:3001';
         this.localFallbackHost = options.localFallbackHost || '127.0.0.1:3001';
         this.signalEndpoint = options.signalEndpoint || '/api/finance/signal';
         this.pollIntervalMs = options.pollIntervalMs || 60_000;
         this.sourceId = options.sourceId || 'machine_b_sentinel';
+        this.signalSecret = options.signalSecret || process.env.SOMA_SIGNAL_INGRESS_SECRET;
 
         this.symbols = options.symbols || [
             { id: 'ETH-USDT-SWAP', name: 'ETH-USD' },
@@ -36,6 +38,7 @@ export class ClusterTradingSentinel {
         this.isRunning = false;
         this.timer = null;
         this.lastSignals = new Map();
+        this.dispatchedBars = new Set();
     }
 
     _ensureLedgerDir() {
@@ -142,6 +145,7 @@ export class ClusterTradingSentinel {
 
         return {
             symbol: instId,
+            barTimestamp: bars[bars.length - 1].ts,
             currentPrice,
             rsi: Number(currentRsi.toFixed(2)),
             atr: Number(atr.atr.toFixed(2)),
@@ -156,6 +160,15 @@ export class ClusterTradingSentinel {
      * Dispatch signal to Machine A with local fallback
      */
     async dispatchSignal(analysis) {
+        const secret = configuredSignalSecret(this.signalSecret);
+        if (!secret) {
+            this._logLocal({ source: this.sourceId, symbol: analysis.symbol, status: 'AUTH_NOT_CONFIGURED' });
+            return { success: false, queuedLocally: false, error: 'SOMA_SIGNAL_INGRESS_SECRET must contain at least 32 bytes' };
+        }
+        const barTime = Number.isSafeInteger(analysis.barTimestamp) ? analysis.barTimestamp
+            : Math.floor(Date.now() / 3_600_000) * 3_600_000;
+        const barKey = new Date(barTime).toISOString().replace('.000Z', 'Z');
+        const idempotencyKey = `${this.sourceId}:${analysis.symbol}:1h:${barKey}`;
         const payload = {
             source: this.sourceId,
             symbol: analysis.symbol,
@@ -185,9 +198,13 @@ export class ClusterTradingSentinel {
                 const controller = new AbortController();
                 const timeout = setTimeout(() => controller.abort(), 4000);
 
+                const headers = { 'Content-Type': 'application/json',
+                    [SIGNAL_IDEMPOTENCY_HEADER]: idempotencyKey,
+                    [SIGNAL_SIGNATURE_HEADER]: signSignal(secret, idempotencyKey, payload) };
+
                 const res = await fetch(targetUrl, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers,
                     body: JSON.stringify(payload),
                     signal: controller.signal
                 });
@@ -197,9 +214,17 @@ export class ClusterTradingSentinel {
                     const receipt = await res.json();
                     dispatched = true;
                     this._logLocal({ ...payload, targetUrl, status: 'DISPATCHED', receipt });
+                    console.log(`[Sentinel] 📡 Dispatched ${payload.symbol} ${payload.signal} to ${targetUrl} -> Decision: ${receipt.decision} (${receipt.signalId})`);
                     return { success: true, targetUrl, receipt };
                 } else {
-                    lastError = `HTTP ${res.status}`;
+                    const errText = await res.text().catch(() => '');
+                    lastError = `HTTP ${res.status}: ${errText}`;
+                    console.warn(`[Sentinel] ⚠️ Dispatch failed to ${targetUrl} [HTTP ${res.status}]: ${errText}`);
+                    if ([400, 401, 403, 409, 422].includes(res.status)) {
+                        this._logLocal({ ...payload, targetUrl, status: 'REJECTED_REMOTE', error: lastError });
+                        return { success: false, queuedLocally: false, rejected: true,
+                            statusCode: res.status, error: lastError };
+                    }
                 }
             } catch (err) {
                 lastError = err.message;
@@ -219,7 +244,7 @@ export class ClusterTradingSentinel {
         for (const asset of this.symbols) {
             try {
                 const bars = await this.fetchCandles(asset.id, 80);
-                const analysis = this.analyzeAsset(asset.id, bars);
+                const analysis = this.analyzeAsset(asset.id, bars.filter(bar => bar.confirmed === true));
                 if (!analysis) continue;
 
                 results.push(analysis);
@@ -228,7 +253,14 @@ export class ClusterTradingSentinel {
                 const lastSig = this.lastSignals.get(asset.id);
                 if (analysis.signal !== 'HOLD' || lastSig !== 'HOLD') {
                     this.lastSignals.set(asset.id, analysis.signal);
-                    await this.dispatchSignal(analysis);
+                    const barKey = `${asset.id}:${analysis.barTimestamp}`;
+                    if (!this.dispatchedBars.has(barKey)) {
+                        const dispatch = await this.dispatchSignal(analysis);
+                        if (dispatch.success || dispatch.statusCode === 409) {
+                            this.dispatchedBars.add(barKey);
+                            if (this.dispatchedBars.size > 1000) this.dispatchedBars.clear();
+                        }
+                    }
                 }
             } catch (err) {
                 console.warn(`[Sentinel] Error analyzing ${asset.id}:`, err.message);
