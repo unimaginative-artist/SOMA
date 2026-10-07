@@ -117,3 +117,37 @@ test('normalized HOLD is observed; paper execution is idempotent across router i
         assert.equal(journal.filter(entry => entry.state === 'complete' && entry.decision === 'PAPER_EXECUTE').length, 1);
     } finally { await f.close(); }
 });
+
+test('signed BUY under stopped intent leaves a durable observation receipt and no trade', async () => {
+    const f = await fixture({ getTradingIntent: () => ({ desiredState: 'stopped', autoResume: false }) });
+    try {
+        const body = payload();
+        const first = await post(f.url, body, 'stopped-observation-key');
+        const firstReceipt = await first.json();
+        assert.equal(first.status, 200);
+        assert.equal(firstReceipt.decision, 'OBSERVED_HOLD');
+        assert.equal(f.trades.length, 0);
+
+        const receiptFiles = fs.readdirSync(path.join(f.directory, 'idempotency'));
+        assert.equal(receiptFiles.length, 1);
+        const stored = JSON.parse(fs.readFileSync(path.join(f.directory, 'idempotency', receiptFiles[0]), 'utf8'));
+        assert.equal(stored.state, 'complete');
+        assert.equal(stored.response.signalId, firstReceipt.signalId);
+        const journal = fs.readFileSync(f.journalPath, 'utf8').trim().split('\n').map(JSON.parse);
+        assert.equal(journal.filter(row => row.state === 'complete' && row.signalId === firstReceipt.signalId).length, 1);
+
+        const restarted = express();
+        restarted.use(express.json());
+        restarted.use('/api/finance/signal', createSignalRouter(f.routerOptions));
+        const server = http.createServer(restarted);
+        await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+        try {
+            const nextUrl = `http://127.0.0.1:${server.address().port}/api/finance/signal`;
+            const replay = await post(nextUrl, body, 'stopped-observation-key');
+            const replayReceipt = await replay.json();
+            assert.equal(replayReceipt.duplicate, true);
+            assert.equal(replayReceipt.signalId, firstReceipt.signalId);
+            assert.equal(f.trades.length, 0);
+        } finally { await new Promise(resolve => server.close(resolve)); }
+    } finally { await f.close(); }
+});
